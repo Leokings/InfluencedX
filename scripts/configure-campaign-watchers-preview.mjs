@@ -1044,6 +1044,32 @@ async function relayerChainState(publicClient, address) {
   return { balance, latestNonce, pendingNonce };
 }
 
+export async function waitForConfirmedRelayerState(
+  publicClient,
+  address,
+  {
+    attempts = 60,
+    delayMs = 1_000,
+    sleep = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
+  } = {},
+) {
+  invariant(Number.isSafeInteger(attempts) && attempts > 0,
+    'Relayer state retry count is invalid');
+  invariant(Number.isSafeInteger(delayMs) && delayMs >= 0,
+    'Relayer state retry delay is invalid');
+  let state;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    state = await relayerChainState(publicClient, address);
+    invariant(state.latestNonce === 0 && state.pendingNonce === 0,
+      'Funded relayer unexpectedly has a latest or pending transaction nonce');
+    invariant(state.balance <= RELAYER_MAX_BALANCE_WEI,
+      'Preview relayer exceeds its configured low-balance policy');
+    if (state.balance >= RELAYER_TARGET_BALANCE_WEI) return state;
+    if (attempt + 1 < attempts) await sleep(delayMs);
+  }
+  throw new Error('Confirmed relayer funding is not yet visible on the configured Base RPC; retry recovery');
+}
+
 export function assertUnusedRelayerState({ balance, latestNonce, pendingNonce }) {
   invariant(balance === 0n, 'Preview relayer has a balance without reconciled funding');
   invariant(latestNonce === 0 && pendingNonce === 0,
@@ -1155,11 +1181,7 @@ async function verifyConfirmedFunding({ publicClient, hash, deployerAddress, rel
     && getAddress(transaction.to) === getAddress(relayerAddress)
     && transaction.value === RELAYER_TARGET_BALANCE_WEI,
   'The funding hash does not identify the bounded relayer transfer');
-  const state = await relayerChainState(publicClient, relayerAddress);
-  invariant(state.balance >= RELAYER_TARGET_BALANCE_WEI && state.balance <= RELAYER_MAX_BALANCE_WEI,
-    'Relayer balance is outside the configured low-balance policy');
-  invariant(state.latestNonce === 0 && state.pendingNonce === 0,
-    'Funded relayer unexpectedly has a latest or pending transaction nonce');
+  await waitForConfirmedRelayerState(publicClient, relayerAddress);
 }
 
 async function writeFundingPublic({ deployerAddress, relayerAddress, hash }) {

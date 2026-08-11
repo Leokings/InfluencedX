@@ -25,6 +25,7 @@ import {
   trustedSourcesPatch,
   watcherEnvironment,
   webEnvironment,
+  waitForConfirmedRelayerState,
 } from '../../scripts/configure-campaign-watchers-preview.mjs';
 
 const WATCHER_KEYS = [
@@ -296,6 +297,37 @@ test('funding fence requires zero balance plus zero latest and pending nonce', (
     /nonce/);
   assert.throws(() => assertUnusedRelayerState({ balance: 0n, latestNonce: 0, pendingNonce: 1 }),
     /nonce/);
+});
+
+test('confirmed funding tolerates a lagging latest-balance RPC response', async () => {
+  const balances = [0n, 0n, 1_000_000_000_000_000n];
+  let sleeps = 0;
+  const publicClient = {
+    getBalance: async () => balances.shift(),
+    getTransactionCount: async () => 0,
+  };
+  const state = await waitForConfirmedRelayerState(publicClient, RELAYER.address, {
+    attempts: 3,
+    delayMs: 0,
+    sleep: async () => { sleeps += 1; },
+  });
+  assert.equal(state.balance, 1_000_000_000_000_000n);
+  assert.equal(sleeps, 2);
+});
+
+test('confirmed funding never retries past nonce use or excess balance', async () => {
+  await assert.rejects(() => waitForConfirmedRelayerState({
+    getBalance: async () => RELAYER_MAX_BALANCE_WEI + 1n,
+    getTransactionCount: async () => 0,
+  }, RELAYER.address, { attempts: 2, delayMs: 0 }), /low-balance policy/);
+  let nonceCalls = 0;
+  await assert.rejects(() => waitForConfirmedRelayerState({
+    getBalance: async () => 0n,
+    getTransactionCount: async () => {
+      nonceCalls += 1;
+      return nonceCalls === 1 ? 1 : 0;
+    },
+  }, RELAYER.address, { attempts: 2, delayMs: 0 }), /transaction nonce/);
 });
 
 test('disabled environment rollout uses one-entry upserts, false flags first, and verifies epoch', async () => {
