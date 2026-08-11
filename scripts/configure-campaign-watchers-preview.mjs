@@ -291,7 +291,7 @@ export function createVercelApi({ env = process.env, spawnFn = spawn } = {}) {
       method,
       '--scope',
       TEAM.slug,
-      '--silent',
+      '--raw',
       '--no-color',
     ];
     let requestBody;

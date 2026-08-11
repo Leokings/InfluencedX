@@ -163,6 +163,8 @@ test('launcher is an explicit one-shot gate and does not persist plaintext token
   assert.match(source, /promptForKeystorePassword/);
   assert.match(source, /campaign-settlement-preview\.json/);
   assert.match(source, /Legacy plaintext campaign settlement state exists/);
+  assert.match(source, /'--raw'/);
+  assert.doesNotMatch(source, /'--silent'/);
   assert.doesNotMatch(source, /watcherServiceTokens:\s*WATCHERS\.map/);
   assert.doesNotMatch(source, /writeFile\([^\n]*relayServiceToken/);
   assert.doesNotMatch(source, /cmd\.exe/);
