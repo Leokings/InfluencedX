@@ -12,6 +12,8 @@ import {
   type CampaignDetailResponse,
   type MarketplaceApplication,
   type MarketplaceCampaign,
+  type MarketplaceSettlementMutationResponse,
+  type MarketplaceSettlementStateDto,
   type PreparedApplicationMutationResponse,
   usdcAtomsToDisplay,
   usdcInputToAtoms,
@@ -35,6 +37,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const wallet = useMarketplaceWallet();
   const [state, setState] = useState<DetailState>({ phase: "loading", detail: null, error: null });
   const [action, setAction] = useState<{ key: string | null; error: string | null }>({ key: null, error: null });
+  const [selectionRecoveryHashes, setSelectionRecoveryHashes] = useState<Record<string, string>>({});
   const genLayerRetryCount = useRef(0);
 
   const loadDetail = useCallback(async (signal?: AbortSignal) => {
@@ -152,11 +155,43 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         `${basePath}/select`,
         { method: "POST", body: JSON.stringify({ brandWallet }) },
       );
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, brandWallet);
+      const txHash = await broadcastMarketplaceTransaction(
+        prepared.transaction,
+        brandWallet,
+        {
+          onSubmitted: (hash) => {
+            setSelectionRecoveryHashes((current) => ({
+              ...current,
+              [application.id]: hash,
+            }));
+          },
+        },
+      );
       await marketplaceRequest<ApplicationMutationResponse>(
         `${basePath}/select/confirm`,
         { method: "POST", body: JSON.stringify({ brandWallet, txHash }) },
       );
+      setSelectionRecoveryHashes((current) => {
+        const next = { ...current };
+        delete next[application.id];
+        return next;
+      });
+    });
+  }
+
+  async function confirmSelection(application: MarketplaceApplication, txHash: string) {
+    await runAction(`confirm-select:${application.id}`, async () => {
+      const brandWallet = await wallet.authenticate();
+      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}`;
+      await marketplaceRequest<ApplicationMutationResponse>(
+        `${basePath}/select/confirm`,
+        { method: "POST", body: JSON.stringify({ brandWallet, txHash }) },
+      );
+      setSelectionRecoveryHashes((current) => {
+        const next = { ...current };
+        delete next[application.id];
+        return next;
+      });
     });
   }
 
@@ -333,6 +368,8 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
               actionKey={action.key}
               loadedAt={state.loadedAt}
               metricsByWallet={creatorMetrics}
+              selectionRecoveryHashes={selectionRecoveryHashes}
+              onConfirmSelection={confirmSelection}
               onSelect={select}
               onResolve={requestResolution}
             />
@@ -385,6 +422,13 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
                 Applications are available only when the campaign API reports OPEN and Base funding is explicitly confirmed.
               </p>
             </div>
+          ) : null}
+          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? (
+            <SettlementControls
+              campaign={campaign}
+              wallet={wallet}
+              onUpdated={loadDetail}
+            />
           ) : null}
           {wallet.authenticated ? (
             <button className="wallet-signout" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET / SIGN OUT</button>
@@ -500,6 +544,8 @@ function BrandApplications({
   actionKey,
   loadedAt,
   metricsByWallet,
+  selectionRecoveryHashes,
+  onConfirmSelection,
   onSelect,
   onResolve,
 }: {
@@ -508,6 +554,8 @@ function BrandApplications({
   actionKey: string | null;
   loadedAt: number;
   metricsByWallet: Readonly<Record<string, CreatorMetricsLookup>>;
+  selectionRecoveryHashes: Readonly<Record<string, string>>;
+  onConfirmSelection: (application: MarketplaceApplication, txHash: string) => Promise<void>;
   onSelect: (application: MarketplaceApplication) => Promise<void>;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
 }) {
@@ -530,12 +578,22 @@ function BrandApplications({
           <p>{application.pitch}</p>
           <div>
             <small>{application.status.toUpperCase()} · {formatDate(application.createdAt)}</small>
-            {application.status === "applied" || (application.status === "selected" && !application.selectionTxHash) ? (
+            {application.status === "applied" ? (
               <button className="verify-secondary" type="button" disabled={actionKey === `select:${application.id}`} onClick={() => void onSelect(application)}>
-                {actionKey === `select:${application.id}` ? "CONFIRMING ON BASE…" : application.status === "selected" ? "FINISH ONCHAIN SELECTION" : "SELECT CREATOR"}
+                {actionKey === `select:${application.id}` ? "CONFIRMING ON BASE…" : "SELECT CREATOR"}
               </button>
             ) : null}
           </div>
+          {application.status === "selected" && !application.selectionTxHash ? (
+            <SelectionRecovery
+              key={`${application.id}:${selectionRecoveryHashes[application.id] ?? "none"}`}
+              application={application}
+              busyKey={actionKey}
+              submittedHash={selectionRecoveryHashes[application.id] ?? null}
+              onConfirm={onConfirmSelection}
+              onRetry={onSelect}
+            />
+          ) : null}
           {application.submissionTxHash ? (
             <ResolutionControl
               application={application}
@@ -547,6 +605,210 @@ function BrandApplications({
           ) : null}
         </article>
       ))}
+    </section>
+  );
+}
+
+function SelectionRecovery({
+  application,
+  busyKey,
+  submittedHash,
+  onConfirm,
+  onRetry,
+}: {
+  application: MarketplaceApplication;
+  busyKey: string | null;
+  submittedHash: string | null;
+  onConfirm: (application: MarketplaceApplication, txHash: string) => Promise<void>;
+  onRetry: (application: MarketplaceApplication) => Promise<void>;
+}) {
+  const [txHash, setTxHash] = useState(submittedHash ?? "");
+  const confirming = busyKey === `confirm-select:${application.id}`;
+  const retrying = busyKey === `select:${application.id}`;
+  const validHash = /^0x[0-9a-f]{64}$/i.test(txHash.trim());
+
+  return (
+    <form
+      className="selection-recovery"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (validHash) void onConfirm(application, txHash.trim());
+      }}
+    >
+      <span>ONCHAIN SELECTION RECOVERY</span>
+      <strong>RECONCILE BEFORE RETRYING.</strong>
+      <p>
+        If the wallet transaction succeeded but the app failed to record it, confirm that hash here.
+        Broadcast a new selection only after the previous transaction is known to have failed.
+      </p>
+      <label>
+        <span>BASE SEPOLIA TRANSACTION HASH</span>
+        <input
+          name="selectionTxHash"
+          value={txHash}
+          onChange={(event) => setTxHash(event.currentTarget.value.trim())}
+          pattern="0x[0-9a-fA-F]{64}"
+          placeholder="0x…"
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </label>
+      {submittedHash ? (
+        <a href={`https://sepolia.basescan.org/tx/${submittedHash}`} target="_blank" rel="noreferrer">
+          VIEW LAST SUBMITTED TX →
+        </a>
+      ) : null}
+      <button className="verify-secondary" type="submit" disabled={!validHash || confirming || retrying}>
+        {confirming ? "VERIFYING RECEIPT…" : "CONFIRM EXISTING TX"}
+      </button>
+      <button className="recovery-retry" type="button" disabled={confirming || retrying} onClick={() => void onRetry(application)}>
+        {retrying ? "BROADCASTING…" : "PRIOR TX FAILED — BROADCAST NEW"}
+      </button>
+    </form>
+  );
+}
+
+function SettlementControls({
+  campaign,
+  wallet,
+  onUpdated,
+}: {
+  campaign: MarketplaceCampaign;
+  wallet: ReturnType<typeof useMarketplaceWallet>;
+  onUpdated: (signal?: AbortSignal) => Promise<void>;
+}) {
+  const [settlement, setSettlement] = useState<MarketplaceSettlementStateDto | null>(null);
+  const [phase, setPhase] = useState<"loading" | "idle" | "crediting" | "withdrawing">("loading");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submittedHash, setSubmittedHash] = useState<string | null>(null);
+  const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/settlement`;
+
+  const loadSettlement = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await marketplaceRequest<{ settlement: MarketplaceSettlementStateDto }>(
+        basePath,
+        { signal },
+      );
+      setSettlement(response.settlement);
+      setError(null);
+      setPhase("idle");
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+      setError(marketplaceErrorMessage(loadError));
+      setPhase("idle");
+    }
+  }, [basePath]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => void loadSettlement(controller.signal), 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [loadSettlement]);
+
+  async function runSettlement(kind: "credit" | "withdraw") {
+    setPhase(kind === "credit" ? "crediting" : "withdrawing");
+    setMessage(null);
+    setError(null);
+    try {
+      const actor = await wallet.authenticate();
+      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
+      const prepared = await marketplaceRequest<MarketplaceSettlementMutationResponse>(
+        `${basePath}/${kind}`,
+        { method: "POST", body: "{}" },
+      );
+      if (!prepared.transaction) {
+        throw new Error("The settlement service did not return an authorized Base transaction.");
+      }
+      const txHash = await broadcastMarketplaceTransaction(
+        prepared.transaction,
+        actor,
+        { onSubmitted: (hash) => setSubmittedHash(hash) },
+      );
+      const confirmed = await marketplaceRequest<MarketplaceSettlementMutationResponse>(
+        `${basePath}/${kind}/confirm`,
+        { method: "POST", body: JSON.stringify({ txHash }) },
+      );
+      if (!confirmed.confirmation) {
+        throw new Error("The settlement receipt was not confirmed by the server.");
+      }
+      setSettlement(confirmed.settlement);
+      setSubmittedHash(confirmed.confirmation.txHash);
+      setMessage(
+        `${usdcAtomsToDisplay(confirmed.confirmation.amountUsdc)} TEST USDC confirmed at Base block ${confirmed.confirmation.blockNumber}.`,
+      );
+      await onUpdated();
+    } catch (settlementError) {
+      setError(marketplaceErrorMessage(settlementError));
+    } finally {
+      setPhase("idle");
+    }
+  }
+
+  const busy = phase === "crediting" || phase === "withdrawing";
+  return (
+    <section className="settlement-controls" aria-live="polite">
+      <span>BASE ESCROW RECOVERY</span>
+      <strong>WITHDRAW ONCHAIN BALANCES.</strong>
+      <p>
+        InfluencedX prepares the exact escrow call. A balance is shown as recovered only after its
+        receipt and receipt-block contract state are verified.
+      </p>
+      {settlement ? (
+        <dl>
+          <div>
+            <dt>CLAIMABLE</dt>
+            <dd>{usdcAtomsToDisplay(settlement.claimableUsdc)} TEST USDC</dd>
+          </div>
+          {settlement.role === "brand" ? (
+            <div>
+              <dt>UNUSED BUDGET</dt>
+              <dd>{usdcAtomsToDisplay(settlement.unallocatedUsdc)} TEST USDC</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+      {phase === "loading" ? <p>READING ESCROW STATE...</p> : null}
+      {settlement?.role === "brand" && settlement.unallocatedUsdc !== "0" ? (
+        <button
+          className="verify-secondary"
+          type="button"
+          disabled={busy || !settlement.canCreditUnallocated}
+          onClick={() => void runSettlement("credit")}
+        >
+          {phase === "crediting" ? "CONFIRMING CREDIT..." : "CREDIT UNUSED BALANCE"}
+        </button>
+      ) : null}
+      {settlement && !settlement.canCreditUnallocated && settlement.role === "brand" && settlement.unallocatedUsdc !== "0" ? (
+        <small>UNUSED BUDGET UNLOCKS AFTER {formatDate(settlement.selectionDeadline)}</small>
+      ) : null}
+      {settlement?.canWithdraw ? (
+        <button
+          className="button"
+          type="button"
+          disabled={busy}
+          onClick={() => void runSettlement("withdraw")}
+        >
+          {phase === "withdrawing" ? "CONFIRMING WITHDRAWAL..." : "WITHDRAW CLAIMABLE"}
+        </button>
+      ) : null}
+      {submittedHash ? (
+        <a href={`https://sepolia.basescan.org/tx/${submittedHash}`} target="_blank" rel="noreferrer">
+          VIEW LAST SETTLEMENT TX -&gt;
+        </a>
+      ) : null}
+      {message ? <p className="form-message success">{message}</p> : null}
+      {error ? (
+        <>
+          <p className="form-message error" role="alert">{error}</p>
+          <button className="recovery-retry" type="button" disabled={busy} onClick={() => void loadSettlement()}>
+            REFRESH ESCROW STATE
+          </button>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -642,19 +904,6 @@ function ResolutionControl({
   loadedAt: number;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
 }) {
-  if (application.resolutionOutcome && application.resolutionTxHash) {
-    return (
-      <div className="resolution-control confirmed">
-        <span>FINAL RESOLUTION</span>
-        <strong>{application.resolutionOutcome.toUpperCase()}</strong>
-        <p>Campaign state: {campaign.status.toUpperCase()}. This reflects the recorded Base settlement event.</p>
-        <a href={`https://sepolia.basescan.org/tx/${application.resolutionTxHash}`} target="_blank" rel="noreferrer">VIEW SETTLEMENT TX →</a>
-        {application.claimTxHash ? (
-          <a href={`https://sepolia.basescan.org/tx/${application.claimTxHash}`} target="_blank" rel="noreferrer">VIEW WITHDRAWAL TX →</a>
-        ) : null}
-      </div>
-    );
-  }
   if (application.requestId && application.resolutionRequestTxHash) {
     const submitterStatus = application.genlayerSubmitterStatus;
     const outcome = application.genlayerResultOutcome;
@@ -670,6 +919,41 @@ function ResolutionControl({
         {application.genlayerTxHash ? <code>{application.genlayerTxHash}</code> : null}
         {application.genlayerErrorCode ? <p>Submitter status: {application.genlayerErrorCode}</p> : null}
         <a href={`https://sepolia.basescan.org/tx/${application.resolutionRequestTxHash}`} target="_blank" rel="noreferrer">VIEW BASE REQUEST TX →</a>
+      </div>
+    );
+  }
+  if (application.resolutionOutcome === "undetermined" && application.resolutionTxHash) {
+    const ready = campaign.status === "submitted";
+    return (
+      <div className="resolution-control undetermined">
+        <span>PREVIOUS ROUND</span>
+        <strong>UNDETERMINED.</strong>
+        <p>
+          No payout or refund was assigned. Once the confirmed Base result is reconciled,
+          either participant may request a fresh round using the same committed evidence.
+        </p>
+        <a href={`https://sepolia.basescan.org/tx/${application.resolutionTxHash}`} target="_blank" rel="noreferrer">VIEW UNDETERMINED TX →</a>
+        <button
+          className="verify-secondary"
+          type="button"
+          disabled={!ready || actionKey === `resolve:${application.id}`}
+          onClick={() => void onResolve(application)}
+        >
+          {actionKey === `resolve:${application.id}` ? "REQUESTING NEXT ROUND…" : ready ? "REQUEST NEXT ROUND" : "AWAITING RECONCILIATION"}
+        </button>
+      </div>
+    );
+  }
+  if (application.resolutionOutcome && application.resolutionTxHash) {
+    return (
+      <div className="resolution-control confirmed">
+        <span>FINAL RESOLUTION</span>
+        <strong>{application.resolutionOutcome.toUpperCase()}</strong>
+        <p>Campaign state: {campaign.status.toUpperCase()}. This reflects the recorded Base settlement event.</p>
+        <a href={`https://sepolia.basescan.org/tx/${application.resolutionTxHash}`} target="_blank" rel="noreferrer">VIEW SETTLEMENT TX →</a>
+        {application.claimTxHash ? (
+          <a href={`https://sepolia.basescan.org/tx/${application.claimTxHash}`} target="_blank" rel="noreferrer">VIEW WITHDRAWAL TX →</a>
+        ) : null}
       </div>
     );
   }

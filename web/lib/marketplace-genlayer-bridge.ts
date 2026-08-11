@@ -12,6 +12,7 @@ import {
   findCampaign,
   findMarketplaceResolutionContextByRequestId,
   recordGenLayerSubmissionProjection,
+  type MarketplaceResolutionContext,
 } from "./marketplace-repository.ts";
 import { readVerifiedMarketplaceCampaignBinding } from "./marketplace-resolution-binding.ts";
 import { ApiProblem } from "./verification-api.ts";
@@ -34,6 +35,50 @@ export async function advanceMarketplaceGenLayerResolution(input: {
 }> {
   const nowMs = input.nowMs ?? Date.now();
   const context = await authorizedResolutionContext(input);
+  return advanceResolutionContext({ context, nowMs });
+}
+
+/**
+ * Hosted-worker entry point. It accepts only the immutable request binding
+ * already persisted from the confirmed Base event; it never accepts a wallet,
+ * creator input, resolver argument, or signer material.
+ */
+export async function advanceMarketplaceGenLayerResolutionByRequestId(input: {
+  requestId: string;
+  expectedApplicationId: string;
+  expectedCampaignId: string;
+  nowMs?: number;
+}): Promise<{
+  submission: CampaignSubmitterSubmission;
+  settlement: CampaignRelayResult | null;
+}> {
+  const requestId = requiredHash(input.requestId, "requestId");
+  const context = await findMarketplaceResolutionContextByRequestId(requestId);
+  if (
+    !context ||
+    context.application.id !== input.expectedApplicationId ||
+    context.campaign.id !== input.expectedCampaignId
+  ) {
+    throw new ApiProblem(
+      409,
+      "RESOLUTION_BINDING_CHANGED",
+      "The durable campaign resolution binding changed before progression.",
+    );
+  }
+  return advanceResolutionContext({
+    context,
+    nowMs: input.nowMs ?? Date.now(),
+  });
+}
+
+async function advanceResolutionContext(input: {
+  context: MarketplaceResolutionContext;
+  nowMs: number;
+}): Promise<{
+  submission: CampaignSubmitterSubmission;
+  settlement: CampaignRelayResult | null;
+}> {
+  const { context, nowMs } = input;
   const requestId = requiredHash(context.application.requestId, "requestId");
   const config = await loadBradburySubmitterConfig();
   const client = createBradburySubmitterClient(config);

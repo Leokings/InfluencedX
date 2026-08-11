@@ -21,10 +21,10 @@ export async function POST(
     }
     const session = requireMarketplaceSession(request);
     const { campaignId, applicationId } = await params;
-    await enforceVerificationRateLimit(request, "marketplace-accept", {
+    await enforceVerificationRateLimit(request, "marketplace-resolution-progress", {
       subject: session.subject,
       wallet: session.wallet,
-      requestId: campaignId,
+      requestId: applicationId,
     });
     const result = await advanceMarketplaceGenLayerResolution({
       campaignId,

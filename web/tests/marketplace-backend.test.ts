@@ -87,6 +87,15 @@ test("marketplace schema pins funding, selection, privacy, and receipt invariant
   assert.ok(applicationIndexes.has("marketplace_applications_one_selected_idx"));
   assert.ok(applicationIndexes.has("marketplace_applications_selection_tx_idx"));
   assert.ok(applicationIndexes.has("marketplace_applications_submission_tx_idx"));
+  assert.ok(applicationIndexes.has("marketplace_applications_progression_due_idx"));
+  assert.ok(
+    applicationChecks.has("marketplace_applications_progression_lease_pair"),
+  );
+  assert.ok(
+    applicationChecks.has(
+      "marketplace_applications_progression_attempts_nonnegative",
+    ),
+  );
 });
 
 test("creator marketplace storage contains commitments, not raw X evidence", () => {
@@ -150,6 +159,8 @@ test("receipt binding rejects a valid call made by the wrong actor", () => {
   const expectedActor = "0x1111111111111111111111111111111111111111";
   const transaction = {
     hash: `0x${"1".repeat(64)}` as `0x${string}`,
+    blockHash: `0x${"2".repeat(64)}` as `0x${string}`,
+    blockNumber: 123n,
     from: "0x2222222222222222222222222222222222222222" as const,
     to: INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
     input: call.data,
@@ -297,6 +308,12 @@ test("0005 marketplace migration is journaled and includes all durable tables", 
     assert.ok(start >= 0 && end > start, `missing migration block for ${config.name}`);
     const block = migration.slice(start, end);
     for (const column of config.columns) {
+      if (
+        config.name === "marketplace_applications" &&
+        PROGRESSION_EXTENSION_COLUMNS.has(column.name)
+      ) {
+        continue;
+      }
       assert.match(
         block,
         new RegExp(`"${column.name}"`),
@@ -311,5 +328,31 @@ test("0005 marketplace migration is journaled and includes all durable tables", 
     ),
   ) as { entries: Array<{ tag: string }> };
   assert.ok(journal.entries.some((entry) => entry.tag === "0005_influencedx_marketplace"));
-  assert.equal(journal.entries.at(-1)?.tag, "0006_campaign_settlement_relay");
+  assert.equal(journal.entries.at(-1)?.tag, "0007_campaign_progression_worker");
 });
+
+test("0007 adds a recoverable CAS lease without storing signer material", async () => {
+  const migration = await readFile(
+    new URL(
+      "../drizzle-postgres/0007_campaign_progression_worker.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  for (const column of PROGRESSION_EXTENSION_COLUMNS) {
+    assert.match(migration, new RegExp(`"${column}"`));
+  }
+  assert.match(migration, /progression_due_idx/);
+  assert.match(migration, /progression_lease_pair/);
+  assert.match(migration, /progression_attempts_nonnegative/);
+  assert.doesNotMatch(migration, /private_key|keystore|watcher_signature/i);
+});
+
+const PROGRESSION_EXTENSION_COLUMNS = new Set([
+  "progression_fence_token",
+  "progression_lease_expires_at",
+  "progression_next_attempt_at",
+  "progression_attempt_count",
+  "progression_error_code",
+  "progression_last_attempt_at",
+]);

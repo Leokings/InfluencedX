@@ -789,6 +789,16 @@ export const marketplaceApplications = pgTable(
     genlayerErrorCode: text("genlayer_error_code"),
     genlayerSubmittedAt: epochMs("genlayer_submitted_at"),
     genlayerFinalizedAt: epochMs("genlayer_finalized_at"),
+    progressionFenceToken: text("progression_fence_token"),
+    progressionLeaseExpiresAt: epochMs("progression_lease_expires_at"),
+    progressionNextAttemptAt: epochMs("progression_next_attempt_at")
+      .notNull()
+      .default(0),
+    progressionAttemptCount: integer("progression_attempt_count")
+      .notNull()
+      .default(0),
+    progressionErrorCode: text("progression_error_code"),
+    progressionLastAttemptAt: epochMs("progression_last_attempt_at"),
     createdAt: epochMs("created_at").notNull(),
     updatedAt: epochMs("updated_at").notNull(),
   },
@@ -808,6 +818,11 @@ export const marketplaceApplications = pgTable(
       table.campaignId,
       table.status,
     ),
+    index("marketplace_applications_progression_due_idx")
+      .on(table.progressionNextAttemptAt, table.updatedAt)
+      .where(
+        sql`${table.requestId} is not null and ${table.resolutionTxHash} is null`,
+      ),
     uniqueIndex("marketplace_applications_selection_tx_idx")
       .on(table.selectionTxHash)
       .where(sql`${table.selectionTxHash} is not null`),
@@ -885,6 +900,18 @@ export const marketplaceApplications = pgTable(
     check(
       "marketplace_applications_genlayer_finality",
       sql`${table.genlayerSubmitterStatus} <> 'FINALIZED' or (${table.genlayerTxHash} is not null and ${table.genlayerResultOutcome} is not null and ${table.genlayerFinalizedAt} is not null and ${table.genlayerErrorCode} is null)`,
+    ),
+    check(
+      "marketplace_applications_progression_lease_pair",
+      sql`(${table.progressionFenceToken} is null) = (${table.progressionLeaseExpiresAt} is null)`,
+    ),
+    check(
+      "marketplace_applications_progression_attempts_nonnegative",
+      sql`${table.progressionAttemptCount} >= 0`,
+    ),
+    check(
+      "marketplace_applications_progression_error_code_format",
+      sql`${table.progressionErrorCode} is null or ${table.progressionErrorCode} ~ '^[A-Z0-9_]{1,64}$'`,
     ),
   ],
 );

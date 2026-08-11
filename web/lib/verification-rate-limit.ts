@@ -29,6 +29,8 @@ export type VerificationRateLimitPolicy =
   | "marketplace-apply"
   | "marketplace-select"
   | "marketplace-accept"
+  | "marketplace-settlement"
+  | "marketplace-resolution-progress"
   | "marketplace-metrics-refresh"
   | "marketplace-metrics-status";
 
@@ -80,6 +82,8 @@ const POLICY_LABELS: Record<VerificationRateLimitPolicy, string> = {
   "marketplace-apply": "marketplace-apply-v1",
   "marketplace-select": "marketplace-select-v1",
   "marketplace-accept": "marketplace-accept-v1",
+  "marketplace-settlement": "marketplace-settlement-v1",
+  "marketplace-resolution-progress": "marketplace-resolution-progress-v1",
   "marketplace-metrics-refresh": "marketplace-metrics-refresh-v1",
   "marketplace-metrics-status": "marketplace-metrics-status-v1",
 };
@@ -269,6 +273,52 @@ export const VERIFICATION_RATE_LIMIT_RULES: Readonly<
       identity: "wallet",
       policyKey: "marketplace.accept.wallet.v1",
       limit: 30,
+      windowMs: HOUR_MS,
+    },
+  ],
+  "marketplace-settlement": [
+    {
+      identity: "ip",
+      policyKey: "marketplace.settlement.ip.v1",
+      limit: 60,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "subject",
+      policyKey: "marketplace.settlement.subject.v1",
+      limit: 30,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "wallet",
+      policyKey: "marketplace.settlement.wallet.v1",
+      limit: 30,
+      windowMs: HOUR_MS,
+    },
+  ],
+  "marketplace-resolution-progress": [
+    {
+      identity: "ip",
+      policyKey: "marketplace.resolution-progress.ip.v1",
+      limit: 600,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "subject",
+      policyKey: "marketplace.resolution-progress.subject.v1",
+      limit: 600,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "wallet",
+      policyKey: "marketplace.resolution-progress.wallet.v1",
+      limit: 600,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "request",
+      policyKey: "marketplace.resolution-progress.request.v1",
+      limit: 600,
       windowMs: HOUR_MS,
     },
   ],

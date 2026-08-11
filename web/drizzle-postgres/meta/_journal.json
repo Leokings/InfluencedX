@@ -50,6 +50,13 @@
       "when": 1786518000000,
       "tag": "0006_campaign_settlement_relay",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786536000000,
+      "tag": "0007_campaign_progression_worker",
+      "breakpoints": true
     }
   ]
 }

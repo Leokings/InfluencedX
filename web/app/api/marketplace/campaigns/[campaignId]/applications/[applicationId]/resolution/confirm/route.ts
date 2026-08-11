@@ -3,6 +3,7 @@ import {
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
 import { confirmMarketplaceResolutionRequest } from "@/lib/marketplace-service";
+import { enqueueCampaignProgression } from "@/lib/campaign-progression-queue";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -26,6 +27,14 @@ export async function POST(
       applicationId,
       session,
       body,
+    });
+    if (!result.application.requestId) {
+      throw new Error("The confirmed campaign resolution request is missing its durable ID.");
+    }
+    await enqueueCampaignProgression({
+      requestId: result.application.requestId,
+      campaignId: result.campaign.id,
+      applicationId: result.application.id,
     });
     return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },

@@ -102,7 +102,7 @@ npm run db:verify
 The migration history in `web/drizzle-postgres/` includes ownership state,
 rate-limit buckets, submitter state, one-time Base relay grants, marketplace
 campaigns/applications/profiles, GenLayer campaign-submission columns, and the
-durable fenced campaign-settlement relay record.
+durable fenced campaign-settlement relay and campaign-progression lease records.
 `db:verify` is the release gate; a partially migrated database must not receive
 traffic.
 
@@ -129,14 +129,28 @@ enable only the Preview gates required for the controlled testnet rehearsal:
 
 - `XPROOF_VERIFICATION_MUTATIONS_ENABLED=true`
 - `XPROOF_MARKETPLACE_MUTATIONS_ENABLED=true`
+- `XPROOF_PREVIEW_CAMPAIGN_RETENTION_SECONDS=300` only when a controlled,
+  same-day Base Sepolia rehearsal needs a five-minute resolution gate. This is
+  a server-only default: the request body cannot select a sub-day retention,
+  the exact effective value is committed into the campaign terms hash, and a
+  configured override fails closed unless the runtime is Vercel Preview.
 - `XPROOF_SUBMITTER_BRIDGE_ENABLED=true` only after the isolated submitter is
   healthy and its exact HTTPS origin is configured
 - `XPROOF_AUTHORIZATION_BROKER_ENABLED=true` only for the operator-assisted
   Preview ownership relay
 
 Production mutations remain disabled until the final security/cutover review.
-The daily cleanup cron in `web/vercel.json` additionally requires an independent
-`CRON_SECRET`.
+Deploying `web/vercel.json` also registers the air-gapped Vercel Queues consumer
+for `influencedx-campaign-progression-v1`. The confirmed Base request publishes
+only its request, campaign, and application IDs; the consumer reclaims the exact
+binding through a fenced Neon lease before contacting GenLayer or the Base relay.
+No browser, laptop process, signer key, or watcher key participates in that
+worker. Queue retries are bounded and the database remains the authoritative
+idempotency boundary.
+
+The daily cleanup cron and optional authenticated progression-recovery route
+additionally require an independent `CRON_SECRET`. The recovery route is not a
+minute cron and is not part of the normal queue path.
 
 ## 5. Deploy the isolated Bradbury submitter
 

@@ -75,6 +75,7 @@ import {
   type ConfirmedMarketplaceTransaction,
 } from "./marketplace-receipts.ts";
 import type { MarketplaceTransactionDto } from "./marketplace-types.ts";
+import { resolveCampaignRetentionSeconds } from "./marketplace-retention.ts";
 
 export async function createMarketplaceCampaign(input: {
   session: AuthenticatedWalletSession;
@@ -136,7 +137,7 @@ export async function createMarketplaceCampaign(input: {
     selectionDeadlineAt,
     selectionDeadlineAt + 14 * 24 * 60 * 60 * 1_000,
   );
-  const retentionSeconds = optionalRetentionSeconds(
+  const retentionSeconds = resolveCampaignRetentionSeconds(
     input.body.retentionSeconds,
   );
   const termsDocument = {
@@ -1447,26 +1448,6 @@ function optionalOrderedDeadline(
     );
   }
   return parsed;
-}
-
-function optionalRetentionSeconds(value: unknown): number {
-  if (value === undefined) return 30 * 24 * 60 * 60;
-  const normalized = typeof value === "string" && /^[0-9]+$/.test(value)
-    ? Number(value)
-    : value;
-  if (
-    typeof normalized !== "number" ||
-    !Number.isSafeInteger(normalized) ||
-    normalized < 24 * 60 * 60 ||
-    normalized > 365 * 24 * 60 * 60
-  ) {
-    throw new ApiProblem(
-      400,
-      "INVALID_REQUEST",
-      "retentionSeconds must be between one day and one year.",
-    );
-  }
-  return normalized;
 }
 
 function optionalBoolean(

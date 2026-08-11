@@ -82,6 +82,14 @@ export type MarketplaceResolutionContext = {
   application: ApplicationRow;
 };
 
+export type MarketplaceProgressionClaim = Readonly<{
+  applicationId: string;
+  campaignId: string;
+  requestId: string;
+  fenceToken: string;
+  attemptCount: number;
+}>;
+
 export const marketplaceGenLayerSubmitterStatuses = [
   "QUEUED",
   "PRECHECKING",
@@ -812,6 +820,191 @@ export async function findMarketplaceResolutionContextByRequestId(
   return row ?? null;
 }
 
+/**
+ * Claims one due campaign resolution with a short, fenced lease. The claim is
+ * a single Postgres statement using SKIP LOCKED, so overlapping recovery
+ * invocations cannot own the same application. Expired claims are recoverable
+ * without keeping any browser or laptop process alive.
+ */
+export async function claimNextMarketplaceProgression(input: {
+  fenceToken: string;
+  nowMs: number;
+  leaseDurationMs: number;
+}): Promise<MarketplaceProgressionClaim | null> {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.fenceToken,
+    )
+  ) {
+    throw new Error("The campaign progression fence token is invalid.");
+  }
+  if (
+    !Number.isSafeInteger(input.nowMs) ||
+    input.nowMs < 0 ||
+    !Number.isSafeInteger(input.leaseDurationMs) ||
+    input.leaseDurationMs < 1
+  ) {
+    throw new Error("The campaign progression lease is invalid.");
+  }
+  const leaseExpiresAt = input.nowMs + input.leaseDurationMs;
+  if (!Number.isSafeInteger(leaseExpiresAt)) {
+    throw new Error("The campaign progression lease expiry is invalid.");
+  }
+  const result = await getDb().execute(sql`
+    with candidate as (
+      select candidate_application.id
+      from ${marketplaceApplications} as candidate_application
+      inner join ${marketplaceCampaigns} as candidate_campaign
+        on candidate_campaign.id = candidate_application.campaign_id
+      where candidate_application.status = 'ACCEPTED'
+        and candidate_campaign.status = 'RESOLVING'
+        and candidate_campaign.funding_status = 'FUNDED'
+        and candidate_application.request_id is not null
+        and candidate_application.resolution_request_tx_hash is not null
+        and candidate_application.resolution_tx_hash is null
+        and candidate_application.progression_next_attempt_at <= ${input.nowMs}
+        and (
+          candidate_application.progression_fence_token is null
+          or candidate_application.progression_lease_expires_at < ${input.nowMs}
+        )
+        and (
+          candidate_application.genlayer_submitter_status is null
+          or candidate_application.genlayer_submitter_status in (
+            'QUEUED', 'PRECHECKING', 'BROADCASTING', 'SUBMITTED', 'POLLING', 'FINALIZED'
+          )
+        )
+      order by candidate_application.progression_next_attempt_at asc,
+               candidate_application.updated_at asc,
+               candidate_application.id asc
+      for update of candidate_application skip locked
+      limit 1
+    ), claimed as (
+      update ${marketplaceApplications} as target
+      set progression_fence_token = ${input.fenceToken},
+          progression_lease_expires_at = ${leaseExpiresAt},
+          progression_attempt_count = target.progression_attempt_count + 1,
+          progression_last_attempt_at = ${input.nowMs},
+          progression_error_code = null,
+          revision = target.revision + 1,
+          updated_at = ${input.nowMs}
+      from candidate
+      where target.id = candidate.id
+      returning target.id,
+                target.campaign_id,
+                target.request_id,
+                target.progression_attempt_count
+    )
+    select * from claimed
+  `);
+  return marketplaceProgressionClaimFromResult(result, input.fenceToken);
+}
+
+/** Atomically claims only the immutable resolution named by a queue message. */
+export async function claimMarketplaceProgressionByRequestId(input: {
+  requestId: string;
+  expectedApplicationId: string;
+  expectedCampaignId: string;
+  fenceToken: string;
+  nowMs: number;
+  leaseDurationMs: number;
+}): Promise<MarketplaceProgressionClaim | null> {
+  if (
+    !/^0x[0-9a-f]{64}$/.test(input.requestId) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.expectedApplicationId,
+    ) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.expectedCampaignId,
+    ) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      input.fenceToken,
+    ) ||
+    !Number.isSafeInteger(input.nowMs) ||
+    input.nowMs < 0 ||
+    !Number.isSafeInteger(input.leaseDurationMs) ||
+    input.leaseDurationMs < 1
+  ) {
+    throw new Error("The request-bound campaign progression claim is invalid.");
+  }
+  const leaseExpiresAt = input.nowMs + input.leaseDurationMs;
+  if (!Number.isSafeInteger(leaseExpiresAt)) {
+    throw new Error("The campaign progression lease expiry is invalid.");
+  }
+  const result = await getDb().execute(sql`
+    update ${marketplaceApplications} as target
+    set progression_fence_token = ${input.fenceToken},
+        progression_lease_expires_at = ${leaseExpiresAt},
+        progression_attempt_count = target.progression_attempt_count + 1,
+        progression_last_attempt_at = ${input.nowMs},
+        progression_error_code = null,
+        revision = target.revision + 1,
+        updated_at = ${input.nowMs}
+    from ${marketplaceCampaigns} as campaign
+    where target.request_id = ${input.requestId}
+      and target.id = ${input.expectedApplicationId}
+      and target.campaign_id = ${input.expectedCampaignId}
+      and campaign.id = target.campaign_id
+      and target.status = 'ACCEPTED'
+      and campaign.status = 'RESOLVING'
+      and campaign.funding_status = 'FUNDED'
+      and target.resolution_request_tx_hash is not null
+      and target.resolution_tx_hash is null
+      and target.progression_next_attempt_at <= ${input.nowMs}
+      and (
+        target.progression_fence_token is null
+        or target.progression_lease_expires_at < ${input.nowMs}
+      )
+      and (
+        target.genlayer_submitter_status is null
+        or target.genlayer_submitter_status in (
+          'QUEUED', 'PRECHECKING', 'BROADCASTING', 'SUBMITTED', 'POLLING', 'FINALIZED'
+        )
+      )
+    returning target.id,
+              target.campaign_id,
+              target.request_id,
+              target.progression_attempt_count
+  `);
+  return marketplaceProgressionClaimFromResult(result, input.fenceToken);
+}
+
+/** Clears a progression lease only when the caller still owns its fence. */
+export async function finishMarketplaceProgression(input: {
+  applicationId: string;
+  fenceToken: string;
+  nextAttemptAt: number;
+  errorCode: string | null;
+  nowMs: number;
+}): Promise<boolean> {
+  if (
+    !Number.isSafeInteger(input.nowMs) ||
+    input.nowMs < 0 ||
+    !Number.isSafeInteger(input.nextAttemptAt) ||
+    input.nextAttemptAt < input.nowMs ||
+    (input.errorCode !== null && !/^[A-Z0-9_]{1,64}$/.test(input.errorCode))
+  ) {
+    throw new Error("The campaign progression completion is invalid.");
+  }
+  const [updated] = await getDb()
+    .update(marketplaceApplications)
+    .set({
+      progressionFenceToken: null,
+      progressionLeaseExpiresAt: null,
+      progressionNextAttemptAt: input.nextAttemptAt,
+      progressionErrorCode: input.errorCode,
+      revision: sql`${marketplaceApplications.revision} + 1`,
+      updatedAt: input.nowMs,
+    })
+    .where(
+      and(
+        eq(marketplaceApplications.id, input.applicationId),
+        eq(marketplaceApplications.progressionFenceToken, input.fenceToken),
+      ),
+    )
+    .returning({ id: marketplaceApplications.id });
+  return updated?.id === input.applicationId;
+}
+
 export async function recordGenLayerSubmissionAccepted(input: {
   applicationId: string;
   requestId: string;
@@ -1071,6 +1264,34 @@ function rawRows(result: unknown): Array<Record<string, unknown>> {
           Boolean(row) && typeof row === "object" && !Array.isArray(row),
       )
     : [];
+}
+
+function marketplaceProgressionClaimFromResult(
+  result: unknown,
+  fenceToken: string,
+): MarketplaceProgressionClaim | null {
+  const row = rawRows(result)[0];
+  if (!row) return null;
+  const applicationId = stringField(row, "id");
+  const campaignId = stringField(row, "campaign_id");
+  const requestId = stringField(row, "request_id");
+  const attemptCount = Number(row.progression_attempt_count);
+  if (
+    !applicationId ||
+    !campaignId ||
+    !requestId ||
+    !Number.isSafeInteger(attemptCount) ||
+    attemptCount < 1
+  ) {
+    throw new Error("The campaign progression claim is invalid.");
+  }
+  return Object.freeze({
+    applicationId,
+    campaignId,
+    requestId,
+    fenceToken,
+    attemptCount,
+  });
 }
 
 function stringField(

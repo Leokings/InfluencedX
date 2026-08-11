@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "test": "npm run test:unit && npm run build && node --test tests/rendered-html.test.mjs",
-    "test:unit": "node --experimental-strip-types --test tests/verification-core.test.ts tests/database-storage.test.ts tests/wallet-session.test.ts tests/verification-rate-limit.test.ts tests/rate-limit-cleanup.test.ts tests/submission-evidence.test.ts tests/ownership-submission.test.ts tests/bradbury-submitter-client.test.ts tests/campaign-relay-client.test.ts tests/verification-wallet.test.ts tests/base-relay-status.test.ts tests/ownership-authorization-broker.test.ts tests/marketplace-ui.test.ts tests/marketplace-backend.test.ts tests/marketplace-wallet-auth.test.ts tests/marketplace-chain.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/verification-core.test.ts tests/database-storage.test.ts tests/wallet-session.test.ts tests/verification-rate-limit.test.ts tests/rate-limit-cleanup.test.ts tests/submission-evidence.test.ts tests/ownership-submission.test.ts tests/bradbury-submitter-client.test.ts tests/campaign-relay-client.test.ts tests/verification-wallet.test.ts tests/base-relay-status.test.ts tests/ownership-authorization-broker.test.ts tests/marketplace-ui.test.ts tests/marketplace-backend.test.ts tests/marketplace-retention.test.ts tests/campaign-progression.test.ts tests/marketplace-wallet-auth.test.ts tests/marketplace-chain.test.ts tests/marketplace-settlement.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -19,6 +19,7 @@
   "dependencies": {
     "@neondatabase/serverless": "1.0.2",
     "@vercel/oidc": "3.8.2",
+    "@vercel/queue": "0.4.0",
     "drizzle-orm": "0.45.2",
     "next": "16.3.0",
     "react": "19.2.8",

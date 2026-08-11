@@ -28,6 +28,27 @@ export type MarketplaceTransactionDto = {
   value: "0";
 };
 
+export type MarketplaceSettlementStateDto = {
+  actorWallet: string;
+  role: "brand" | "creator";
+  blockNumber: string;
+  claimableUsdc: string;
+  unallocatedUsdc: string;
+  canWithdraw: boolean;
+  canCreditUnallocated: boolean;
+  selectionDeadline: string;
+};
+
+export type MarketplaceSettlementMutationResponse = {
+  settlement: MarketplaceSettlementStateDto;
+  transaction?: MarketplaceTransactionDto;
+  confirmation?: {
+    txHash: string;
+    amountUsdc: string;
+    blockNumber: string;
+  };
+};
+
 export type MarketplaceCampaignDto = {
   id: string;
   brandWallet: string;

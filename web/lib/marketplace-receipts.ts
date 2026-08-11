@@ -12,6 +12,8 @@ import { ApiProblem } from "./verification-api.ts";
 
 export type ConfirmedMarketplaceTransaction = {
   hash: Hex;
+  blockHash: Hex;
+  blockNumber: bigint;
   from: Address;
   to: Address | null;
   input: Hex;
@@ -53,6 +55,8 @@ export async function loadConfirmedMarketplaceTransaction(
     }
     return {
       hash: txHash,
+      blockHash: receipt.blockHash,
+      blockNumber: receipt.blockNumber,
       from: getAddress(transaction.from),
       to: transaction.to ? getAddress(transaction.to) : null,
       input: transaction.input,
@@ -103,7 +107,7 @@ export function assertExactMarketplaceCall(
   }
 }
 
-function marketplacePublicClient() {
+export function marketplacePublicClient() {
   const rpcUrl = marketplaceRpcUrl();
   return createPublicClient({
     chain: baseSepolia,

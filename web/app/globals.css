@@ -2665,6 +2665,145 @@ footer > div > a:hover { color: var(--red); }
   margin: 22px 0 0;
 }
 
+.selection-recovery,
+.settlement-controls {
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid #3a2a29;
+  background: #111012;
+}
+
+.selection-recovery > span,
+.settlement-controls > span,
+.selection-recovery label > span,
+.settlement-controls dt {
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.selection-recovery > strong,
+.settlement-controls > strong {
+  display: block;
+  margin-top: 10px;
+  font-family: var(--display);
+  font-size: 27px;
+  letter-spacing: 0.03em;
+}
+
+.selection-recovery > p,
+.settlement-controls > p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.selection-recovery label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.selection-recovery input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid #3b3e44;
+  border-radius: 0;
+  background: #0c0d0f;
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 9px;
+  outline: none;
+}
+
+.selection-recovery input:focus {
+  border-color: var(--red);
+}
+
+.selection-recovery > a,
+.settlement-controls > a {
+  display: block;
+  margin-top: 13px;
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  overflow-wrap: anywhere;
+}
+
+.selection-recovery .verify-secondary,
+.selection-recovery .recovery-retry,
+.settlement-controls .verify-secondary,
+.settlement-controls .button,
+.settlement-controls .recovery-retry {
+  width: 100%;
+  margin-top: 13px;
+}
+
+.recovery-retry {
+  min-height: 42px;
+  border: 1px solid #4d3030;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.recovery-retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.settlement-controls {
+  margin: 0 26px 26px;
+}
+
+.settlement-controls dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 18px 0 0;
+  border: 1px solid var(--line);
+}
+
+.settlement-controls dl > div {
+  min-width: 0;
+  padding: 13px;
+  border-right: 1px solid var(--line);
+}
+
+.settlement-controls dl > div:last-child {
+  border-right: 0;
+}
+
+.settlement-controls dd {
+  margin: 8px 0 0;
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.settlement-controls > small {
+  display: block;
+  margin-top: 12px;
+  color: var(--muted-dark);
+  font-family: var(--mono);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.resolution-control.undetermined > span,
+.resolution-control.undetermined > strong,
+.resolution-control.undetermined > a {
+  color: #ffb23f;
+}
+
 .creator-application-summary dt {
   color: var(--muted-dark);
 }

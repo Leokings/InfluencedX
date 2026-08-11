@@ -25,6 +25,8 @@ import {
   extractCreatorSelected,
   extractEvidenceSubmitted,
   extractResolutionRequested,
+  extractUnallocatedCredited,
+  extractWithdrawal,
   marketplaceEscrowAbi,
   nativeUsdcAbi,
   parseUsdcAmount,
@@ -33,7 +35,9 @@ import {
   prepareCampaignResolutionRelay,
   prepareCreatorSelection,
   prepareEvidenceSubmission,
+  prepareEscrowWithdrawal,
   prepareResolutionRequest,
+  prepareUnallocatedBudgetCredit,
 } from "../lib/marketplace-chain.ts";
 
 const brand = getAddress("0x1111111111111111111111111111111111111111");
@@ -367,6 +371,98 @@ test("receipt decoders reject client-supplied IDs and extract only authentic esc
     expectedAgreementHash: agreementHash,
     expectedSubmissionHash: submissionHash,
   }).requestId, requestId);
+});
+
+test("escrow recovery calls remain pinned to the audited Base Sepolia escrow", () => {
+  const credit = prepareUnallocatedBudgetCredit({
+    chainId: BASE_SEPOLIA_CHAIN_ID,
+    campaignId: 17n,
+  });
+  const decodedCredit = decodeFunctionData({
+    abi: marketplaceEscrowAbi,
+    data: credit.data,
+  });
+  assert.equal(credit.address, INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow);
+  assert.equal(decodedCredit.functionName, "creditUnallocatedBudget");
+  assert.deepEqual(decodedCredit.args, [17n]);
+
+  const withdrawal = prepareEscrowWithdrawal({ chainId: BASE_SEPOLIA_CHAIN_ID });
+  const decodedWithdrawal = decodeFunctionData({
+    abi: marketplaceEscrowAbi,
+    data: withdrawal.data,
+  });
+  assert.equal(withdrawal.address, INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow);
+  assert.equal(decodedWithdrawal.functionName, "withdraw");
+  assert.equal(decodedWithdrawal.args, undefined);
+  assert.throws(
+    () => prepareUnallocatedBudgetCredit({ chainId: 8_453, campaignId: 17n }),
+    /Base Sepolia/,
+  );
+});
+
+test("unused-budget and withdrawal receipts require one exact authenticated escrow event", () => {
+  const amount = 42_000_000n;
+  const creditTopics = encodeEventTopics({
+    abi: marketplaceEscrowAbi,
+    eventName: "UnallocatedCredited",
+    args: { campaignId: 17n, brand },
+  });
+  const creditLog = {
+    address: INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+    topics: concreteTopics(creditTopics),
+    data: encodeAbiParameters(parseAbiParameters("uint256 amount"), [amount]),
+  };
+  const credited = extractUnallocatedCredited({
+    receiptStatus: "success",
+    logs: [creditLog],
+    expectedCampaignId: 17n,
+    expectedBrand: brand,
+  });
+  assert.equal(credited.amount, amount);
+  assert.throws(() => extractUnallocatedCredited({
+    receiptStatus: "success",
+    logs: [creditLog],
+    expectedCampaignId: 18n,
+    expectedBrand: brand,
+  }), /does not match/);
+  assert.throws(() => extractUnallocatedCredited({
+    receiptStatus: "success",
+    logs: [creditLog],
+    expectedCampaignId: 17n,
+    expectedBrand: creator,
+  }), /does not match/);
+  assert.throws(() => extractUnallocatedCredited({
+    receiptStatus: "success",
+    logs: [creditLog, creditLog],
+    expectedCampaignId: 17n,
+    expectedBrand: brand,
+  }), /exactly one/);
+
+  const withdrawalTopics = encodeEventTopics({
+    abi: marketplaceEscrowAbi,
+    eventName: "Withdrawal",
+    args: { account: creator },
+  });
+  const withdrawalLog = {
+    address: INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+    topics: concreteTopics(withdrawalTopics),
+    data: encodeAbiParameters(parseAbiParameters("uint256 amount"), [amount]),
+  };
+  assert.equal(extractWithdrawal({
+    receiptStatus: "success",
+    logs: [withdrawalLog],
+    expectedAccount: creator,
+  }).amount, amount);
+  assert.throws(() => extractWithdrawal({
+    receiptStatus: "success",
+    logs: [withdrawalLog],
+    expectedAccount: brand,
+  }), /does not match/);
+  assert.throws(() => extractWithdrawal({
+    receiptStatus: "reverted",
+    logs: [withdrawalLog],
+    expectedAccount: creator,
+  }), /not successful/);
 });
 
 test("the adapter exposes only the audited Base Sepolia deployment", () => {

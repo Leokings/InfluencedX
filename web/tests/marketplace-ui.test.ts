@@ -117,3 +117,56 @@ test("creator profile exposes authenticated idempotent metrics refresh and polli
   assert.match(source, /GENLAYER_SUBMISSION_OUTCOME_UNKNOWN/);
   assert.doesNotMatch(source, /followers:\s*\d|engagementRateBps:\s*\d/);
 });
+
+test("failed creator selection is recoverable without an automatic duplicate broadcast", async () => {
+  const [detailSource, transactionSource] = await Promise.all([
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/marketplace-transaction.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(detailSource, /onSubmitted:\s*\(hash\)/);
+  assert.match(detailSource, /\/select\/confirm/);
+  assert.match(detailSource, /CONFIRM EXISTING TX/);
+  assert.match(detailSource, /PRIOR TX FAILED — BROADCAST NEW/);
+  assert.match(detailSource, /Reconcile before retrying/i);
+  assert.doesNotMatch(detailSource, /localStorage|sessionStorage/);
+  assert.match(transactionSource, /eth_accounts/);
+  assert.match(transactionSource, /active wallet account no longer matches/);
+  assert.ok(
+    transactionSource.indexOf("publicClient.call") < transactionSource.indexOf("sendTransaction"),
+    "the exact call must be simulated before wallet broadcast",
+  );
+  assert.ok(
+    transactionSource.indexOf("waitForTransactionReceipt") < transactionSource.indexOf("getTransaction"),
+    "receipt and mined transaction must both be bound before success",
+  );
+});
+
+test("escrow recovery UI waits for server receipt and post-state confirmation", async () => {
+  const source = await readFile(
+    new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /BASE ESCROW RECOVERY/);
+  assert.match(source, /\$\{basePath\}\/\$\{kind\}/);
+  assert.match(source, /\$\{basePath\}\/\$\{kind\}\/confirm/);
+  assert.match(source, /if \(!confirmed\.confirmation\)/);
+  assert.match(source, /setSettlement\(confirmed\.settlement\)/);
+  assert.match(source, /CREDIT UNUSED BALANCE/);
+  assert.match(source, /WITHDRAW CLAIMABLE/);
+  assert.doesNotMatch(source, /set(?:Campaign|Application).*paid|set(?:Campaign|Application).*refunded/i);
+});
+
+test("UNDETERMINED is retryable only after the server reopens the campaign", async () => {
+  const source = await readFile(
+    new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),
+    "utf8",
+  );
+  const requestBranch = source.indexOf("application.requestId && application.resolutionRequestTxHash");
+  const undeterminedBranch = source.indexOf('application.resolutionOutcome === "undetermined"');
+  const genericFinalBranch = source.indexOf("application.resolutionOutcome && application.resolutionTxHash", undeterminedBranch + 1);
+  assert.ok(requestBranch >= 0 && requestBranch < undeterminedBranch);
+  assert.ok(undeterminedBranch >= 0 && undeterminedBranch < genericFinalBranch);
+  assert.match(source, /const ready = campaign\.status === "submitted"/);
+  assert.match(source, /REQUEST NEXT ROUND/);
+  assert.match(source, /No payout or refund was assigned/);
+});

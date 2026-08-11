@@ -248,6 +248,14 @@ test("production policies keep submission stricter than recovery operations", ()
   assert.equal(metricsRefresh?.limit, 6);
   assert.equal(metricsStatus?.limit, 600);
   assert.ok((metricsStatus?.limit ?? 0) > (metricsRefresh?.limit ?? 0));
+  const resolutionProgress = VERIFICATION_RATE_LIMIT_RULES[
+    "marketplace-resolution-progress"
+  ].find((rule) => rule.identity === "request");
+  const acceptanceMutation = VERIFICATION_RATE_LIMIT_RULES[
+    "marketplace-accept"
+  ].find((rule) => rule.identity === "wallet");
+  assert.equal(resolutionProgress?.limit, 600);
+  assert.equal(acceptanceMutation?.limit, 30);
   for (const rules of Object.values(VERIFICATION_RATE_LIMIT_RULES)) {
     for (const rule of rules) {
       assert.match(rule.policyKey, /\.v\d+$/);

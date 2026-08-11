@@ -8,6 +8,8 @@ import {
   type FundingStatus,
   type MarketplaceApplicationDto,
   type MarketplaceCampaignDto,
+  type MarketplaceSettlementMutationResponse,
+  type MarketplaceSettlementStateDto,
   type MarketplaceTransactionDto,
 } from "../../lib/marketplace-types.ts";
 
@@ -19,6 +21,8 @@ export {
   type CampaignListResponse,
   type CampaignStatus,
   type FundingStatus,
+  type MarketplaceSettlementMutationResponse,
+  type MarketplaceSettlementStateDto,
   type MarketplaceTransactionDto,
 };
 

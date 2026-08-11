@@ -445,6 +445,39 @@ export function prepareResolutionRequest(input: {
   );
 }
 
+export function prepareUnallocatedBudgetCredit(input: {
+  chainId: unknown;
+  campaignId: unknown;
+}): PreparedMarketplaceCall<"creditUnallocatedBudget", readonly [bigint]> {
+  assertBaseSepoliaChain(input.chainId);
+  const args = [normalizePositiveUint(input.campaignId, "campaignId")] as const;
+  return preparedCall(
+    INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+    marketplaceEscrowAbi,
+    "creditUnallocatedBudget",
+    args,
+    encodeFunctionData({
+      abi: marketplaceEscrowAbi,
+      functionName: "creditUnallocatedBudget",
+      args,
+    }),
+  );
+}
+
+export function prepareEscrowWithdrawal(input: {
+  chainId: unknown;
+}): PreparedMarketplaceCall<"withdraw", readonly []> {
+  assertBaseSepoliaChain(input.chainId);
+  const args = [] as const;
+  return preparedCall(
+    INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+    marketplaceEscrowAbi,
+    "withdraw",
+    args,
+    encodeFunctionData({ abi: marketplaceEscrowAbi, functionName: "withdraw" }),
+  );
+}
+
 /** Recomputes the exact request ID formula used by AdProofEscrow.requestResolution. */
 export function deriveCampaignResolutionRequestId(input: {
   chainId: unknown;
@@ -905,6 +938,99 @@ export function extractResolutionRequested(input: {
     round: event.round,
     agreementHash: event.agreementHash.toLowerCase() as Hex,
     submissionHash: event.submissionHash.toLowerCase() as Hex,
+  });
+}
+
+export function extractUnallocatedCredited(input: {
+  receiptStatus: unknown;
+  logs: readonly MarketplaceReceiptLog[];
+  expectedCampaignId: unknown;
+  expectedBrand: unknown;
+}): Readonly<{
+  campaignId: bigint;
+  brand: Address;
+  amount: bigint;
+}> {
+  if (input.receiptStatus !== "success") {
+    throw new Error("Unallocated-budget credit transaction was not successful.");
+  }
+  const expectedCampaignId = normalizePositiveUint(
+    input.expectedCampaignId,
+    "expectedCampaignId",
+  );
+  const expectedBrand = normalizeAddress(input.expectedBrand, "expectedBrand");
+  const decoded = input.logs.flatMap((log) => {
+    if (!isAddress(log.address, { strict: false })) return [];
+    if (getAddress(log.address) !== INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow) return [];
+    try {
+      const event = decodeEventLog({
+        abi: marketplaceEscrowAbi,
+        eventName: "UnallocatedCredited",
+        data: log.data,
+        topics: normalizedTopics(log.topics),
+        strict: true,
+      });
+      return event.eventName === "UnallocatedCredited" ? [event.args] : [];
+    } catch {
+      return [];
+    }
+  });
+  if (decoded.length !== 1) {
+    throw new Error("Credit receipt must contain exactly one UnallocatedCredited event.");
+  }
+  const event = decoded[0];
+  if (
+    event.campaignId !== expectedCampaignId ||
+    getAddress(event.brand) !== expectedBrand ||
+    event.amount <= 0n
+  ) {
+    throw new Error("UnallocatedCredited event does not match the campaign owner.");
+  }
+  return Object.freeze({
+    campaignId: event.campaignId,
+    brand: getAddress(event.brand),
+    amount: event.amount,
+  });
+}
+
+export function extractWithdrawal(input: {
+  receiptStatus: unknown;
+  logs: readonly MarketplaceReceiptLog[];
+  expectedAccount: unknown;
+}): Readonly<{
+  account: Address;
+  amount: bigint;
+}> {
+  if (input.receiptStatus !== "success") {
+    throw new Error("Escrow withdrawal transaction was not successful.");
+  }
+  const expectedAccount = normalizeAddress(input.expectedAccount, "expectedAccount");
+  const decoded = input.logs.flatMap((log) => {
+    if (!isAddress(log.address, { strict: false })) return [];
+    if (getAddress(log.address) !== INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow) return [];
+    try {
+      const event = decodeEventLog({
+        abi: marketplaceEscrowAbi,
+        eventName: "Withdrawal",
+        data: log.data,
+        topics: normalizedTopics(log.topics),
+        strict: true,
+      });
+      return event.eventName === "Withdrawal" ? [event.args] : [];
+    } catch {
+      return [];
+    }
+  });
+  if (decoded.length !== 1) {
+    throw new Error("Withdrawal receipt must contain exactly one Withdrawal event.");
+  }
+  const event = decoded[0];
+  if (getAddress(event.account) !== expectedAccount || event.amount <= 0n) {
+    throw new Error("Withdrawal event does not match the authenticated wallet.");
+  }
+  return Object.freeze({
+    account: getAddress(event.account),
+    amount: event.amount,
   });
 }
 
