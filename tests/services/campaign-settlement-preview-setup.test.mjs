@@ -12,7 +12,7 @@ import {
   callerOidcPatch,
   createEncryptedRelayerMaterial,
   relayEnvironment,
-  selectStablePreviewOrigin,
+  stablePreviewOriginForDeployment,
   trustedSourcesPatch,
   watcherEnvironment,
   webEnvironment,
@@ -106,34 +106,34 @@ test('each Preview environment receives only its role-specific secrets and stays
   assert.equal(JSON.stringify(web).includes('postgresql://'), false);
 });
 
-test('only the exact stable READY Preview alias is accepted', () => {
-  assert.equal(selectStablePreviewOrigin({
-    projectName: 'influencedx-campaign-relay',
-    deployments: [{
-      readyState: 'READY',
-      target: null,
-      alias: [
-        'influencedx-campaign-relay-preview.vercel.app',
-        'influencedx-campaign-relay.vercel.app',
-      ],
-    }],
+test('only the exact stable READY Preview deployment is accepted', () => {
+  const project = {
+    id: 'prj_exactRelay123',
+    name: 'influencedx-campaign-relay',
+  };
+  const deployment = {
+    projectId: project.id,
+    name: project.name,
+    ownerId: 'team_2L0T4LCdFsCTFcckeTFWZRvN',
+    readyState: 'READY',
+    target: null,
+  };
+  assert.equal(stablePreviewOriginForDeployment({
+    project,
+    deployment,
   }), 'https://influencedx-campaign-relay-preview.vercel.app');
-  assert.throws(() => selectStablePreviewOrigin({
-    projectName: 'influencedx-campaign-relay',
-    deployments: [{
-      readyState: 'READY',
-      target: 'production',
-      alias: ['influencedx-campaign-relay-preview.vercel.app'],
-    }],
-  }), /exactly one READY fixed Preview alias/);
-  assert.throws(() => selectStablePreviewOrigin({
-    projectName: 'influencedx-campaign-relay',
-    deployments: [{
-      readyState: 'READY',
-      target: null,
-      alias: ['influencedx-campaign-relay-git-main-team.vercel.app'],
-    }],
-  }), /exactly one READY fixed Preview alias/);
+  assert.throws(() => stablePreviewOriginForDeployment({
+    project,
+    deployment: { ...deployment, target: 'production' },
+  }), /READY non-production deployment/);
+  assert.throws(() => stablePreviewOriginForDeployment({
+    project,
+    deployment: { ...deployment, projectId: 'prj_wrongProject123' },
+  }), /different Vercel project/);
+  assert.throws(() => stablePreviewOriginForDeployment({
+    project,
+    deployment: { ...deployment, ownerId: 'team_wrongTeam123' },
+  }), /different Vercel team/);
 });
 
 test('fresh relayer material is encrypted and its password can be zeroized', async () => {

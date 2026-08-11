@@ -238,23 +238,17 @@ function exactHttpsOrigin(value) {
   return parsed.origin;
 }
 
-export function selectStablePreviewOrigin({ projectName, deployments }) {
-  const expectedAlias = `${projectName.toLowerCase()}-preview.vercel.app`;
-  const candidates = [];
-  for (const deployment of deployments ?? []) {
-    if (deployment.readyState !== 'READY' || deployment.target === 'production') continue;
-    for (const alias of deployment.alias ?? []) {
-      if (typeof alias !== 'string') continue;
-      const lower = alias.toLowerCase();
-      if (lower === expectedAlias) {
-        candidates.push(exactHttpsOrigin(`https://${lower}`));
-      }
-    }
-  }
-  const unique = [...new Set(candidates)].sort((left, right) => left.length - right.length);
-  invariant(unique.length === 1,
-    `${projectName} must have exactly one READY fixed Preview alias before setup`);
-  return unique[0];
+export function stablePreviewOriginForDeployment({ project, deployment }) {
+  const expectedAlias = `${project.name.toLowerCase()}-preview.vercel.app`;
+  invariant(deployment?.projectId === project.id,
+    `${project.name} fixed Preview alias points to a different Vercel project`);
+  invariant(deployment?.name === project.name,
+    `${project.name} fixed Preview alias resolved an unexpected project name`);
+  invariant(deployment?.ownerId === TEAM.id,
+    `${project.name} fixed Preview alias is owned by a different Vercel team`);
+  invariant(deployment?.readyState === 'READY' && deployment?.target !== 'production',
+    `${project.name} fixed Preview alias must resolve to a READY non-production deployment`);
+  return exactHttpsOrigin(`https://${expectedAlias}`);
 }
 
 function minimalChildEnvironment(env) {
@@ -487,12 +481,11 @@ async function projectPreflight(api, project) {
   invariant(metadata?.accountId === TEAM.id, `${project.name} is owned by a different Vercel team`);
   invariant((metadata?.rootDirectory ?? null) === project.rootDirectory,
     `${project.name} Vercel root directory changed`);
-  const result = await api(
-    `/v7/deployments?projectId=${project.id}&target=preview&state=READY&limit=20`,
-  );
-  const previewOrigin = selectStablePreviewOrigin({
-    projectName: project.name,
-    deployments: result?.deployments,
+  const fixedAlias = `${project.name.toLowerCase()}-preview.vercel.app`;
+  const deployment = await api(`/v13/deployments/${fixedAlias}`);
+  const previewOrigin = stablePreviewOriginForDeployment({
+    project,
+    deployment,
   });
   return { metadata, previewOrigin };
 }
