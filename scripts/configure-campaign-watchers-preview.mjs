@@ -86,6 +86,10 @@ const DEPLOYER_KEYSTORE = path.join(
   'testnet-deployer',
   'grounding-bradbury.keystore.json',
 );
+const DATABASE_RESOURCE = Object.freeze({
+  installationId: 'icfg_xY5RAMOw9rRCNdB6imyY7xL8',
+  resourceId: 'store_fo2pE1V3Pt5eUeRc',
+});
 const RELAYER_DIRECTORY = path.join(
   PROJECT_ROOT,
   '.secrets',
@@ -165,20 +169,16 @@ export function watcherEnvironment({ watcher, privateKey, serviceToken }) {
 }
 
 export function relayEnvironment({
-  databaseUrl,
   relayerPrivateKey,
   relayerAddress,
   relayServiceToken,
   watcherOrigins,
   watcherServiceTokens,
 }) {
-  invariant(typeof databaseUrl === 'string' && /^(?:postgres|postgresql):\/\//.test(databaseUrl),
-    'Preview DATABASE_URL is invalid');
   invariant(PRIVATE_KEY_PATTERN.test(relayerPrivateKey), 'Relayer private key is invalid');
   invariant(watcherOrigins.length === 3 && watcherServiceTokens.length === 3,
     'Exactly three watcher endpoints and tokens are required');
   const entries = [
-    envEntry('DATABASE_URL', databaseUrl, 'sensitive'),
     envEntry('XPROOF_CAMPAIGN_RELAY_ENABLED', 'false'),
     envEntry('XPROOF_CAMPAIGN_RELAY_STAGE', 'testnet'),
     envEntry('XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED', 'false'),
@@ -207,6 +207,14 @@ export function relayEnvironment({
     );
   }
   return entries;
+}
+
+export function databaseConnectionRequest() {
+  return Object.freeze({
+    projectId: RELAY_PROJECT.id,
+    envVarEnvironments: Object.freeze(['preview']),
+    makeEnvVarsSensitive: true,
+  });
 }
 
 export function webEnvironment({ relayOrigin, relayServiceToken }) {
@@ -493,16 +501,41 @@ function previewTargets(entry) {
   return Array.isArray(entry?.target) && entry.target.includes('preview') && !entry.gitBranch;
 }
 
-async function readPreviewDatabaseUrl(api) {
-  const result = await api(`/v10/projects/${WEB_PROJECT.id}/env?decrypt=true`);
-  const matches = (result?.envs ?? []).filter(
+function previewDatabaseEntries(result) {
+  return (result?.envs ?? []).filter(
     (entry) => entry?.key === 'DATABASE_URL' && previewTargets(entry),
   );
-  invariant(matches.length === 1 && typeof matches[0].value === 'string',
-    'InfluencedX must have exactly one unbranched Preview DATABASE_URL');
-  invariant(/^(?:postgres|postgresql):\/\//.test(matches[0].value),
-    'InfluencedX Preview DATABASE_URL is invalid');
-  return matches[0].value;
+}
+
+async function assertHostedDatabasePreflight(api) {
+  const [webResult, relayResult] = await Promise.all([
+    api(`/v10/projects/${WEB_PROJECT.id}/env`),
+    api(`/v10/projects/${RELAY_PROJECT.id}/env`),
+  ]);
+  invariant(previewDatabaseEntries(webResult).length === 1,
+    'InfluencedX must have exactly one hosted Preview DATABASE_URL');
+  invariant(previewDatabaseEntries(relayResult).length === 0,
+    'Campaign relay already has a database connection; reconcile instead of reconnecting');
+}
+
+async function waitForRelayDatabaseConnection(api) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const result = await api(`/v10/projects/${RELAY_PROJECT.id}/env`);
+    const matches = previewDatabaseEntries(result);
+    if (matches.length === 1) return;
+    invariant(matches.length === 0,
+      'Campaign relay received multiple Preview DATABASE_URL variables');
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
+  }
+  throw new Error('Hosted Neon connection did not reach the campaign relay');
+}
+
+async function connectHostedDatabase(api) {
+  await api(
+    `/v1/integrations/installations/${DATABASE_RESOURCE.installationId}/resources/${DATABASE_RESOURCE.resourceId}/connections`,
+    { method: 'POST', body: databaseConnectionRequest() },
+  );
+  await waitForRelayDatabaseConnection(api);
 }
 
 function uniqueServiceTokens() {
@@ -640,8 +673,8 @@ export async function runPreviewSetup({
   const projectResults = await Promise.all(allProjects.map((project) => projectPreflight(api, project)));
   const relayOrigin = projectResults[1].previewOrigin;
   const watcherOrigins = projectResults.slice(2).map(({ previewOrigin }) => previewOrigin);
-  const [databaseUrl, watcherSecrets, manifest, relayer] = await Promise.all([
-    readPreviewDatabaseUrl(api),
+  const [, watcherSecrets, manifest, relayer] = await Promise.all([
+    assertHostedDatabasePreflight(api),
     Promise.all(WATCHERS.map(decryptWatcherSecret)),
     fs.readFile(path.join(PROJECT_ROOT, 'deployments', 'base-sepolia.json'), 'utf8').then(JSON.parse),
     createEncryptedRelayerMaterial(),
@@ -678,6 +711,10 @@ export async function runPreviewSetup({
   try {
     await persistRelayerMaterial(relayer);
 
+    // Vercel injects the Preview database credential directly into the relay.
+    // It is never decrypted, copied through stdout, or persisted by this setup.
+    await connectHostedDatabase(api);
+
     // OIDC callers and Deployment Protection rules are configured before secrets.
     await api(`/v9/projects/${WEB_PROJECT.id}`, { method: 'PATCH', body: callerOidcPatch() });
     await api(`/v9/projects/${RELAY_PROJECT.id}`, { method: 'PATCH', body: {
@@ -699,7 +736,6 @@ export async function runPreviewSetup({
       }));
     }
     await uploadEnvironment(api, RELAY_PROJECT.id, relayEnvironment({
-      databaseUrl,
       relayerPrivateKey: relayer.privateKey,
       relayerAddress: relayer.account.address,
       relayServiceToken: tokens.relayToken,

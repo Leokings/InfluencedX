@@ -11,6 +11,7 @@ import {
   WATCHERS,
   callerOidcPatch,
   createEncryptedRelayerMaterial,
+  databaseConnectionRequest,
   relayEnvironment,
   stablePreviewOriginForDeployment,
   trustedSourcesPatch,
@@ -76,7 +77,6 @@ test('each Preview environment receives only its role-specific secrets and stays
   }
 
   const relay = entriesByKey(relayEnvironment({
-    databaseUrl: 'postgresql://fixture:fixture@localhost/fixture',
     relayerPrivateKey: RELAYER_KEY,
     relayerAddress: RELAYER.address,
     relayServiceToken: RELAY_TOKEN,
@@ -89,6 +89,7 @@ test('each Preview environment receives only its role-specific secrets and stays
   }));
   assert.equal(relay.XPROOF_CAMPAIGN_RELAY_ENABLED.value, 'false');
   assert.equal(relay.XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED.value, 'false');
+  assert.equal(relay.DATABASE_URL, undefined);
   assert.equal(relay.XPROOF_BASE_RELAYER_PRIVATE_KEY.value, RELAYER_KEY);
   assert.equal(relay.XPROOF_BASE_RELAYER_PRIVATE_KEY.type, 'sensitive');
   assert.equal(relay.XPROOF_RELAYER_MAX_BALANCE_WEI.value, RELAYER_MAX_BALANCE_WEI.toString());
@@ -104,6 +105,11 @@ test('each Preview environment receives only its role-specific secrets and stays
   assert.equal(web.XPROOF_CAMPAIGN_RELAY_SERVICE_TOKEN.type, 'sensitive');
   assert.equal(JSON.stringify(web).includes(RELAYER_KEY), false);
   assert.equal(JSON.stringify(web).includes('postgresql://'), false);
+  assert.deepEqual(databaseConnectionRequest(), {
+    projectId: 'prj_bMx328GNrJUIcRx5DwGpIeUEz9Jg',
+    envVarEnvironments: ['preview'],
+    makeEnvVarsSensitive: true,
+  });
 });
 
 test('only the exact stable READY Preview deployment is accepted', () => {
