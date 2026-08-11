@@ -176,6 +176,18 @@ test("campaign funding preserves a mined hash and never rebroadcasts on receipt 
   );
 });
 
+test("a stale wallet session always exposes a sign-out recovery control", async () => {
+  const [walletSource, detailSource, createSource] = await Promise.all([
+    readFile(new URL("../app/marketplace/use-marketplace-wallet.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(walletSource, /hasSession: sessionWallet !== null/);
+  assert.match(walletSource, /setSessionWallet\(session\.authenticated \? session\.wallet : null\)/);
+  assert.match(detailSource, /wallet\.hasSession \? \(/);
+  assert.match(createSource, /wallet\.hasSession \? \(/);
+});
+
 test("escrow recovery UI waits for server receipt and post-state confirmation", async () => {
   const source = await readFile(
     new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),

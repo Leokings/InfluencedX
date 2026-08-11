@@ -430,7 +430,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
               onUpdated={loadDetail}
             />
           ) : null}
-          {wallet.authenticated ? (
+          {wallet.hasSession ? (
             <button className="wallet-signout" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET / SIGN OUT</button>
           ) : null}
           {action.error ? <p className="form-message error" role="alert">{action.error}</p> : null}

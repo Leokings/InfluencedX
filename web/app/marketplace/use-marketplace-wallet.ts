@@ -22,6 +22,7 @@ export function useMarketplaceWallet() {
   const [connecting, setConnecting] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [sessionWallet, setSessionWallet] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export function useMarketplaceWallet() {
       const currentAddress = firstAddress(accounts);
       setAddress(currentAddress);
       if (typeof currentChainId === "string") setChainId(currentChainId.toLowerCase());
+      setSessionWallet(session.authenticated ? session.wallet : null);
       setAuthenticated(Boolean(session.authenticated && currentAddress && session.wallet === currentAddress));
     }).catch(() => undefined);
 
@@ -92,6 +94,7 @@ export function useMarketplaceWallet() {
         body: JSON.stringify({ wallet }),
       });
       if (challenge.authenticated) {
+        setSessionWallet(wallet);
         setAuthenticated(true);
         return wallet;
       }
@@ -108,6 +111,7 @@ export function useMarketplaceWallet() {
       if (!session.authenticated || session.wallet !== wallet) {
         throw new Error("The wallet session could not be authenticated.");
       }
+      setSessionWallet(session.wallet);
       setAuthenticated(true);
       return wallet;
     } catch (error) {
@@ -133,6 +137,7 @@ export function useMarketplaceWallet() {
     setWalletError(null);
     try {
       await marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/session", { method: "DELETE" });
+      setSessionWallet(null);
       setAuthenticated(false);
       setAddress(null);
       setChainId(null);
@@ -149,6 +154,8 @@ export function useMarketplaceWallet() {
     connecting,
     authenticating,
     authenticated,
+    hasSession: sessionWallet !== null,
+    sessionWallet,
     walletError,
     isBaseSepolia: chainId === BASE_SEPOLIA_CHAIN_ID_HEX,
     connect,

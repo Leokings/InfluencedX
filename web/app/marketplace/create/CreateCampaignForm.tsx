@@ -80,7 +80,7 @@ export function CreateCampaignForm() {
         <button className="verify-secondary" type="button" disabled={wallet.authenticating} onClick={() => void wallet.authenticate()}>
           {wallet.authenticating ? "SIGNING IN…" : wallet.authenticated ? "AUTHORIZED" : "CONNECT + SIGN"}
         </button>
-        {wallet.authenticated ? (
+        {wallet.hasSession ? (
           <button className="verify-secondary" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET</button>
         ) : null}
         {wallet.address && !wallet.isBaseSepolia ? (
