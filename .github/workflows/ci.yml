@@ -37,7 +37,7 @@ jobs:
       - run: npm run test:base
       - run: npm run test:relay
       - run: npm run test:operator
-      - run: npm run test:services
+      - run: node --test tests/services/*.test.mjs
       - run: npm run test:submitter
 
   web:
