@@ -96,6 +96,9 @@ const DATABASE_RESOURCE = Object.freeze({
   installationId: 'icfg_xY5RAMOw9rRCNdB6imyY7xL8',
   resourceId: 'store_fo2pE1V3Pt5eUeRc',
 });
+const DATABASE_CONNECTIONS_ENDPOINT = `/v1/storage/stores/${DATABASE_RESOURCE.resourceId}/connections`;
+const WEB_DATABASE_TARGETS = Object.freeze(['production', 'preview', 'development']);
+const RELAY_DATABASE_TARGETS = Object.freeze(['preview']);
 const RELAYER_DIRECTORY = path.join(
   PROJECT_ROOT,
   '.secrets',
@@ -714,37 +717,97 @@ function previewDatabaseEntries(result) {
   );
 }
 
-function isExactHostedDatabaseEntry(entry) {
-  return previewTargets(entry)
-    && entry?.type === 'sensitive'
-    && entry?.configurationId === DATABASE_RESOURCE.installationId;
+function exactStringSet(actual, expected) {
+  if (!Array.isArray(actual) || actual.length !== expected.length) return false;
+  return new Set(actual).size === actual.length
+    && expected.every((value) => actual.includes(value));
+}
+
+function projectDatabaseConnections(result, project) {
+  return (result?.connections ?? []).filter(
+    (connection) => connection?.projectId === project.id
+      || connection?.project?.id === project.id,
+  );
+}
+
+export function exactDatabaseBindingMetadata({
+  entries,
+  connections,
+  project,
+  expectedTargets,
+  expectedType,
+}) {
+  if (!Array.isArray(entries) || entries.length !== 1
+    || !Array.isArray(connections) || connections.length !== 1) return false;
+  const [entry] = entries;
+  const [connection] = connections;
+  const entryTargets = typeof entry?.target === 'string' ? [entry.target] : entry?.target;
+  return entry?.key === 'DATABASE_URL'
+    && exactStringSet(entryTargets, expectedTargets)
+    && !entry.gitBranch
+    && (!entry.customEnvironmentIds || entry.customEnvironmentIds.length === 0)
+    && entry.type === expectedType
+    // Vercel Storage/Marketplace connections are authenticated by the fixed
+    // resource endpoint below; their env records do not carry configurationId.
+    && entry.configurationId == null
+    && connection?.projectId === project.id
+    && connection?.project?.id === project.id
+    && connection?.project?.name === project.name
+    && connection.envVarPrefix == null
+    && exactStringSet(connection.envVarEnvironments, expectedTargets);
 }
 
 async function assertHostedDatabasePreflight(api) {
-  const [webResult, relayResult] = await Promise.all([
+  const [webResult, relayResult, connectionResult] = await Promise.all([
     api(`/v10/projects/${WEB_PROJECT.id}/env`),
     api(`/v10/projects/${RELAY_PROJECT.id}/env`),
+    api(DATABASE_CONNECTIONS_ENDPOINT),
   ]);
   const webEntries = previewDatabaseEntries(webResult);
   const relayEntries = previewDatabaseEntries(relayResult);
-  invariant(webEntries.length === 1 && isExactHostedDatabaseEntry(webEntries[0]),
+  const webConnections = projectDatabaseConnections(connectionResult, WEB_PROJECT);
+  const relayConnections = projectDatabaseConnections(connectionResult, RELAY_PROJECT);
+  invariant(exactDatabaseBindingMetadata({
+    entries: webEntries,
+    connections: webConnections,
+    project: WEB_PROJECT,
+    expectedTargets: WEB_DATABASE_TARGETS,
+    expectedType: 'encrypted',
+  }),
     'InfluencedX must have exactly one hosted Preview DATABASE_URL');
-  invariant(relayEntries.length === 0,
+  invariant(relayEntries.length === 0 && relayConnections.length === 0,
     'Campaign relay already has a database connection; reconcile instead of reconnecting');
 }
 
 async function hostedDatabaseState(api) {
-  const [webResult, relayResult] = await Promise.all([
+  const [webResult, relayResult, connectionResult] = await Promise.all([
     api(`/v10/projects/${WEB_PROJECT.id}/env`),
     api(`/v10/projects/${RELAY_PROJECT.id}/env`),
+    api(DATABASE_CONNECTIONS_ENDPOINT),
   ]);
   const webEntries = previewDatabaseEntries(webResult);
   const relayEntries = previewDatabaseEntries(relayResult);
-  invariant(webEntries.length === 1 && isExactHostedDatabaseEntry(webEntries[0]),
-    'InfluencedX must have exactly one integration-owned sensitive Preview DATABASE_URL');
-  invariant(relayEntries.length <= 1,
+  const webConnections = projectDatabaseConnections(connectionResult, WEB_PROJECT);
+  const relayConnections = projectDatabaseConnections(connectionResult, RELAY_PROJECT);
+  invariant(exactDatabaseBindingMetadata({
+    entries: webEntries,
+    connections: webConnections,
+    project: WEB_PROJECT,
+    expectedTargets: WEB_DATABASE_TARGETS,
+    expectedType: 'encrypted',
+  }),
+    'InfluencedX must have exactly one xproof-db-backed environment binding that includes Preview');
+  invariant(relayEntries.length <= 1 && relayConnections.length <= 1,
     'Campaign relay has multiple or branch-scoped Preview DATABASE_URL variables');
-  invariant(relayEntries.length === 0 || isExactHostedDatabaseEntry(relayEntries[0]),
+  invariant(relayEntries.length === relayConnections.length,
+    'Campaign relay database environment and xproof-db resource binding disagree');
+  invariant(relayEntries.length === 0 || exactDatabaseBindingMetadata({
+    entries: relayEntries,
+    connections: relayConnections,
+    project: RELAY_PROJECT,
+    expectedTargets: RELAY_DATABASE_TARGETS,
+    expectedType: 'sensitive',
+  }),
     'Campaign relay Preview DATABASE_URL is not the expected integration-owned sensitive value');
   return { relayConnected: relayEntries.length === 1 };
 }

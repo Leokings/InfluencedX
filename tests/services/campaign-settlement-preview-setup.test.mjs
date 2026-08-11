@@ -18,6 +18,7 @@ import {
   createEncryptedRelayerMaterial,
   createVercelApi,
   databaseConnectionRequest,
+  exactDatabaseBindingMetadata,
   previewSetupMode,
   relayEnvironment,
   stablePreviewOriginForDeployment,
@@ -123,6 +124,89 @@ test('each Preview environment receives only its role-specific secrets and stays
     envVarEnvironments: ['preview'],
     makeEnvVarsSensitive: true,
   });
+});
+
+test('hosted database metadata requires the exact xproof-db project binding and scope', () => {
+  const webProject = {
+    id: 'prj_4W0EuXNi5nFD46ArUAbvk2YnTacu',
+    name: 'influencedx',
+  };
+  const webEntry = {
+    key: 'DATABASE_URL',
+    type: 'encrypted',
+    target: ['production', 'preview', 'development'],
+    gitBranch: null,
+    customEnvironmentIds: null,
+    configurationId: null,
+  };
+  const webConnection = {
+    projectId: webProject.id,
+    project: webProject,
+    envVarEnvironments: ['production', 'preview', 'development'],
+    envVarPrefix: null,
+  };
+  const metadata = {
+    entries: [webEntry],
+    connections: [webConnection],
+    project: webProject,
+    expectedTargets: ['production', 'preview', 'development'],
+    expectedType: 'encrypted',
+  };
+  assert.equal(exactDatabaseBindingMetadata(metadata), true);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    entries: [{ ...webEntry, gitBranch: 'unsafe' }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    entries: [{ ...webEntry, target: ['preview'] }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    entries: [{ ...webEntry, type: 'sensitive' }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    connections: [{ ...webConnection, envVarEnvironments: ['preview'] }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    connections: [{ ...webConnection, projectId: 'prj_unrelated' }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...metadata,
+    connections: [webConnection, webConnection],
+  }), false);
+
+  const relayProject = {
+    id: 'prj_bMx328GNrJUIcRx5DwGpIeUEz9Jg',
+    name: 'influencedx-campaign-relay',
+  };
+  const relayMetadata = {
+    entries: [{
+      ...webEntry,
+      type: 'sensitive',
+      target: ['preview'],
+    }],
+    connections: [{
+      projectId: relayProject.id,
+      project: relayProject,
+      envVarEnvironments: ['preview'],
+      envVarPrefix: null,
+    }],
+    project: relayProject,
+    expectedTargets: ['preview'],
+    expectedType: 'sensitive',
+  };
+  assert.equal(exactDatabaseBindingMetadata(relayMetadata), true);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...relayMetadata,
+    entries: [{ ...relayMetadata.entries[0], target: ['preview', 'production'] }],
+  }), false);
+  assert.equal(exactDatabaseBindingMetadata({
+    ...relayMetadata,
+    connections: [{ ...relayMetadata.connections[0], envVarPrefix: 'OTHER_' }],
+  }), false);
 });
 
 test('only the exact stable READY Preview deployment is accepted', () => {
