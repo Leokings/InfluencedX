@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "deployedAt": "2026-08-09T05:20:45.426Z",
+  "chainId": 84532,
+  "rpcUrl": "https://sepolia.base.org",
+  "deployer": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
+  "initialOwner": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
+  "finalOwner": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
+  "ownershipAcceptanceRequired": false,
+  "treasury": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
+  "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "genlayerResolver": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+  "genlayerContract": "0x000000000000000000000000017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+  "feeBps": 250,
+  "watchers": [
+    "0x51a54A0E3Fc06B108175b06bE25bFB253Ec53c40",
+    "0x8C6b2b9151f004F8a9941a21Aad87bef5B3fCAd1",
+    "0x08C6D0B23D30bA84978Eba0CcC334a401c77572c"
+  ],
+  "threshold": 2,
+  "receiverEip712Domain": {
+    "name": "XProofAttestationReceiver",
+    "version": "2",
+    "chainId": 84532,
+    "verifyingContract": "0x15ddbcd98f97065746a1c35f88bb670a7a942264"
+  },
+  "contracts": {
+    "registry": {
+      "address": "0x10079ef049d283bc3f212ccac4291b3ac2719c48",
+      "transactionHash": "0x2b71436526cb7fe24e81a2c88e8914121d5b4f1c350fc6946fe6c37cbbf16369",
+      "blockNumber": "45241938"
+    },
+    "escrow": {
+      "address": "0x7e9b6b757d1ef12509889826b2f2a42906661927",
+      "transactionHash": "0x03fc167a9e3684624391f5978e9fb3977b0bd80a0afc5a1822b25a66b20237fc",
+      "blockNumber": "45242273"
+    },
+    "receiver": {
+      "address": "0x15ddbcd98f97065746a1c35f88bb670a7a942264",
+      "transactionHash": "0x9cfa6b8bd7206419895cd52337f02c3fbe87dccc9ea6e578ccd96176e7b6b802",
+      "blockNumber": "45242275"
+    }
+  },
+  "wiringTransactions": {
+    "registry": "0x6eeba5920c00e94ee1c4a41e1804121544d05c9d98c4c1e9bd30d9ae38d5b0d6",
+    "escrow": "0xb422cd94edb9e7abe508965205949002399797f7cb78e80de05af8e82e3b62f2"
+  },
+  "ownershipTransferTransactions": {}
+}

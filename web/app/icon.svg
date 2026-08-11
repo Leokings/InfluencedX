@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" role="img" aria-labelledby="title">
+  <title id="title">InfluencedX</title>
+  <rect width="640" height="640" rx="72" fill="#08090a"/>
+  <text
+    x="320"
+    y="344"
+    fill="#f1f0eb"
+    font-family="Arial Narrow, Arial, sans-serif"
+    font-size="74"
+    font-weight="900"
+    letter-spacing="2"
+    text-anchor="middle"
+    textLength="540"
+    lengthAdjust="spacingAndGlyphs"
+  >INFLUENCEDX</text>
+</svg>

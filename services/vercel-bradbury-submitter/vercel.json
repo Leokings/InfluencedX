@@ -1,0 +1,43 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "functions": {
+    "app/api/queues/process-ownership/route.ts": {
+      "maxDuration": 300,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "xproof-bradbury-ownership-v1",
+          "retryAfterSeconds": 30,
+          "initialDelaySeconds": 0
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/ownership-submissions",
+      "destination": "/api/v1/ownership-submissions"
+    },
+    {
+      "source": "/v1/ownership-submissions/:requestId",
+      "destination": "/api/v1/ownership-submissions/:requestId"
+    },
+    {
+      "source": "/v1/campaign-submissions",
+      "destination": "/api/v1/campaign-submissions"
+    },
+    {
+      "source": "/v1/campaign-submissions/:requestId",
+      "destination": "/api/v1/campaign-submissions/:requestId"
+    },
+    {
+      "source": "/v1/metrics-submissions",
+      "destination": "/api/v1/metrics-submissions"
+    },
+    {
+      "source": "/v1/metrics-submissions/:requestId",
+      "destination": "/api/v1/metrics-submissions/:requestId"
+    }
+  ]
+}

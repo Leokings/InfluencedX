@@ -1,0 +1,41 @@
+name: InfluencedX public X access regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  x-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --omit=dev
+      - uses: actions/cache/restore@v4
+        with:
+          path: reports/x-stress-latest.json
+          key: x-stress-${{ github.run_id }}
+          restore-keys: |
+            x-stress-
+      - run: npm run test:x -- --passes 2 --concurrency 6 --timeout-ms 20000
+      - uses: actions/cache/save@v4
+        with:
+          path: reports/x-stress-latest.json
+          key: x-stress-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x-stress-${{ github.run_id }}
+          path: reports/x-stress-latest.json
+          if-no-files-found: error
+          retention-days: 30

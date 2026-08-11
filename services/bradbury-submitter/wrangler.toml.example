@@ -1,0 +1,35 @@
+name = "xproof-bradbury-submitter"
+main = "src/worker.mjs"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Intentionally omit routes and workers_dev. Bind this Worker as a service from
+# the trusted application backend only after the private service is deployed,
+# configured, and independently verified.
+workers_dev = false
+
+[vars]
+XPROOF_SUBMITTER_ENABLED = "true"
+XPROOF_SUBMITTER_STAGE = "testnet"
+XPROOF_GENLAYER_NETWORK = "testnet-bradbury"
+XPROOF_GENLAYER_RESOLVER = "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2"
+
+[[durable_objects.bindings]]
+name = "XPROOF_SUBMISSIONS"
+class_name = "OwnershipSubmissionObject"
+
+[[durable_objects.bindings]]
+name = "XPROOF_SIGNER"
+class_name = "BradburySignerObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OwnershipSubmissionObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BradburySignerObject"]
+
+# Configure both values with the deployment platform's encrypted secret store:
+# - XPROOF_SUBMITTER_SHARED_SECRET (32-512 printable ASCII characters)
+# - GENLAYER_SUBMITTER_PRIVATE_KEY (a dedicated, low-balance Bradbury key)

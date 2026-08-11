@@ -1,0 +1,47 @@
+CREATE TABLE `verification_requests` (
+	`id` text PRIMARY KEY NOT NULL,
+	`owner_user_id` text NOT NULL,
+	`active_owner_user_id` text,
+	`active_wallet` text,
+	`status` text DEFAULT 'WALLET_CHALLENGE_PENDING' NOT NULL,
+	`status_updated_at` integer NOT NULL,
+	`request_expires_at` integer NOT NULL,
+	`revision` integer DEFAULT 0 NOT NULL,
+	`wallet` text NOT NULL,
+	`wallet_nonce` text,
+	`wallet_nonce_hash` text NOT NULL,
+	`wallet_message` text,
+	`wallet_message_hash` text NOT NULL,
+	`wallet_challenge_expires_at` integer NOT NULL,
+	`wallet_signature_hash` text,
+	`wallet_authorized_at` integer,
+	`handle` text,
+	`x_challenge` text,
+	`tweet_text` text,
+	`tweet_text_hash` text,
+	`x_challenge_issued_at` integer,
+	`x_challenge_expires_at` integer,
+	`credential_expires_at` integer,
+	`normalized_verification_post_url` text,
+	`verification_post_id` text,
+	`verification_post_created_at` integer,
+	`finalized_request_id` text,
+	`handle_hash` text,
+	`verification_post_hash` text,
+	`challenge_hash` text,
+	`receiver_contract` text,
+	`genlayer_contract` text,
+	`intent_typed_data_json` text,
+	`intent_signature_hash` text,
+	`intent_signature_status` text DEFAULT 'NOT_PREPARED' NOT NULL,
+	`intent_prepared_at` integer,
+	`ready_for_genlayer_at` integer,
+	`purged_at` integer,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `verification_requests_owner_created_idx` ON `verification_requests` (`owner_user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `verification_requests_owner_status_idx` ON `verification_requests` (`owner_user_id`,`status`);--> statement-breakpoint
+CREATE UNIQUE INDEX `verification_requests_finalized_request_idx` ON `verification_requests` (`finalized_request_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `verification_requests_one_active_wallet_idx` ON `verification_requests` (`active_owner_user_id`,`active_wallet`);

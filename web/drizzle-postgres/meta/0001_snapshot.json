@@ -1,0 +1,532 @@
+{
+  "id": "7c0515ba-135a-4025-8ee8-01770f0537cc",
+  "prevId": "21609536-0d50-4b69-8163-7c9ab3aa7734",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.verification_rate_limits": {
+      "name": "verification_rate_limits",
+      "schema": "",
+      "columns": {
+        "policy_key": {
+          "name": "policy_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bucket_hash": {
+          "name": "bucket_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_started_at": {
+          "name": "window_started_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_expires_at": {
+          "name": "window_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_count": {
+          "name": "request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_limit": {
+          "name": "request_limit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "verification_rate_limits_expiry_idx": {
+          "name": "verification_rate_limits_expiry_idx",
+          "columns": [
+            {
+              "expression": "window_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "verification_rate_limits_policy_bucket_pk": {
+          "name": "verification_rate_limits_policy_bucket_pk",
+          "columns": [
+            "policy_key",
+            "bucket_hash"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "verification_rate_limits_bucket_hash_format": {
+          "name": "verification_rate_limits_bucket_hash_format",
+          "value": "\"verification_rate_limits\".\"bucket_hash\" ~ '^[0-9a-f]{64}$'"
+        },
+        "verification_rate_limits_window_order": {
+          "name": "verification_rate_limits_window_order",
+          "value": "\"verification_rate_limits\".\"window_started_at\" >= 0 and \"verification_rate_limits\".\"window_expires_at\" > \"verification_rate_limits\".\"window_started_at\""
+        },
+        "verification_rate_limits_positive_counts": {
+          "name": "verification_rate_limits_positive_counts",
+          "value": "\"verification_rate_limits\".\"request_count\" > 0 and \"verification_rate_limits\".\"request_limit\" > 0 and \"verification_rate_limits\".\"request_count\" <= \"verification_rate_limits\".\"request_limit\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.verification_requests": {
+      "name": "verification_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active_owner_user_id": {
+          "name": "active_owner_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "active_wallet": {
+          "name": "active_wallet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "verification_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'WALLET_CHALLENGE_PENDING'"
+        },
+        "status_updated_at": {
+          "name": "status_updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_expires_at": {
+          "name": "request_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "wallet": {
+          "name": "wallet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wallet_nonce": {
+          "name": "wallet_nonce",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_nonce_hash": {
+          "name": "wallet_nonce_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wallet_message": {
+          "name": "wallet_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_message_hash": {
+          "name": "wallet_message_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wallet_challenge_expires_at": {
+          "name": "wallet_challenge_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wallet_signature_hash": {
+          "name": "wallet_signature_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_authorized_at": {
+          "name": "wallet_authorized_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "handle": {
+          "name": "handle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "x_challenge": {
+          "name": "x_challenge",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tweet_text": {
+          "name": "tweet_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tweet_text_hash": {
+          "name": "tweet_text_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "x_challenge_issued_at": {
+          "name": "x_challenge_issued_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "x_challenge_expires_at": {
+          "name": "x_challenge_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credential_expires_at": {
+          "name": "credential_expires_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "normalized_verification_post_url": {
+          "name": "normalized_verification_post_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verification_post_id": {
+          "name": "verification_post_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verification_post_created_at": {
+          "name": "verification_post_created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finalized_request_id": {
+          "name": "finalized_request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "handle_hash": {
+          "name": "handle_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verification_post_hash": {
+          "name": "verification_post_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "challenge_hash": {
+          "name": "challenge_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receiver_contract": {
+          "name": "receiver_contract",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "genlayer_contract": {
+          "name": "genlayer_contract",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intent_typed_data_json": {
+          "name": "intent_typed_data_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intent_signature_hash": {
+          "name": "intent_signature_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intent_signature_status": {
+          "name": "intent_signature_status",
+          "type": "intent_signature_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'NOT_PREPARED'"
+        },
+        "intent_prepared_at": {
+          "name": "intent_prepared_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ready_for_genlayer_at": {
+          "name": "ready_for_genlayer_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "purged_at": {
+          "name": "purged_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "verification_requests_owner_created_idx": {
+          "name": "verification_requests_owner_created_idx",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "verification_requests_owner_status_idx": {
+          "name": "verification_requests_owner_status_idx",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "verification_requests_owner_active_expiry_idx": {
+          "name": "verification_requests_owner_active_expiry_idx",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "request_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"verification_requests\".\"status\" <> 'EXPIRED'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "verification_requests_finalized_request_idx": {
+          "name": "verification_requests_finalized_request_idx",
+          "columns": [
+            {
+              "expression": "finalized_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "verification_requests_one_active_owner_idx": {
+          "name": "verification_requests_one_active_owner_idx",
+          "columns": [
+            {
+              "expression": "active_owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "verification_requests_active_wallet_idx": {
+          "name": "verification_requests_active_wallet_idx",
+          "columns": [
+            {
+              "expression": "active_wallet",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "verification_requests_revision_nonnegative": {
+          "name": "verification_requests_revision_nonnegative",
+          "value": "\"verification_requests\".\"revision\" >= 0"
+        },
+        "verification_requests_active_pair": {
+          "name": "verification_requests_active_pair",
+          "value": "(\"verification_requests\".\"active_owner_user_id\" is null) = (\"verification_requests\".\"active_wallet\" is null)"
+        },
+        "verification_requests_active_owner_matches": {
+          "name": "verification_requests_active_owner_matches",
+          "value": "\"verification_requests\".\"active_owner_user_id\" is null or \"verification_requests\".\"active_owner_user_id\" = \"verification_requests\".\"owner_user_id\""
+        },
+        "verification_requests_active_wallet_matches": {
+          "name": "verification_requests_active_wallet_matches",
+          "value": "\"verification_requests\".\"active_wallet\" is null or \"verification_requests\".\"active_wallet\" = \"verification_requests\".\"wallet\""
+        },
+        "verification_requests_expiry_state": {
+          "name": "verification_requests_expiry_state",
+          "value": "(\"verification_requests\".\"status\" = 'EXPIRED' and \"verification_requests\".\"active_owner_user_id\" is null) or (\"verification_requests\".\"status\" <> 'EXPIRED' and \"verification_requests\".\"active_owner_user_id\" is not null)"
+        },
+        "verification_requests_intent_state": {
+          "name": "verification_requests_intent_state",
+          "value": "\"verification_requests\".\"status\" = 'EXPIRED' or (\"verification_requests\".\"status\" in ('WALLET_CHALLENGE_PENDING', 'WALLET_AUTHORIZED', 'X_CHALLENGE_ISSUED') and \"verification_requests\".\"intent_signature_status\" = 'NOT_PREPARED') or (\"verification_requests\".\"status\" = 'INTENT_PREPARED' and \"verification_requests\".\"intent_signature_status\" = 'AWAITING_SIGNATURE') or (\"verification_requests\".\"status\" = 'READY_FOR_GENLAYER' and \"verification_requests\".\"intent_signature_status\" = 'VERIFIED')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.intent_signature_status": {
+      "name": "intent_signature_status",
+      "schema": "public",
+      "values": [
+        "NOT_PREPARED",
+        "AWAITING_SIGNATURE",
+        "VERIFIED"
+      ]
+    },
+    "public.verification_status": {
+      "name": "verification_status",
+      "schema": "public",
+      "values": [
+        "WALLET_CHALLENGE_PENDING",
+        "WALLET_AUTHORIZED",
+        "X_CHALLENGE_ISSUED",
+        "INTENT_PREPARED",
+        "READY_FOR_GENLAYER",
+        "EXPIRED"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

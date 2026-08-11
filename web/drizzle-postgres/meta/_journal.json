@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786260149995,
+      "tag": "0000_xproof_verification_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786267917091,
+      "tag": "0001_xproof_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786268949829,
+      "tag": "0002_xproof_submitter_bridge",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786269500000,
+      "tag": "0003_bradbury_submission_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786275000000,
+      "tag": "0004_base_relay_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786438800000,
+      "tag": "0005_influencedx_marketplace",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786518000000,
+      "tag": "0006_campaign_settlement_relay",
+      "breakpoints": true
+    }
+  ]
+}

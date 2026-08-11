@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/v1/campaign-signatures.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/campaign-signatures",
+      "destination": "/api/v1/campaign-signatures"
+    }
+  ]
+}

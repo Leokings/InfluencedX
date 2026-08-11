@@ -1,0 +1,56 @@
+# Dependencies and generated output
+node_modules/
+**/node_modules/
+artifacts/
+**/.next/
+**/dist/
+**/coverage/
+.pytest_cache/
+**/.pytest_cache/
+**/__pycache__/
+*.pyc
+*.tsbuildinfo
+
+# Local runtime and provider state
+**/.vercel/
+**/.wrangler/
+**/.dev.vars
+**/.dev.vars.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files. Public templates remain committable.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+!**/.env.*.example
+
+# Credentials and encrypted key material
+.secrets/
+**/.secrets/
+*.keystore
+*.keystore.json
+keystore*.json
+*.pem
+*.p12
+*.pfx
+*.key
+*.password
+*.password.txt
+*.secret
+
+# Runtime reports and resumable local deployment state
+reports/*.json
+reports/*.jsonl
+!reports/.gitkeep
+deployments/*.journal.json
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

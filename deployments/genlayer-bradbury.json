@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 2,
+  "network": "testnet-bradbury",
+  "resolver": {
+    "address": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+    "deploymentTransaction": "0xcbad3920c328c5fd88e38a306683a90e23264d20f851944ef8a4ba19eb2b504b",
+    "status": "FINALIZED",
+    "protocolVersion": "APV2",
+    "abiVerified": true,
+    "verifyOwnershipArgumentCount": 8
+  },
+  "previousResolver": {
+    "address": "0x1dA39c42a76fbF902d1BA20131DdE72d91888Acd",
+    "deploymentTransaction": "0x9a5eabd58f1d52c62e5fcdc16d021df9b7bec2dbe0823ceb5bacc8ff79370478",
+    "statusCheckedAt": "2026-08-08T20:14:24.5972860Z",
+    "status": "FINALIZED",
+    "executionResult": "FINISHED_WITH_RETURN"
+  },
+  "liveValidation": {
+    "resolverAddress": "0x1dA39c42a76fbF902d1BA20131DdE72d91888Acd",
+    "protocolVersion": "pre-APV2",
+    "method": "snapshot_metrics",
+    "transaction": "0x3095137ab9414d28ff5462d742dc1a03b40c2f954cb8de71f6691e26969b73df",
+    "status": "FINALIZED",
+    "executionResult": "FINISHED_WITH_RETURN",
+    "validatorOutcome": "VERIFIED",
+    "validatorCount": 5,
+    "publicIdentity": {
+      "handle": "xdevelopers",
+      "immutableXUserId": "2244994945",
+      "identityCommitment": "0x993362e739d167a94028b42de68eae0c75bb63cfd45dc40205a4ad38ec8f2a24"
+    },
+    "relayEligible": true,
+    "relayEligibilityReason": "This historical metrics source is FINALIZED and passed the relay's resolver, execution, method, and request-ID checks."
+  },
+  "apv2OwnershipLiveValidation": {
+    "resolverAddress": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+    "status": "FINALIZED",
+    "executionResult": "FINISHED_WITH_RETURN",
+    "validatorOutcome": "VERIFIED",
+    "bindingChecksPassed": 11,
+    "relayEligible": true,
+    "baseRelayTransaction": "0x0b26bffd19643ea816b740432c0293eee26bccbf6b0b7cb0407cb1c3063c6406",
+    "baseRegistryProfileId": "1",
+    "creatorWallet": "0x63038a310a46AC61A59c1bC5eAD5fe41040eF38e"
+  }
+}

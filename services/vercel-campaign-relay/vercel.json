@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/v1/campaign-resolutions.ts": {
+      "maxDuration": 120
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/campaign-resolutions",
+      "destination": "/api/v1/campaign-resolutions"
+    }
+  ]
+}

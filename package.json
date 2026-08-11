@@ -1,0 +1,39 @@
+{
+  "name": "influencedx-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "contracts:compile": "node scripts/compile-contracts.mjs",
+    "test:base": "node --test tests/base/*.test.mjs",
+    "test:relay": "node --test tests/relay/*.test.mjs",
+    "test:operator": "node --test tests/operator/*.test.mjs",
+    "test:services": "node --test tests/services/*.test.mjs && npm --prefix services/vercel-campaign-watcher test && npm --prefix services/vercel-campaign-relay test",
+    "build:campaign-settlement-services": "npm --prefix services/vercel-campaign-watcher run build && npm --prefix services/vercel-campaign-relay run build",
+    "test:submitter": "node --test tests/submitter/*.test.mjs",
+    "test:deployment-credentials": "node --test tests/services/base-deployer-account.test.mjs",
+    "test:x": "node --env-file-if-exists=.env scripts/x-stress.mjs",
+    "deploy:base-sepolia": "node --env-file-if-exists=.env scripts/deploy-base-sepolia.mjs",
+    "verify:base-sepolia": "node --env-file-if-exists=.env scripts/verify-base-sepolia.mjs",
+    "watchers:setup:testnet": "node scripts/setup-testnet-watchers.mjs",
+    "settlement:configure:preview": "node scripts/configure-campaign-watchers-preview.mjs",
+    "relay:watch": "node --env-file-if-exists=.env scripts/relay-watcher.mjs",
+    "relay:submit": "node --env-file-if-exists=.env scripts/relay-submit.mjs",
+    "relay:preview:base-sepolia": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/operator/launch-preview-base-sepolia-relay.ps1",
+    "live:bradbury-metrics": "node --env-file-if-exists=.env scripts/live-bradbury-metrics.mjs"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.4.0",
+    "ethers": "6.17.0",
+    "genlayer-js": "1.1.8",
+    "pg": "8.16.3",
+    "viem": "2.54.3"
+  },
+  "devDependencies": {
+    "ganache": "7.9.2",
+    "solc": "0.8.36"
+  }
+}

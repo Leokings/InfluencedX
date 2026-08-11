@@ -1,0 +1,27 @@
+{
+  "name": "influencedx-vercel-campaign-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@vercel/oidc": "3.8.2",
+    "genlayer-js": "1.1.8",
+    "jose": "6.2.8",
+    "pg": "8.16.3",
+    "viem": "2.54.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/pg": "8.15.6",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  }
+}
