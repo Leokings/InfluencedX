@@ -47,6 +47,7 @@ Watcher project (repeat independently for 1/2/3):
 ```text
 XPROOF_CAMPAIGN_WATCHER_ENABLED
 XPROOF_CAMPAIGN_WATCHER_STAGE
+XPROOF_SETTLEMENT_CONFIG_EPOCH
 XPROOF_BASE_CHAIN_ID
 XPROOF_BASE_SEPOLIA_RPC_URL
 XPROOF_GENLAYER_RPC_URL
@@ -70,6 +71,7 @@ DATABASE_URL                           [Sensitive]
 XPROOF_CAMPAIGN_RELAY_ENABLED
 XPROOF_CAMPAIGN_RELAY_STAGE
 XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED
+XPROOF_SETTLEMENT_CONFIG_EPOCH
 XPROOF_BASE_CHAIN_ID
 XPROOF_BASE_SEPOLIA_RPC_URL
 XPROOF_GENLAYER_RPC_URL
@@ -100,6 +102,8 @@ InfluencedX web additions:
 
 ```text
 XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED
+XPROOF_SETTLEMENT_CONFIG_EPOCH
+XPROOF_APP_ORIGIN
 XPROOF_CAMPAIGN_RELAY_URL
 XPROOF_CAMPAIGN_RELAY_SERVICE_TOKEN    [Sensitive]
 ```
@@ -161,8 +165,10 @@ npm.cmd run settlement:configure:preview -- --apply
 The command first validates every Vercel project identity and stable Preview
 alias, the existing three encrypted watcher keystores, the Base receiver's
 2-of-3 configuration, the Preview database source, and the fresh relayer's
-zero balance. It then requires the exact visible confirmation phrase and asks
-once for the encrypted Base deployer password without echoing it.
+zero balance plus zero latest and pending nonce. It then requires the exact
+visible confirmation phrase. The encrypted Base deployer password is requested
+without echoing only after every Vercel environment entry and disabled safety
+flag has been written and verified.
 
 It stores only a fresh encrypted relayer keystore, its random binary password,
 and public funding metadata beneath gitignored
@@ -173,6 +179,31 @@ key are decrypted only in this short-lived ceremony process. Four unique
 service tokens exist only in memory and travel to Vercel through stdin; they
 are never written or printed. Each key is uploaded only to its matching
 Preview project.
+
+Environment variables are upserted one at a time. All watcher, relay,
+broadcast, and bridge flags are forced to `false` across the five projects
+before any trust-link token rotates. A new readable
+`XPROOF_SETTLEMENT_CONFIG_EPOCH` is stamped last on all five projects, so equal
+epochs prove that every unreadable token copy converged. No deployment is
+triggered by this ceremony.
+
+If the ceremony stops after creating `.secrets/campaign-settlement-preview/`,
+do not run the new-wallet command again. Resume the exact persisted relayer:
+
+```powershell
+npm.cmd run settlement:resume:preview
+```
+
+Recovery revalidates the hosted Neon connection, OIDC/Trusted Sources, fixed
+aliases, Base wiring, environment metadata, and all `false` flags. It rewrites
+the complete linked token set with fresh in-memory values and a new epoch; it
+never invents a second relayer. Funding is last. The exact bounded transaction
+is signed and stored as an owner-only replayable intent before broadcast, so a
+crash can reconcile the known hash instead of signing or paying twice.
+
+Once the five Preview projects are redeployed, the hosted watcher/relay/web
+services do not depend on this laptop remaining online. The local encrypted
+files are recovery backups for the testnet ceremony, not runtime workers.
 
 This is a deliberate Base Sepolia bootstrap exception to the normal
 one-watcher-per-host rule. It is not a Mainnet key ceremony. The setup command

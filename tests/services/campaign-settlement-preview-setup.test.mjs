@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import { decryptKeystoreJson } from 'ethers';
@@ -7,11 +9,16 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 import {
   APPLY_CONFIRMATION,
+  RESUME_CONFIRMATION,
   RELAYER_MAX_BALANCE_WEI,
   WATCHERS,
+  applyDisabledEnvironmentPlan,
+  assertUnusedRelayerState,
   callerOidcPatch,
   createEncryptedRelayerMaterial,
+  createVercelApi,
   databaseConnectionRequest,
+  previewSetupMode,
   relayEnvironment,
   stablePreviewOriginForDeployment,
   trustedSourcesPatch,
@@ -32,6 +39,7 @@ const WATCHER_TOKENS = [
 const RELAY_TOKEN = 'relay-service-token-is-at-least-thirty-two-bytes';
 const RELAYER_KEY = `0x${'44'.repeat(32)}`;
 const RELAYER = privateKeyToAccount(RELAYER_KEY);
+const CONFIG_EPOCH = '123e4567-e89b-42d3-a456-426614174000';
 
 function entriesByKey(entries) {
   return Object.fromEntries(entries.map((entry) => [entry.key, entry]));
@@ -65,6 +73,7 @@ test('each Preview environment receives only its role-specific secrets and stays
     watcher,
     privateKey: WATCHER_KEYS[index],
     serviceToken: WATCHER_TOKENS[index],
+    configEpoch: CONFIG_EPOCH,
   })));
   for (const [index, batch] of watcherBatches.entries()) {
     assert.equal(batch.XPROOF_CAMPAIGN_WATCHER_ENABLED.value, 'false');
@@ -86,6 +95,7 @@ test('each Preview environment receives only its role-specific secrets and stays
       'https://influencedx-campaign-watcher-3-preview.vercel.app',
     ],
     watcherServiceTokens: WATCHER_TOKENS,
+    configEpoch: CONFIG_EPOCH,
   }));
   assert.equal(relay.XPROOF_CAMPAIGN_RELAY_ENABLED.value, 'false');
   assert.equal(relay.XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED.value, 'false');
@@ -100,9 +110,12 @@ test('each Preview environment receives only its role-specific secrets and stays
   const web = entriesByKey(webEnvironment({
     relayOrigin: 'https://influencedx-campaign-relay-preview.vercel.app',
     relayServiceToken: RELAY_TOKEN,
+    configEpoch: CONFIG_EPOCH,
   }));
   assert.equal(web.XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED.value, 'false');
+  assert.equal(web.XPROOF_APP_ORIGIN.value, 'https://influencedx-preview.vercel.app');
   assert.equal(web.XPROOF_CAMPAIGN_RELAY_SERVICE_TOKEN.type, 'sensitive');
+  assert.equal(web.XPROOF_SETTLEMENT_CONFIG_EPOCH.value, CONFIG_EPOCH);
   assert.equal(JSON.stringify(web).includes(RELAYER_KEY), false);
   assert.equal(JSON.stringify(web).includes('postgresql://'), false);
   assert.deepEqual(databaseConnectionRequest(), {
@@ -165,7 +178,10 @@ test('launcher is an explicit one-shot gate and does not persist plaintext token
     'utf8',
   );
   assert.equal(APPLY_CONFIRMATION, 'CONFIGURE INFLUENCEDX SETTLEMENT PREVIEW');
-  assert.match(source, /argv\.length === 1 && argv\[0\] === '--apply'/);
+  assert.equal(RESUME_CONFIRMATION, 'RESUME INFLUENCEDX SETTLEMENT PREVIEW');
+  assert.equal(previewSetupMode(['--apply']), 'fresh');
+  assert.equal(previewSetupMode(['--resume', '--apply']), 'resume');
+  assert.throws(() => previewSetupMode(['--resume']), /Refusing to mutate/);
   assert.match(source, /promptForKeystorePassword/);
   assert.match(source, /campaign-settlement-preview\.json/);
   assert.match(source, /Legacy plaintext campaign settlement state exists/);
@@ -174,4 +190,140 @@ test('launcher is an explicit one-shot gate and does not persist plaintext token
   assert.doesNotMatch(source, /watcherServiceTokens:\s*WATCHERS\.map/);
   assert.doesNotMatch(source, /writeFile\([^\n]*relayServiceToken/);
   assert.doesNotMatch(source, /cmd\.exe/);
+  const fundingSource = source.slice(
+    source.indexOf('async function fundRelayer'),
+    source.indexOf('export function previewSetupMode'),
+  );
+  assert.ok(fundingSource.indexOf('await persistFundingIntent')
+    < fundingSource.indexOf('sendRawTransaction'));
+  assert.ok(source.indexOf('await applyDisabledEnvironmentPlan')
+    < source.indexOf('const deployer = await loadBaseSepoliaDeployer'));
+});
+
+test('funding fence requires zero balance plus zero latest and pending nonce', () => {
+  assert.doesNotThrow(() => assertUnusedRelayerState({
+    balance: 0n,
+    latestNonce: 0,
+    pendingNonce: 0,
+  }));
+  assert.throws(() => assertUnusedRelayerState({ balance: 1n, latestNonce: 0, pendingNonce: 0 }),
+    /balance/);
+  assert.throws(() => assertUnusedRelayerState({ balance: 0n, latestNonce: 1, pendingNonce: 1 }),
+    /nonce/);
+  assert.throws(() => assertUnusedRelayerState({ balance: 0n, latestNonce: 0, pendingNonce: 1 }),
+    /nonce/);
+});
+
+test('disabled environment rollout uses one-entry upserts, false flags first, and verifies epoch', async () => {
+  const records = new Map();
+  const posts = [];
+  const projects = Array.from({ length: 5 }, (_, index) => ({
+    id: `prj_test${index + 1}`,
+    name: `test-project-${index + 1}`,
+  }));
+  const safetyKeys = [
+    'XPROOF_CAMPAIGN_WATCHER_ENABLED',
+    'XPROOF_CAMPAIGN_WATCHER_ENABLED',
+    'XPROOF_CAMPAIGN_WATCHER_ENABLED',
+    'XPROOF_CAMPAIGN_RELAY_ENABLED',
+    'XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED',
+  ];
+  const batches = projects.map((project, index) => ({
+    project,
+    entries: [
+      { key: safetyKeys[index], value: 'false', type: 'plain', target: ['preview'] },
+      { key: 'XPROOF_SETTLEMENT_CONFIG_EPOCH', value: CONFIG_EPOCH, type: 'plain', target: ['preview'] },
+      { key: `XPROOF_TOKEN_${index}`, value: `secret-${index}`, type: 'sensitive', target: ['preview'] },
+    ],
+  }));
+  const api = async (endpoint, { method = 'GET', body } = {}) => {
+    const projectId = /projects\/([^/]+)/.exec(endpoint)?.[1];
+    if (!records.has(projectId)) records.set(projectId, new Map());
+    const projectRecords = records.get(projectId);
+    if (method === 'POST') {
+      assert.equal(Array.isArray(body), false);
+      posts.push({ projectId, key: body.key, value: body.value });
+      const record = {
+        ...body,
+        target: projectId === projects[0].id ? 'preview' : body.target,
+        id: `${projectId}-${body.key}`,
+        customEnvironmentIds: [],
+      };
+      projectRecords.set(body.key, record);
+      return { created: record, failed: [] };
+    }
+    const id = /\/env\/([^?]+)/.exec(endpoint)?.[1];
+    if (id) return [...projectRecords.values()].find((entry) => entry.id === id);
+    return { envs: [...projectRecords.values()] };
+  };
+  await applyDisabledEnvironmentPlan(api, batches);
+  const firstNonSafety = posts.findIndex(({ key }) => !safetyKeys.includes(key));
+  assert.equal(firstNonSafety, 5);
+  assert.equal(posts.length, 20);
+  assert.ok(posts.slice(5, 10).every(({ key, value }) => (
+    key === 'XPROOF_SETTLEMENT_CONFIG_EPOCH' && value.startsWith('pending:')
+  )));
+  assert.equal(new Set(posts.slice(5, 10).map(({ value }) => value)).size, 5);
+  assert.ok(posts.slice(-5).every(({ key }) => key === 'XPROOF_SETTLEMENT_CONFIG_EPOCH'));
+  assert.ok(posts.slice(-5).every(({ value }) => value === CONFIG_EPOCH));
+
+  records.get(projects[0].id).set('branch-override', {
+    ...batches[0].entries[0],
+    id: 'branch-override-id',
+    gitBranch: 'unsafe-override',
+    customEnvironmentIds: [],
+  });
+  await assert.rejects(applyDisabledEnvironmentPlan(api, batches), /branch-scoped or mixed/);
+});
+
+test('Vercel diagnostics expose only an allowlisted code, never raw API text or values', async () => {
+  const privateValue = `0x${'ab'.repeat(32)}`;
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {};
+    queueMicrotask(() => {
+      child.stderr.end(`INVALID_VALUE raw-secret=${privateValue}`);
+      child.stdout.end();
+      child.emit('exit', 1);
+    });
+    return child;
+  };
+  const api = createVercelApi({ env: { APPDATA: 'C:\\bounded-test' }, spawnFn });
+  await assert.rejects(
+    api('/v10/projects/prj_secret/env?upsert=true', {
+      method: 'POST',
+      body: { key: 'SAFE_KEY', value: privateValue, type: 'sensitive', target: ['preview'] },
+    }),
+    (error) => {
+      assert.match(error.message, /code=INVALID_VALUE/);
+      assert.doesNotMatch(error.message, /raw-secret|ab{10}|SAFE_KEY/);
+      return true;
+    },
+  );
+});
+
+test('environment failed response is rejected even when the CLI request succeeds', async () => {
+  const projects = Array.from({ length: 5 }, (_, index) => ({
+    project: { id: `prj_failed${index}`, name: `failed-${index}` },
+    entries: [{
+      key: 'XPROOF_CAMPAIGN_WATCHER_ENABLED',
+      value: 'false',
+      type: 'plain',
+      target: ['preview'],
+    }],
+  }));
+  await assert.rejects(
+    applyDisabledEnvironmentPlan(async () => ({
+      created: [],
+      failed: [{ error: { code: 'INVALID_VALUE', message: 'raw secret must never escape' } }],
+    }), projects),
+    (error) => {
+      assert.match(error.message, /code=INVALID_VALUE/);
+      assert.doesNotMatch(error.message, /raw secret/);
+      return true;
+    },
+  );
 });

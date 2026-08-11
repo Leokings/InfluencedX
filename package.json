@@ -20,6 +20,7 @@
     "verify:base-sepolia": "node --env-file-if-exists=.env scripts/verify-base-sepolia.mjs",
     "watchers:setup:testnet": "node scripts/setup-testnet-watchers.mjs",
     "settlement:configure:preview": "node scripts/configure-campaign-watchers-preview.mjs",
+    "settlement:resume:preview": "node scripts/configure-campaign-watchers-preview.mjs --resume --apply",
     "relay:watch": "node --env-file-if-exists=.env scripts/relay-watcher.mjs",
     "relay:submit": "node --env-file-if-exists=.env scripts/relay-submit.mjs",
     "relay:preview:base-sepolia": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/operator/launch-preview-base-sepolia-relay.ps1",
