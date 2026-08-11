@@ -167,8 +167,10 @@ alias, the existing three encrypted watcher keystores, the Base receiver's
 2-of-3 configuration, the Preview database source, and the fresh relayer's
 zero balance plus zero latest and pending nonce. It then requires the exact
 visible confirmation phrase. The encrypted Base deployer password is requested
-without echoing only after every Vercel environment entry and disabled safety
-flag has been written and verified.
+only after every Vercel environment entry and disabled safety flag has been
+written and verified. The interactive Windows prompt renders one `*` per key,
+visibly erases it on Backspace, and ignores an empty Enter left over from the
+confirmation prompt. The password remains only in the Node process memory.
 
 It stores only a fresh encrypted relayer keystore, its random binary password,
 and public funding metadata beneath gitignored

@@ -38,6 +38,7 @@ export async function promptForKeystorePassword({
     );
   }
 
+  output.write('Password input is active; each key appears as * and Backspace erases one key.\n');
   output.write('Base Sepolia deployer keystore password: ');
   readline.emitKeypressEvents(input);
   const previousRawMode = Boolean(input.isRaw);
@@ -70,22 +71,30 @@ export async function promptForKeystorePassword({
         return;
       }
       if (key.name === 'return' || key.name === 'enter') {
+        if (chunks.length === 0) {
+          output.write('\nPassword cannot be empty; type it now (each key appears as *): ');
+          return;
+        }
         finish();
         return;
       }
       if (key.name === 'backspace') {
         const removed = chunks.pop();
-        if (removed) removed.fill(0);
+        if (removed) {
+          removed.fill(0);
+          output.write('\b \b');
+        }
         return;
       }
       if (typeof sequence === 'string' && sequence.length > 0 && !key.ctrl && !key.meta) {
         chunks.push(Buffer.from(sequence, 'utf8'));
+        output.write('*');
       }
     }
 
     input.setRawMode(true);
-    input.resume();
     input.on('keypress', onKeypress);
+    input.resume();
   });
 }
 

@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import { encryptKeystoreJson } from 'ethers';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { loadBaseSepoliaDeployer } from '../../scripts/lib/base-deployer-account.mjs';
+import {
+  loadBaseSepoliaDeployer,
+  promptForKeystorePassword,
+} from '../../scripts/lib/base-deployer-account.mjs';
 
 const PRIVATE_KEY = '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const PASSWORD = 'test-only keystore password';
@@ -28,6 +32,71 @@ async function withKeystore(run) {
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
+
+function interactiveTerminal() {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let rendered = '';
+  input.isTTY = true;
+  input.isRaw = false;
+  input.setRawMode = (enabled) => {
+    input.isRaw = enabled;
+    return input;
+  };
+  output.isTTY = true;
+  output.on('data', (chunk) => {
+    rendered += chunk.toString('utf8');
+  });
+  return { input, output, rendered: () => rendered };
+}
+
+test('interactive password prompt masks input, erases feedback on backspace, and restores TTY mode', async () => {
+  const terminal = interactiveTerminal();
+  const pending = promptForKeystorePassword(terminal);
+  terminal.input.emit('keypress', 's', { name: 's' });
+  terminal.input.emit('keypress', 'e', { name: 'e' });
+  terminal.input.emit('keypress', 'x', { name: 'x' });
+  terminal.input.emit('keypress', undefined, { name: 'backspace' });
+  terminal.input.emit('keypress', 'c', { name: 'c' });
+  terminal.input.emit('keypress', 'r', { name: 'r' });
+  terminal.input.emit('keypress', undefined, { name: 'return' });
+
+  const password = await pending;
+  try {
+    assert.equal(password.toString('utf8'), 'secr');
+    assert.equal(terminal.rendered().includes('secr'), false);
+    assert.match(terminal.rendered(), /password: \*\*\*\x08 \x08\*\*\n$/);
+    assert.equal(terminal.input.isRaw, false);
+  } finally {
+    password.fill(0);
+  }
+});
+
+test('interactive password prompt ignores a queued empty Return and waits for the password', async () => {
+  const terminal = interactiveTerminal();
+  const pending = promptForKeystorePassword(terminal);
+  let settled = false;
+  pending.then(() => {
+    settled = true;
+  });
+
+  terminal.input.write('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(terminal.input.isRaw, true);
+  assert.match(terminal.rendered(), /Password cannot be empty/);
+
+  terminal.input.write('secret\r');
+  const password = await pending;
+  try {
+    assert.equal(password.toString('utf8'), 'secret');
+    assert.equal(terminal.rendered().includes('secret'), false);
+    assert.match(terminal.rendered(), /\*\*\*\*\*\*\n$/);
+    assert.equal(terminal.input.isRaw, false);
+  } finally {
+    password.fill(0);
+  }
+});
 
 test('loads the legacy raw private-key configuration', async () => {
   const account = await loadBaseSepoliaDeployer({

@@ -1343,8 +1343,12 @@ export async function runPreviewSetup({
 
     // Vercel injects the Preview database credential directly into the relay.
     // It is never decrypted, copied through stdout, or persisted by this setup.
+    errorOutput.write('Checking the hosted database binding...\n');
     await ensureHostedDatabase(api);
+    errorOutput.write('Hosted database binding verified.\n');
+    errorOutput.write('Checking Vercel project security...\n');
     await ensureAllProjectSecurity(api);
+    errorOutput.write('Vercel project security verified.\n');
 
     const batches = WATCHERS.map((watcher, index) => ({
       project: { id: watcher.projectId, name: watcher.projectName },
@@ -1369,7 +1373,9 @@ export async function runPreviewSetup({
       project: WEB_PROJECT,
       entries: webEnvironment({ relayOrigin, relayServiceToken: tokens.relayToken, configEpoch }),
     });
+    errorOutput.write('Writing the disabled hosted settlement configuration...\n');
     await applyDisabledEnvironmentPlan(api, batches);
+    errorOutput.write('Disabled hosted settlement configuration verified.\n');
 
     let fundingHash = await reconcileExistingFunding({
       publicClient,
@@ -1378,6 +1384,7 @@ export async function runPreviewSetup({
     });
     if (!fundingHash) {
       // The deployer password is requested only after every hosted credential and false flag verifies.
+      errorOutput.write('Hosted checks completed. Deployer password input is ready.\n');
       const deployer = await loadBaseSepoliaDeployer({
         env: { BASE_SEPOLIA_DEPLOYER_KEYSTORE_PATH: DEPLOYER_KEYSTORE },
         cwd: PROJECT_ROOT,
