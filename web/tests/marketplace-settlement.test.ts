@@ -63,7 +63,7 @@ test("settlement routes require wallet sessions, exact bodies, and receipt-backe
   assert.match(prepareSource, /Object\.keys\(body\)\.length !== 0/);
   assert.match(confirmSource, /Object\.keys\(body\)\.length !== 1/);
   assert.match(confirmSource, /"txHash" in body/);
-  assert.match(serviceSource, /assertExactMarketplaceCall\(transaction, call, context\.actor\)/);
+  assert.match(serviceSource, /authorizeMarketplaceCall\(transaction, call, context\.actor\)/);
   assert.match(serviceSource, /blockNumber: transaction\.blockNumber/);
   assert.match(serviceSource, /assertWithdrawalPostState\(claimableAfter\)/);
   assert.doesNotMatch(serviceSource, /status:\s*["'](?:paid|refunded)["']/i);

@@ -18,7 +18,10 @@ import {
   INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT,
   prepareAssignmentAcceptance,
 } from "../lib/marketplace-chain.ts";
-import { assertExactMarketplaceCall } from "../lib/marketplace-receipts.ts";
+import {
+  assertExactMarketplaceCall,
+  authorizeMarketplaceCall,
+} from "../lib/marketplace-receipts.ts";
 import {
   canTransitionGenLayerStatus,
   exactMetricsSnapshot,
@@ -170,6 +173,54 @@ test("receipt binding rejects a valid call made by the wrong actor", () => {
   };
   assert.throws(
     () => assertExactMarketplaceCall(transaction, call, expectedActor),
+    /authorized marketplace action/,
+  );
+});
+
+test("receipt binding accepts an effect-bound EIP-7702 marketplace execution", async () => {
+  const call = prepareAssignmentAcceptance({
+    chainId: 84_532,
+    assignmentId: "7",
+  });
+  const expectedActor = "0x1111111111111111111111111111111111111111";
+  const transaction = {
+    hash: `0x${"1".repeat(64)}` as `0x${string}`,
+    blockHash: `0x${"2".repeat(64)}` as `0x${string}`,
+    blockNumber: 123n,
+    from: "0x2222222222222222222222222222222222222222" as const,
+    to: "0x3333333333333333333333333333333333333333" as const,
+    input: "0xcef6d209" as const,
+    value: 0n,
+    receiptStatus: "success" as const,
+    logs: [{ address: call.address, data: "0x" as const, topics: [] }],
+  };
+  assert.equal(
+    await authorizeMarketplaceCall(transaction, call, expectedActor, {
+      trace: {
+        type: "CALL",
+        from: expectedActor,
+        to: call.address,
+        input: call.data,
+        value: "0x0",
+      },
+    }),
+    "wrapped",
+  );
+  await assert.rejects(
+    authorizeMarketplaceCall(
+      { ...transaction, logs: [] },
+      call,
+      expectedActor,
+      {
+        trace: {
+          type: "CALL",
+          from: expectedActor,
+          to: call.address,
+          input: call.data,
+          value: "0x0",
+        },
+      },
+    ),
     /authorized marketplace action/,
   );
 });

@@ -10,7 +10,7 @@ import {
   type PreparedMarketplaceCall,
 } from "./marketplace-chain.ts";
 import {
-  assertExactMarketplaceCall,
+  authorizeMarketplaceCall,
   loadConfirmedMarketplaceTransaction,
   marketplacePublicClient,
   requireTransactionHash,
@@ -92,7 +92,7 @@ export async function confirmMarketplaceUnallocatedCredit(input: {
     campaignId: context.escrowCampaignId,
   });
   const transaction = await loadConfirmedMarketplaceTransaction(txHash);
-  assertExactMarketplaceCall(transaction, call, context.actor);
+  await authorizeMarketplaceCall(transaction, call, context.actor);
   let credited: ReturnType<typeof extractUnallocatedCredited>;
   try {
     credited = extractUnallocatedCredited({
@@ -152,7 +152,7 @@ export async function confirmMarketplaceWithdrawal(input: {
   const txHash = requireTransactionHash(input.txHash);
   const call = prepareEscrowWithdrawal({ chainId: BASE_SEPOLIA_CHAIN_ID });
   const transaction = await loadConfirmedMarketplaceTransaction(txHash);
-  assertExactMarketplaceCall(transaction, call, context.actor);
+  await authorizeMarketplaceCall(transaction, call, context.actor);
   let withdrawal: ReturnType<typeof extractWithdrawal>;
   try {
     withdrawal = extractWithdrawal({

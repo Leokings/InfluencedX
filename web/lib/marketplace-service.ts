@@ -60,6 +60,7 @@ import {
   extractEvidenceSubmitted,
   extractResolutionRequested,
   INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT,
+  marketplaceEscrowAbi,
   prepareAssignmentAcceptance,
   prepareCampaignFunding,
   prepareCreatorSelection,
@@ -69,8 +70,9 @@ import {
   type PreparedMarketplaceCall,
 } from "./marketplace-chain.ts";
 import {
-  assertExactMarketplaceCall,
+  authorizeMarketplaceCall,
   loadConfirmedMarketplaceTransaction,
+  marketplacePublicClient,
   requireTransactionHash,
   type ConfirmedMarketplaceTransaction,
 } from "./marketplace-receipts.ts";
@@ -245,7 +247,7 @@ export async function confirmMarketplaceCampaignFunding(input: {
   const transaction =
     input.confirmedTransaction ??
     (await loadConfirmedMarketplaceTransaction(txHash));
-  assertExactMarketplaceCall(
+  const callAuthorization = await authorizeMarketplaceCall(
     transaction,
     plan.createCampaignCall,
     campaign.brandWallet,
@@ -265,6 +267,34 @@ export async function confirmMarketplaceCampaignFunding(input: {
       "INVALID_FUNDING_RECEIPT",
       "The transaction does not contain the expected campaign funding event.",
     );
+  }
+  if (callAuthorization === "wrapped") {
+    const state = await marketplacePublicClient().readContract({
+      address: INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+      abi: marketplaceEscrowAbi,
+      functionName: "campaigns",
+      args: [event.campaignId],
+      blockNumber: transaction.blockNumber,
+    });
+    const expectedArgs = plan.createCampaignCall.args;
+    if (
+      state[0].toLowerCase() !== campaign.brandWallet ||
+      state[1].toLowerCase() !== campaign.termsHash ||
+      state[2] !== BigInt(campaign.budgetAmount) ||
+      state[3] !== 0n ||
+      state[4] !== 0n ||
+      state[5] !== 0n ||
+      state[6] !== expectedArgs[2] ||
+      state[7] !== expectedArgs[3] ||
+      state[8] !== expectedArgs[4] ||
+      state[9] !== expectedArgs[5]
+    ) {
+      throw new ApiProblem(
+        409,
+        "INVALID_FUNDING_RECEIPT",
+        "The confirmed smart-account funding state does not match the saved campaign.",
+      );
+    }
   }
   const transitioned = await confirmCampaignFundingAtomically({
     campaignId,
@@ -607,7 +637,11 @@ export async function confirmMarketplaceApplicationSelection(input: {
   const transaction =
     input.confirmedTransaction ??
     (await loadConfirmedMarketplaceTransaction(txHash));
-  assertExactMarketplaceCall(transaction, selection.call, campaign.brandWallet);
+  const callAuthorization = await authorizeMarketplaceCall(
+    transaction,
+    selection.call,
+    campaign.brandWallet,
+  );
   let event: ReturnType<typeof extractCreatorSelected>;
   try {
     event = extractCreatorSelected({
@@ -623,6 +657,37 @@ export async function confirmMarketplaceApplicationSelection(input: {
       "INVALID_SELECTION_RECEIPT",
       "The transaction does not contain the expected creator selection event.",
     );
+  }
+  if (callAuthorization === "wrapped") {
+    const state = await marketplacePublicClient().readContract({
+      address: INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.escrow,
+      abi: marketplaceEscrowAbi,
+      functionName: "assignments",
+      args: [event.assignmentId],
+      blockNumber: transaction.blockNumber,
+    });
+    const zeroHash = `0x${"0".repeat(64)}`;
+    if (
+      state[0] !== BigInt(campaign.escrowCampaignId) ||
+      state[1].toLowerCase() !== application.creatorWallet ||
+      state[2].toLowerCase() !== application.identityHash ||
+      state[3].toLowerCase() !== application.agreementHash ||
+      state[4] !== BigInt(application.requestedAmount) ||
+      state[5] !== 0n ||
+      state[6] !== 0n ||
+      state[7].toLowerCase() !== zeroHash ||
+      state[8].toLowerCase() !== zeroHash ||
+      state[9].toLowerCase() !== zeroHash ||
+      state[10] !== 0 ||
+      state[11] !== INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT.protocolFeeBps ||
+      state[12] !== 1
+    ) {
+      throw new ApiProblem(
+        409,
+        "INVALID_SELECTION_RECEIPT",
+        "The confirmed smart-account selection state does not match the saved application.",
+      );
+    }
   }
   const transitioned = await confirmApplicationSelectionAtomically({
     campaignId,
@@ -752,7 +817,7 @@ export async function confirmMarketplaceApplicationAcceptance(input: {
   const transaction =
     input.confirmedTransaction ??
     (await loadConfirmedMarketplaceTransaction(txHash));
-  assertExactMarketplaceCall(transaction, call, application.creatorWallet);
+  await authorizeMarketplaceCall(transaction, call, application.creatorWallet);
   try {
     extractAssignmentAccepted({
       receiptStatus: transaction.receiptStatus,
@@ -941,7 +1006,7 @@ export async function confirmMarketplaceEvidenceSubmission(input: {
   const transaction =
     input.confirmedTransaction ??
     (await loadConfirmedMarketplaceTransaction(txHash));
-  assertExactMarketplaceCall(transaction, prepared.call, application.creatorWallet);
+  await authorizeMarketplaceCall(transaction, prepared.call, application.creatorWallet);
   try {
     extractEvidenceSubmitted({
       receiptStatus: transaction.receiptStatus,
@@ -1062,7 +1127,7 @@ export async function confirmMarketplaceResolutionRequest(input: {
   const transaction =
     input.confirmedTransaction ??
     (await loadConfirmedMarketplaceTransaction(txHash));
-  assertExactMarketplaceCall(transaction, call, input.session.wallet);
+  await authorizeMarketplaceCall(transaction, call, input.session.wallet);
   try {
     extractResolutionRequested({
       receiptStatus: transaction.receiptStatus,

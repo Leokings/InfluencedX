@@ -141,6 +141,41 @@ test("failed creator selection is recoverable without an automatic duplicate bro
   );
 });
 
+test("marketplace submit handlers snapshot FormData before asynchronous wallet work", async () => {
+  const [createSource, detailSource] = await Promise.all([
+    readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+  ]);
+  const createFormData = createSource.indexOf("const values = new FormData(event.currentTarget)");
+  const createAuthenticate = createSource.indexOf("await wallet.authenticate()", createFormData);
+  assert.ok(createFormData >= 0 && createAuthenticate > createFormData);
+
+  const applyStart = detailSource.indexOf("async function apply(");
+  const applyFormData = detailSource.indexOf("const values = new FormData(event.currentTarget)", applyStart);
+  const applyAuthenticate = detailSource.indexOf("await wallet.authenticate()", applyStart);
+  assert.ok(applyStart >= 0 && applyFormData > applyStart && applyAuthenticate > applyFormData);
+
+  const submitStart = detailSource.indexOf("async function submitEvidence(");
+  const submitFormData = detailSource.indexOf("const values = new FormData(event.currentTarget)", submitStart);
+  const submitAuthenticate = detailSource.indexOf("await wallet.authenticate()", submitStart);
+  assert.ok(submitStart >= 0 && submitFormData > submitStart && submitAuthenticate > submitFormData);
+});
+
+test("campaign funding preserves a mined hash and never rebroadcasts on receipt retry", async () => {
+  const source = await readFile(
+    new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /sessionStorage\.setItem\(recoveryKey, fundingHash\)/);
+  assert.match(source, /searchParams\.get\("fundingTxHash"\)/);
+  assert.match(source, /if \(confirmedFundingHash\)[\s\S]*recordConfirmedFunding\(confirmedFundingHash\)[\s\S]*return/);
+  assert.match(source, /RECORD CONFIRMED FUNDING/);
+  assert.ok(
+    source.indexOf("sessionStorage.setItem(recoveryKey, fundingHash)") <
+      source.indexOf("recordConfirmedFunding(fundingHash)"),
+  );
+});
+
 test("escrow recovery UI waits for server receipt and post-state confirmation", async () => {
   const source = await readFile(
     new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),

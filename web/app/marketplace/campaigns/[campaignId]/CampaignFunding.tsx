@@ -16,6 +16,28 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
   const wallet = useMarketplaceWallet();
   const [phase, setPhase] = useState<FundingPhase>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const recoveryKey = `influencedx:campaign-funding:${campaign.id}`;
+  const [confirmedFundingHash, setConfirmedFundingHash] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const value =
+      window.sessionStorage.getItem(recoveryKey) ??
+      new URL(window.location.href).searchParams.get("fundingTxHash");
+    return value && /^0x[0-9a-fA-F]{64}$/.test(value) ? value : null;
+  });
+
+  async function recordConfirmedFunding(txHash: string) {
+    setPhase("recording");
+    setMessage("Base confirmed funding. Recording the verified receipt…");
+    await marketplaceRequest<CampaignMutationResponse>(
+      `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding`,
+      { method: "POST", body: JSON.stringify({ txHash }) },
+    );
+    window.sessionStorage.removeItem(recoveryKey);
+    setConfirmedFundingHash(null);
+    await onFunded();
+    setPhase("idle");
+    setMessage(null);
+  }
 
   async function fund() {
     setPhase("checking");
@@ -24,6 +46,10 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
       const brand = await wallet.authenticate();
       if (brand !== campaign.brandWallet.toLowerCase()) {
         throw new Error("Connect the brand wallet that created this campaign.");
+      }
+      if (confirmedFundingHash) {
+        await recordConfirmedFunding(confirmedFundingHash);
+        return;
       }
       if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
 
@@ -105,15 +131,9 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
         expectedDeposited: plan.budgetAtoms,
       });
 
-      setPhase("recording");
-      setMessage("Base confirmed funding. Recording the verified receipt…");
-      await marketplaceRequest<CampaignMutationResponse>(
-        `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding`,
-        { method: "POST", body: JSON.stringify({ txHash: fundingHash }) },
-      );
-      await onFunded();
-      setPhase("idle");
-      setMessage(null);
+      window.sessionStorage.setItem(recoveryKey, fundingHash);
+      setConfirmedFundingHash(fundingHash);
+      await recordConfirmedFunding(fundingHash);
     } catch (error) {
       setPhase("error");
       setMessage(marketplaceErrorMessage(error));
@@ -145,7 +165,11 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
       </p>
       {message ? <p className={phase === "error" ? "form-message error" : "form-message"} role={phase === "error" ? "alert" : "status"}>{message}</p> : null}
       <button className="button" type="button" disabled={!(["idle", "error"] as FundingPhase[]).includes(phase)} onClick={() => void fund()}>
-        {phase === "idle" || phase === "error" ? "FUND WITH TEST USDC →" : "TRANSACTION IN PROGRESS…"}
+        {phase === "idle" || phase === "error"
+          ? confirmedFundingHash
+            ? "RECORD CONFIRMED FUNDING →"
+            : "FUND WITH TEST USDC →"
+          : "TRANSACTION IN PROGRESS…"}
       </button>
     </div>
   );

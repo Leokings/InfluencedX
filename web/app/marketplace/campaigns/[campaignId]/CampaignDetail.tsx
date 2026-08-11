@@ -129,9 +129,9 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   async function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const values = new FormData(event.currentTarget);
     await runAction("apply", async () => {
       const creatorWallet = await wallet.authenticate();
-      const values = new FormData(event.currentTarget);
       await marketplaceRequest<ApplicationMutationResponse>(
         `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications`,
         {
@@ -214,10 +214,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
 
   async function submitEvidence(application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const values = new FormData(event.currentTarget);
     await runAction(`submit:${application.id}`, async () => {
       const creatorWallet = await wallet.authenticate();
       if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const values = new FormData(event.currentTarget);
       const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}/submission`;
       const prepared = await marketplaceRequest<PreparedApplicationMutationResponse>(basePath, {
         method: "POST",

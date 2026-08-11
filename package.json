@@ -18,6 +18,7 @@
     "test:x": "node --env-file-if-exists=.env scripts/x-stress.mjs",
     "deploy:base-sepolia": "node --env-file-if-exists=.env scripts/deploy-base-sepolia.mjs",
     "verify:base-sepolia": "node --env-file-if-exists=.env scripts/verify-base-sepolia.mjs",
+    "brand:fund:base-sepolia": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/fund-brand-wallet-base-sepolia.ps1",
     "watchers:setup:testnet": "node scripts/setup-testnet-watchers.mjs",
     "settlement:configure:preview": "node scripts/configure-campaign-watchers-preview.mjs",
     "settlement:resume:preview": "node scripts/configure-campaign-watchers-preview.mjs --resume --apply",

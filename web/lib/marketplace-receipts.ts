@@ -107,6 +107,146 @@ export function assertExactMarketplaceCall(
   }
 }
 
+export type MarketplaceCallAuthorization = "direct" | "wrapped";
+
+export type MarketplaceTraceCall = Readonly<{
+  type?: unknown;
+  from?: unknown;
+  to?: unknown;
+  input?: unknown;
+  value?: unknown;
+  error?: unknown;
+  revertReason?: unknown;
+  calls?: unknown;
+}>;
+
+/**
+ * Wallets may submit an authorized marketplace call through an EIP-7702 or
+ * smart-account wrapper instead of making the call the outer transaction. A
+ * wrapped receipt is accepted only when a canonical call trace proves exactly
+ * one successful inner CALL from the persisted actor to the pinned target with
+ * the prepared calldata and zero value. The action-specific receipt decoder
+ * must still validate the exact event (and, where an event omits committed
+ * fields, the receipt-block contract state).
+ */
+export async function authorizeMarketplaceCall(
+  transaction: ConfirmedMarketplaceTransaction,
+  call: PreparedMarketplaceCall,
+  expectedActor: string,
+  options: Readonly<{ trace?: MarketplaceTraceCall }> = {},
+): Promise<MarketplaceCallAuthorization> {
+  if (!isAddress(expectedActor, { strict: false })) {
+    throw new Error("The persisted marketplace actor is invalid.");
+  }
+  const actor = getAddress(expectedActor);
+  if (
+    transaction.from === actor &&
+    transaction.to === call.address &&
+    transaction.input.toLowerCase() === call.data.toLowerCase() &&
+    transaction.value === call.value
+  ) {
+    return "direct";
+  }
+
+  const trace = options.trace ?? (await loadMarketplaceCallTrace(transaction.hash));
+  const hasPinnedTargetLog = transaction.logs.some(
+    (log) => log.address === call.address,
+  );
+  if (
+    transaction.receiptStatus !== "success" ||
+    transaction.value !== 0n ||
+    !hasPinnedTargetLog ||
+    !traceContainsOnlyExactActorCall(trace, actor, call)
+  ) {
+    throw new ApiProblem(
+      409,
+      "TRANSACTION_CALL_MISMATCH",
+      "The confirmed transaction does not match the authorized marketplace action.",
+    );
+  }
+  return "wrapped";
+}
+
+async function loadMarketplaceCallTrace(
+  txHash: Hex,
+): Promise<MarketplaceTraceCall> {
+  try {
+    const response = await fetch(marketplaceRpcUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "debug_traceTransaction",
+        params: [txHash, { tracer: "callTracer", timeout: "10s" }],
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    const text = await response.text();
+    if (!response.ok || text.length > 2_000_000) throw new Error("trace response");
+    const parsed = JSON.parse(text) as {
+      result?: unknown;
+      error?: unknown;
+    };
+    if (parsed.error || !parsed.result || typeof parsed.result !== "object") {
+      throw new Error("trace unavailable");
+    }
+    return parsed.result as MarketplaceTraceCall;
+  } catch {
+    throw new ApiProblem(
+      503,
+      "TRANSACTION_PROOF_UNAVAILABLE",
+      "The smart-account transaction proof is temporarily unavailable; retry confirmation shortly.",
+    );
+  }
+}
+
+function traceContainsOnlyExactActorCall(
+  root: MarketplaceTraceCall,
+  actor: Address,
+  call: PreparedMarketplaceCall,
+): boolean {
+  const actorLower = actor.toLowerCase();
+  const targetLower = call.address.toLowerCase();
+  const calls: MarketplaceTraceCall[] = [root];
+  const actorTargetCalls: MarketplaceTraceCall[] = [];
+  let visited = 0;
+  while (calls.length > 0) {
+    const current = calls.pop();
+    if (!current || ++visited > 4_096) return false;
+    if (
+      current.type === "CALL" &&
+      typeof current.from === "string" &&
+      typeof current.to === "string" &&
+      current.from.toLowerCase() === actorLower &&
+      current.to.toLowerCase() === targetLower &&
+      current.error == null &&
+      current.revertReason == null
+    ) {
+      actorTargetCalls.push(current);
+    }
+    if (current.calls != null) {
+      if (!Array.isArray(current.calls)) return false;
+      for (const nested of current.calls) {
+        if (!nested || typeof nested !== "object") return false;
+        calls.push(nested as MarketplaceTraceCall);
+      }
+    }
+  }
+  if (actorTargetCalls.length !== 1) return false;
+  const exact = actorTargetCalls[0];
+  return (
+    typeof exact.input === "string" &&
+    exact.input.toLowerCase() === call.data.toLowerCase() &&
+    traceValueIsZero(exact.value)
+  );
+}
+
+function traceValueIsZero(value: unknown): boolean {
+  if (value === 0 || value === 0n) return true;
+  return typeof value === "string" && /^0x0+$/.test(value);
+}
+
 export function marketplacePublicClient() {
   const rpcUrl = marketplaceRpcUrl();
   return createPublicClient({

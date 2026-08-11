@@ -23,10 +23,10 @@ export function CreateCampaignForm() {
 
   async function submitCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const values = new FormData(event.currentTarget);
     setSubmission({ phase: "submitting", message: "Creating the campaign draft…" });
     try {
       const brandWallet = await wallet.authenticate();
-      const values = new FormData(event.currentTarget);
       const deliverables = String(values.get("deliverables") ?? "")
         .split("\n")
         .map((value) => value.trim())
