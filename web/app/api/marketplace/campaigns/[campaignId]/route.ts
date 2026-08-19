@@ -1,5 +1,5 @@
 import { optionalMarketplaceWallet } from "@/lib/marketplace-api";
-import { getMarketplaceCampaignDetail } from "@/lib/marketplace-service";
+import { getGenLayerMarketplaceCampaignDetail } from "@/lib/marketplace-genlayer-service";
 import { apiError } from "@/lib/verification-api";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export async function GET(
 ) {
   try {
     const { campaignId } = await params;
-    const result = await getMarketplaceCampaignDetail({
+    const result = await getGenLayerMarketplaceCampaignDetail({
       campaignId,
       viewerWallet: optionalMarketplaceWallet(request),
     });

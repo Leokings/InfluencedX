@@ -3,7 +3,6 @@ import pg, { type PoolClient } from "pg";
 import {
   CONFIRM_METHOD,
   MARKETPLACE_ADDRESS,
-  MARKETPLACE_OWNER,
   PRECHECK_LEASE_MS,
   RECONCILER_NETWORK,
   SIGNER_GATE,
@@ -24,7 +23,10 @@ import type {
 
 const pools = new Map<string, pg.Pool>();
 
-export function repositoryFor(databaseUrl: string): PostgresReconciliationRepository {
+export function repositoryFor(
+  databaseUrl: string,
+  withdrawalConfirmer: string,
+): PostgresReconciliationRepository {
   let pool = pools.get(databaseUrl);
   if (!pool) {
     pool = new pg.Pool({
@@ -36,7 +38,7 @@ export function repositoryFor(databaseUrl: string): PostgresReconciliationReposi
     });
     pools.set(databaseUrl, pool);
   }
-  return new PostgresReconciliationRepository(pool);
+  return new PostgresReconciliationRepository(pool, withdrawalConfirmer);
 }
 
 export async function closeRepositoryPools(): Promise<void> {
@@ -46,16 +48,19 @@ export async function closeRepositoryPools(): Promise<void> {
 }
 
 export class PostgresReconciliationRepository implements ReconciliationRepository {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly withdrawalConfirmer: string,
+  ) {}
 
   async createOrReplay(request: ReconciliationRequest, requestFingerprint: string) {
     return this.transaction(async (client) => {
       const inserted = await client.query(
         `INSERT INTO influencedx_withdrawal_reconciliations
-           (withdrawal_id, status, network, chain_id, contract_address, contract_owner, function_name, value_atto)
+           (withdrawal_id, status, network, chain_id, contract_address, withdrawal_confirmer, function_name, value_atto)
          VALUES ($1, 'QUEUED', $2, $3, $4, $5, $6, $7)
          ON CONFLICT (withdrawal_id) DO NOTHING`,
-        [request.withdrawalId, RECONCILER_NETWORK, STUDIONET_CHAIN_ID, MARKETPLACE_ADDRESS, MARKETPLACE_OWNER, CONFIRM_METHOD, ZERO_VALUE_ATTO],
+        [request.withdrawalId, RECONCILER_NETWORK, STUDIONET_CHAIN_ID, MARKETPLACE_ADDRESS, this.withdrawalConfirmer, CONFIRM_METHOD, ZERO_VALUE_ATTO],
       );
       await client.query(
         `INSERT INTO influencedx_withdrawal_reconciliation_jobs
@@ -310,7 +315,7 @@ export class PostgresReconciliationRepository implements ReconciliationRepositor
     await this.pool.query(
       `UPDATE influencedx_withdrawal_reconciliations
        SET status = 'POISONED', error_code = $2, updated_at = clock_timestamp()
-       WHERE withdrawal_id = $1 AND status IN ('QUEUED', 'WAITING_FOR_EMISSION', 'WAITING_FOR_TRANSFER')`,
+       WHERE withdrawal_id = $1 AND status IN ('QUEUED', 'WAITING_FOR_EMISSION', 'WAITING_FOR_TRANSFER', 'PROOF_VERIFIED')`,
       [withdrawalId, errorCode],
     );
   }
@@ -375,7 +380,7 @@ const RECORD_SELECT = `
   JOIN influencedx_withdrawal_reconciliation_jobs j USING (withdrawal_id)`;
 
 const PROJECTION_SELECT = `
-  SELECT withdrawal_id, network, chain_id, contract_address, contract_owner,
+  SELECT withdrawal_id, network, chain_id, contract_address, withdrawal_confirmer,
          function_name, value_atto, status, evidence_hash, transfer_parent_tx_hash,
          transfer_child_tx_hash, confirmation_tx_hash, lifecycle_status, execution_result,
          queue_message_id, enqueue_attempts, delivery_count, discovery_attempts, poll_attempts,
@@ -400,7 +405,7 @@ function mapProjection(row: Record<string, unknown>): ReconciliationProjection {
     network: String(row.network),
     chainId: Number(row.chain_id),
     contractAddress: String(row.contract_address),
-    contractOwner: String(row.contract_owner),
+    withdrawalConfirmer: String(row.withdrawal_confirmer),
     functionName: CONFIRM_METHOD,
     valueAtto: ZERO_VALUE_ATTO,
     status: row.status as ReconciliationRecord["status"],

@@ -54,17 +54,19 @@ test("unused-budget confirmation binds the event amount to exhausted campaign ac
 });
 
 test("settlement routes require wallet sessions, exact bodies, and receipt-backed confirmation", async () => {
-  const [prepareSource, confirmSource, serviceSource] = await Promise.all([
+  const [prepareSource, confirmSource, actionSource] = await Promise.all([
     readFile(new URL("../app/api/marketplace/campaigns/[campaignId]/settlement/withdraw/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/marketplace/campaigns/[campaignId]/settlement/withdraw/confirm/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../lib/marketplace-settlement.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
   ]);
   assert.match(prepareSource, /requireMarketplaceSession\(request\)/);
   assert.match(prepareSource, /Object\.keys\(body\)\.length !== 0/);
-  assert.match(confirmSource, /Object\.keys\(body\)\.length !== 1/);
-  assert.match(confirmSource, /"txHash" in body/);
-  assert.match(serviceSource, /authorizeMarketplaceCall\(transaction, call, context\.actor\)/);
-  assert.match(serviceSource, /blockNumber: transaction\.blockNumber/);
-  assert.match(serviceSource, /assertWithdrawalPostState\(claimableAfter\)/);
-  assert.doesNotMatch(serviceSource, /status:\s*["'](?:paid|refunded)["']/i);
+  assert.match(confirmSource, /requireMarketplaceSession\(request\)/);
+  assert.match(confirmSource, /confirmGenLayerWithdrawal/);
+  assert.match(actionSource, /assertExactJsonKeys\(body, \["preparedId", "txHash"\]\)/);
+  assert.match(actionSource, /assertTransactionMatchesPreparedCall\(\{ transaction: finalized, call, actorWallet: actor \}\)/);
+  assert.match(actionSource, /parseWithdrawalState\(await readMarketplaceState\("get_withdrawal"/);
+  assert.match(actionSource, /withdrawal\.status !== "PENDING"/);
+  assert.match(actionSource, /withdrawal\.status !== "EMITTED_UNCONFIRMED"/);
+  assert.doesNotMatch(actionSource, /status:\s*["'](?:paid|refunded)["']/i);
 });

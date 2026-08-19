@@ -2,8 +2,8 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { confirmMarketplaceWithdrawal } from "@/lib/marketplace-settlement";
-import { ApiProblem, apiError } from "@/lib/verification-api";
+import { confirmGenLayerWithdrawal } from "@/lib/marketplace-genlayer-actions";
+import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -14,9 +14,6 @@ export async function POST(
 ) {
   try {
     const body = await readMarketplaceJson(request);
-    if (Object.keys(body).length !== 1 || !("txHash" in body)) {
-      throw new ApiProblem(400, "INVALID_REQUEST", "Withdrawal confirmation requires only txHash.");
-    }
     const session = requireMarketplaceSession(request);
     const { campaignId } = await params;
     await enforceVerificationRateLimit(request, "marketplace-settlement", {
@@ -24,10 +21,10 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await confirmMarketplaceWithdrawal({
+    const result = await confirmGenLayerWithdrawal({
       campaignId,
       session,
-      txHash: body.txHash,
+      body,
     });
     return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },

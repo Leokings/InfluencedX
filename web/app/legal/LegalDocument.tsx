@@ -19,7 +19,7 @@ export function LegalDocument({ eyebrow, title, summary, children }: LegalDocume
         <h1>{title}</h1>
         <div className="legal-meta">
           <span>LAST UPDATED</span>
-          <time dateTime="2026-08-11">AUGUST 11, 2026</time>
+          <time dateTime="2026-08-19">AUGUST 19, 2026</time>
         </div>
         <div className="legal-summary">{summary}</div>
       </section>

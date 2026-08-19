@@ -6,7 +6,14 @@ This is an isolated, disabled-by-default hosted service for the native GEN withd
 confirm_withdrawal(withdrawal_id, evidence_hash), value = 0
 ```
 
-The live boundary is literal-pinned to StudioNet chain `61999`, protocol `INFLUENCEDX_MARKETPLACE_V2`, storage schema `2`, contract `0x17eb37a3578e21662f4d654b245238df520663fa`, and owner `0x797d3b25fb2cca0ff93f60df1910267f3822d655`.
+The chain boundary remains literal-pinned to StudioNet chain `61999`, protocol
+`INFLUENCEDX_MARKETPLACE_V2`, storage schema `2`, contract
+`0x58D598B8323E9C1d041989DccE80E737109DE347`, and withdrawal confirmer
+`0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8`. The configured confirmer,
+private-key-derived signer, and live `get_config().withdrawal_confirmer` must
+match exactly on every chain precheck.
+The live owner, upgrade administrator, and active pending owner must all differ
+from the confirmer.
 
 ## Safety model
 
@@ -17,7 +24,7 @@ Ingress accepts only a lowercase `withdrawalId`. Recipient, amount, parent/child
 - that parent has exactly one triggered child transaction;
 - the child links back to the parent, is finalized, comes from the marketplace ghost address, goes to the recorded recipient, carries the exact recorded amount, and reports `value_credited=true`;
 - a second proof discovery under the signer fence is byte-for-byte identical;
-- the owner confirmation receipt binds the exact signer, contract, method, arguments, zero value, nested successful leader return, and transaction hash;
+- the confirmer receipt binds the exact signer, contract, method, arguments, zero value, nested successful leader return, and transaction hash;
 - finalized post-state contains the same withdrawal fields, the exact evidence hash, `CONFIRMED`, and exact liability/emitted/withdrawn accounting deltas.
 
 The PostgreSQL signer gate is singleton and fenced. Its short lease exists only during read-only revalidation. Before broadcast it becomes non-expiring. An unknown broadcast result, a crash before the returned hash is durably stored, any receipt ambiguity, or any final-state mismatch is quarantined for manual reconciliation.
@@ -74,8 +81,14 @@ Do not deploy from the repository root. Create a separate Vercel project with th
 
 1. Keep `INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false`.
 2. Create a dedicated private PostgreSQL database/schema and set `DATABASE_URL`.
-3. Run `npm ci` and `npm run migrate` against that database.
-4. Configure every exact variable from `.env.example`. The private key must derive to the pinned live contract owner; startup and every chain precheck reject any mismatch.
+3. Run `npm ci` and `npm run migrate` against that database. The migrations
+   fail closed if rows from the retired contract or owner-authorized signer
+   boundary exist; use a fresh database or explicitly archive them after manual
+   reconciliation.
+4. Configure every exact variable from `.env.example`. The private key must
+   derive to the configured withdrawal confirmer. Every chain precheck also
+   requires the live contract's `withdrawal_confirmer` to match and rejects any
+   owner, pending-owner, or upgrade-admin overlap.
 5. Generate a new random 32-byte hex service token. Store it only in this project and the authorized server-side caller.
 6. Deploy while disabled. Verify the queue trigger is present and its topic is exact.
 7. Run `npm run lint`, `npm test`, `npm run build`, and `npm audit --omit=dev`.

@@ -2,7 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { prepareMarketplaceWithdrawal } from "@/lib/marketplace-settlement";
+import { prepareGenLayerWithdrawal } from "@/lib/marketplace-genlayer-actions";
 import { ApiProblem, apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -24,7 +24,7 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await prepareMarketplaceWithdrawal({ campaignId, session });
+    const result = await prepareGenLayerWithdrawal({ campaignId, session, body });
     return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },
     });

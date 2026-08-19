@@ -1,10 +1,11 @@
 import {
   ApiProblem,
+  assertExactJsonKeys,
   apiError,
   readSameOriginJson,
   requireString,
 } from "@/lib/verification-api";
-import { createVerificationRequest } from "@/lib/verification-service";
+import { createNativeVerificationRequest } from "@/lib/verification-native-service";
 import { applicationOriginForRequest } from "@/lib/verification-config";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 import {
@@ -20,6 +21,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
+    assertExactJsonKeys(body, ["wallet"]);
     const wallet = requireString(body, "wallet", 64);
     let session = readWalletSession(request);
     const createdPendingSession = !session;
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const created = await createVerificationRequest({
+    const created = await createNativeVerificationRequest({
       ownerUserId: session.subject,
       wallet,
       origin: applicationOriginForRequest(request),

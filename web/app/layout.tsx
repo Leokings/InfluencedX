@@ -8,19 +8,19 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase,
     title: "InfluencedX",
-    description: "An X creator marketplace with campaign payments on Base and public-work resolution on GenLayer.",
+    description: "A GenLayer-native creator marketplace for X and Farcaster campaigns, public-work resolution, payouts, and refunds.",
     applicationName: "InfluencedX",
-    keywords: ["creator marketplace", "X creators", "Base", "GenLayer", "USDC"],
+    keywords: ["creator marketplace", "X creators", "Farcaster creators", "GenLayer", "GEN"],
     openGraph: {
       title: "InfluencedX",
-      description: "Brands post. Creators apply. Public work gets verified. Payments settle on Base.",
+      description: "Brands post. Creators apply. Public work and native GEN settlement finalize on GenLayer.",
       type: "website",
       images: [{ url: "/og.png", width: 1734, height: 907, alt: "InfluencedX" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "InfluencedX",
-      description: "Brands post. Creators apply. Public work gets verified. Payments settle on Base.",
+      description: "Brands post. Creators apply. Public work and native GEN settlement finalize on GenLayer.",
       images: ["/og.png"],
     },
   };

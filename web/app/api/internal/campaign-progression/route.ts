@@ -1,10 +1,15 @@
 import {
-  campaignProgressionRequestIsAuthorized,
-  runCampaignProgressionBatch,
-} from "@/lib/campaign-progression";
+  genLayerProgressionRequestIsAuthorized,
+} from "@/lib/marketplace-genlayer-progression";
+import {
+  MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+  enqueueMarketplaceMaintenanceHeartbeat,
+} from "@/lib/marketplace-genlayer-maintenance-queue";
+import { runGenLayerMaintenanceBatch } from "@/lib/marketplace-genlayer-maintenance";
 import { apiError } from "@/lib/verification-api";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function GET(request: Request) {
@@ -21,7 +26,7 @@ export async function GET(request: Request) {
       { status: 503, headers },
     );
   }
-  if (!campaignProgressionRequestIsAuthorized(request, secret)) {
+  if (!genLayerProgressionRequestIsAuthorized(request, secret)) {
     return Response.json(
       {
         error: {
@@ -34,8 +39,12 @@ export async function GET(request: Request) {
   }
 
   try {
+    const maintenance = await runGenLayerMaintenanceBatch();
+    const heartbeat = await enqueueMarketplaceMaintenanceHeartbeat({
+      delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+    });
     return Response.json(
-      { progression: await runCampaignProgressionBatch() },
+      { maintenance, heartbeat },
       { headers },
     );
   } catch (error) {

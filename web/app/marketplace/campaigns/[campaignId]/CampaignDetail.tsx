@@ -1,44 +1,54 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { MarketplaceState } from "../../components/MarketplaceState";
 import { marketplaceErrorMessage, marketplaceRequest } from "../../marketplace-api";
 import {
+  broadcastMarketplaceTransaction,
+  type GenLayerTransactionStage,
+  type UserMarketplaceFunctionName,
+} from "../../marketplace-transaction";
+import {
+  applicationRateAtoms,
+  campaignBudgetAtoms,
+  campaignContentSource,
   campaignStatusLabel,
+  contentSourceLabel,
   deadlineLabel,
   fundingStatusLabel,
-  shortenAddress,
-  type ApplicationMutationResponse,
+  genAtomsToDisplay,
+  genInputToAtoms,
   type CampaignDetailResponse,
   type MarketplaceApplication,
   type MarketplaceCampaign,
-  type MarketplaceSettlementMutationResponse,
   type MarketplaceSettlementStateDto,
-  type PreparedApplicationMutationResponse,
-  usdcAtomsToDisplay,
-  usdcInputToAtoms,
+  type MarketplaceTransactionDto,
+  shortenAddress,
+  studioNetExplorerLink,
 } from "../../marketplace-types";
 import { useMarketplaceWallet } from "../../use-marketplace-wallet";
-import { MarketplaceState } from "../../components/MarketplaceState";
 import { CampaignFunding } from "./CampaignFunding";
-import { broadcastMarketplaceTransaction } from "../../marketplace-transaction";
-import {
-  creatorMetricsForWallet,
-  type CreatorMetricsLookup,
-  useCreatorMetrics,
-} from "../../use-creator-metrics";
 
 type DetailState =
   | { phase: "loading"; detail: null; error: null }
   | { phase: "ready"; detail: CampaignDetailResponse; loadedAt: number; error: null }
   | { phase: "error"; detail: null; error: string };
 
+type PreparedMutation = {
+  preparedId: string;
+  transaction: MarketplaceTransactionDto;
+  campaign?: MarketplaceCampaign;
+  application?: MarketplaceApplication;
+};
+
+type Recovery = { preparedId: string; txHash: string; confirmPath: string };
+
 export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const wallet = useMarketplaceWallet();
   const [state, setState] = useState<DetailState>({ phase: "loading", detail: null, error: null });
-  const [action, setAction] = useState<{ key: string | null; error: string | null }>({ key: null, error: null });
-  const [selectionRecoveryHashes, setSelectionRecoveryHashes] = useState<Record<string, string>>({});
-  const genLayerRetryCount = useRef(0);
+  const [action, setAction] = useState<{ key: string | null; notice: string | null; error: string | null }>({ key: null, notice: null, error: null });
+  const [recoveries, setRecoveries] = useState<Record<string, Recovery>>(() => loadRecoveries(campaignId));
 
   const loadDetail = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -72,209 +82,143 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   }, [loadDetail]);
 
   useEffect(() => {
-    if (state.phase !== "ready" || state.detail.campaign.status !== "resolving") return;
-    const application = [
-      state.detail.viewerApplication,
-      ...state.detail.applications,
-    ].find((candidate) => Boolean(
-      candidate?.requestId && candidate.resolutionRequestTxHash,
-    ));
-    if (!application) return;
-    const terminal = new Set([
-      "EXECUTION_FAILED",
-      "NETWORK_TERMINATED",
-      "RECONCILIATION_REQUIRED",
-      "POLLING_EXHAUSTED",
-      "POISONED",
-    ]).has(application.genlayerSubmitterStatus ?? "");
-    if (terminal) return;
-    // A finalized StudioNet result is not a finished marketplace payment. Keep
-    // retrying this idempotent request until the fenced Base relay is mirrored.
-    if (
-      application.genlayerSubmitterStatus === "FINALIZED" &&
-      application.resolutionTxHash
-    ) return;
-    const delay = application.genlayerSubmitterStatus
-      ? 10_000
-      : genLayerRetryCount.current === 0
-        ? 0
-        : Math.min(30_000, 2_000 * 2 ** Math.min(genLayerRetryCount.current - 1, 4));
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          await marketplaceRequest(
-            `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}/resolution/genlayer`,
-            { method: "POST", body: "{}" },
-          );
-          genLayerRetryCount.current = 0;
-        } catch (error) {
-          genLayerRetryCount.current += 1;
-          setAction({ key: null, error: marketplaceErrorMessage(error) });
-        } finally {
-          await loadDetail();
-        }
-      })();
-    }, delay);
-    return () => window.clearTimeout(timer);
-  }, [campaignId, loadDetail, state]);
+    if (state.phase !== "ready" || !["funding", "open"].includes(state.detail.campaign.status)) return;
+    const timer = window.setInterval(() => void loadDetail(), 12_000);
+    return () => window.clearInterval(timer);
+  }, [loadDetail, state]);
 
-  const metricsWallets = state.phase === "ready"
-    ? wallet.address === state.detail.campaign.brandWallet.toLowerCase()
-      ? state.detail.applications.map((application) => application.creatorWallet)
-      : wallet.address
-        ? [wallet.address]
-        : []
-    : [];
-  const creatorMetrics = useCreatorMetrics(metricsWallets);
+  async function executePrepared(input: {
+    key: string;
+    expectedFunctionName: UserMarketplaceFunctionName;
+    preparePath: string;
+    confirmPath?: string | ((prepared: PreparedMutation) => string);
+    body?: Record<string, unknown>;
+  }) {
+    setAction({ key: input.key, notice: "Preparing the exact StudioNet action…", error: null });
+    try {
+      const actor = await wallet.authenticate();
+      if (!wallet.isStudioNet) await wallet.switchToStudioNet();
+      const existing = recoveries[input.key];
+      if (existing) {
+        setAction({ key: input.key, notice: "Reconciling the previously submitted transaction…", error: null });
+        await marketplaceRequest(existing.confirmPath, {
+          method: "POST",
+          body: JSON.stringify({ preparedId: existing.preparedId, txHash: existing.txHash }),
+        });
+        clearRecovery(input.key);
+        await loadDetail();
+        setAction({ key: null, notice: "Finalized contract state reconciled.", error: null });
+        return;
+      }
+      const prepared = await marketplaceRequest<PreparedMutation>(input.preparePath, {
+        method: "POST",
+        body: JSON.stringify(input.body ?? {}),
+      });
+      const confirmPath = typeof input.confirmPath === "function"
+        ? input.confirmPath(prepared)
+        : input.confirmPath ?? `${input.preparePath}/confirm`;
+      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
+        expectedFunctionName: input.expectedFunctionName,
+        expectedValue: "0",
+        onSubmitted: (hash) => saveRecovery(input.key, { preparedId: prepared.preparedId, txHash: hash, confirmPath }),
+        onStage: (stage) => setAction({ key: input.key, notice: transactionNotice(stage), error: null }),
+      });
+      setAction({ key: input.key, notice: "Validator finality reached. Verifying authoritative contract state…", error: null });
+      await marketplaceRequest(confirmPath, {
+        method: "POST",
+        body: JSON.stringify({ preparedId: prepared.preparedId, txHash }),
+      });
+      clearRecovery(input.key);
+      await loadDetail();
+      setAction({ key: null, notice: "StudioNet action finalized and recorded.", error: null });
+    } catch (error) {
+      setAction({ key: null, notice: null, error: marketplaceErrorMessage(error) });
+    }
+  }
+
+  function saveRecovery(key: string, recovery: Recovery) {
+    setRecoveries((current) => ({ ...current, [key]: recovery }));
+    window.sessionStorage.setItem(recoveryStorageKey(campaignId, key), JSON.stringify(recovery));
+  }
+
+  function clearRecovery(key: string) {
+    setRecoveries((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    window.sessionStorage.removeItem(recoveryStorageKey(campaignId, key));
+  }
 
   async function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
-    await runAction("apply", async () => {
-      const creatorWallet = await wallet.authenticate();
-      await marketplaceRequest<ApplicationMutationResponse>(
-        `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            creatorWallet,
-            requestedRateUsdc: usdcInputToAtoms(String(values.get("requestedRateUsdc") ?? "")),
-            pitch: String(values.get("pitch") ?? "").trim(),
-          }),
-        },
-      );
+    await executePrepared({
+      key: "apply",
+      expectedFunctionName: "apply_to_campaign",
+      preparePath: `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications`,
+      confirmPath: (prepared) => {
+        if (!prepared.application?.id) throw new Error("The prepared application is missing its durable ID.");
+        return `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(prepared.application.id)}/apply/confirm`;
+      },
+      body: {
+        creatorWallet: wallet.address,
+        requestedRateGen: genInputToAtoms(String(values.get("requestedRateGen") ?? "")),
+        pitch: String(values.get("pitch") ?? "").trim(),
+      },
     });
   }
 
   async function select(application: MarketplaceApplication) {
-    await runAction(`select:${application.id}`, async () => {
-      const brandWallet = await wallet.authenticate();
-      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}`;
-      const prepared = await marketplaceRequest<PreparedApplicationMutationResponse>(
-        `${basePath}/select`,
-        { method: "POST", body: JSON.stringify({ brandWallet }) },
-      );
-      const txHash = await broadcastMarketplaceTransaction(
-        prepared.transaction,
-        brandWallet,
-        {
-          onSubmitted: (hash) => {
-            setSelectionRecoveryHashes((current) => ({
-              ...current,
-              [application.id]: hash,
-            }));
-          },
-        },
-      );
-      await marketplaceRequest<ApplicationMutationResponse>(
-        `${basePath}/select/confirm`,
-        { method: "POST", body: JSON.stringify({ brandWallet, txHash }) },
-      );
-      setSelectionRecoveryHashes((current) => {
-        const next = { ...current };
-        delete next[application.id];
-        return next;
-      });
-    });
-  }
-
-  async function confirmSelection(application: MarketplaceApplication, txHash: string) {
-    await runAction(`confirm-select:${application.id}`, async () => {
-      const brandWallet = await wallet.authenticate();
-      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}`;
-      await marketplaceRequest<ApplicationMutationResponse>(
-        `${basePath}/select/confirm`,
-        { method: "POST", body: JSON.stringify({ brandWallet, txHash }) },
-      );
-      setSelectionRecoveryHashes((current) => {
-        const next = { ...current };
-        delete next[application.id];
-        return next;
-      });
-    });
+    const basePath = applicationPath(campaignId, application.id);
+    await executePrepared({ key: `select:${application.id}`, expectedFunctionName: "select_creator", preparePath: `${basePath}/select`, confirmPath: `${basePath}/selection` });
   }
 
   async function accept(application: MarketplaceApplication) {
-    await runAction(`accept:${application.id}`, async () => {
-      const creatorWallet = await wallet.authenticate();
-      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}`;
-      const prepared = await marketplaceRequest<PreparedApplicationMutationResponse>(
-        `${basePath}/accept`,
-        { method: "POST", body: JSON.stringify({ creatorWallet }) },
-      );
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, creatorWallet);
-      await marketplaceRequest<ApplicationMutationResponse>(
-        `${basePath}/accept/confirm`,
-        { method: "POST", body: JSON.stringify({ creatorWallet, txHash }) },
-      );
-    });
+    const basePath = applicationPath(campaignId, application.id);
+    await executePrepared({ key: `accept:${application.id}`, expectedFunctionName: "accept_assignment", preparePath: `${basePath}/accept`, confirmPath: `${basePath}/acceptance` });
+  }
+
+  async function decline(application: MarketplaceApplication) {
+    const basePath = applicationPath(campaignId, application.id);
+    await executePrepared({ key: `decline:${application.id}`, expectedFunctionName: "decline_assignment", preparePath: `${basePath}/decline` });
+  }
+
+  async function withdrawApplication(application: MarketplaceApplication) {
+    const basePath = applicationPath(campaignId, application.id);
+    await executePrepared({ key: `withdraw:${application.id}`, expectedFunctionName: "withdraw_application", preparePath: `${basePath}/withdraw` });
   }
 
   async function submitEvidence(application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
-    await runAction(`submit:${application.id}`, async () => {
-      const creatorWallet = await wallet.authenticate();
-      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}/submission`;
-      const prepared = await marketplaceRequest<PreparedApplicationMutationResponse>(basePath, {
-        method: "POST",
-        body: JSON.stringify({
-          creatorWallet,
-          postUrl: String(values.get("postUrl") ?? "").trim(),
-          expectedHandle: application.creatorHandle,
-        }),
-      });
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, creatorWallet);
-      await marketplaceRequest<ApplicationMutationResponse>(`${basePath}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ creatorWallet, txHash }),
-      });
+    const basePath = `${applicationPath(campaignId, application.id)}/submission`;
+    const contentSource = application.contentSource;
+    await executePrepared({
+      key: `submit:${application.id}`,
+      expectedFunctionName: "submit_evidence",
+      preparePath: basePath,
+      body: {
+        contentId: String(values.get("contentId") ?? "").trim(),
+        contentSource,
+        expectedHandle: application.creatorHandle,
+      },
     });
   }
 
   async function requestResolution(application: MarketplaceApplication) {
-    await runAction(`resolve:${application.id}`, async () => {
-      const actorWallet = await wallet.authenticate();
-      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const actorBody = actorWallet === campaign.brandWallet.toLowerCase()
-        ? { brandWallet: actorWallet }
-        : { creatorWallet: actorWallet };
-      const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(application.id)}/resolution`;
-      const prepared = await marketplaceRequest<PreparedApplicationMutationResponse>(basePath, {
-        method: "POST",
-        body: JSON.stringify(actorBody),
-      });
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actorWallet);
-      await marketplaceRequest<ApplicationMutationResponse>(`${basePath}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ ...actorBody, txHash }),
-      });
-      try {
-        await marketplaceRequest(`${basePath}/genlayer`, {
-          method: "POST",
-          body: "{}",
-        });
-      } catch (error) {
-        // The Base request is already durable. Reload it so the idempotent
-        // background retry below can enqueue the exact same request ID.
-        await loadDetail();
-        throw error;
-      }
-    });
+    const basePath = `${applicationPath(campaignId, application.id)}/resolution`;
+    await executePrepared({ key: `resolve:${application.id}`, expectedFunctionName: "resolve_assignment", preparePath: basePath });
   }
 
-  async function runAction(key: string, operation: () => Promise<void>) {
-    setAction({ key, error: null });
-    try {
-      await operation();
-      await loadDetail();
-      setAction({ key: null, error: null });
-    } catch (error) {
-      setAction({ key: null, error: marketplaceErrorMessage(error) });
-    }
+  async function refundUndetermined(application: MarketplaceApplication) {
+    const basePath = `${applicationPath(campaignId, application.id)}/resolution/refund-undetermined`;
+    await executePrepared({ key: `refund:${application.id}`, expectedFunctionName: "refund_undetermined", preparePath: basePath });
+  }
+
+  async function cancelCampaign() {
+    const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/cancel`;
+    await executePrepared({ key: "cancel", expectedFunctionName: "cancel_campaign", preparePath: basePath });
   }
 
   if (state.phase === "loading") {
@@ -283,22 +227,16 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   if (state.phase === "error") {
     return (
       <section className="marketplace-detail-shell">
-        <MarketplaceState
-          kind="error"
-          title="BRIEF UNAVAILABLE"
-          message={state.error}
-          onRetry={() => {
-            setState({ phase: "loading", detail: null, error: null });
-            void loadDetail();
-          }}
-        />
+        <MarketplaceState kind="error" title="BRIEF UNAVAILABLE" message={state.error} onRetry={() => void loadDetail()} />
       </section>
     );
   }
 
   const { campaign, applications, viewerApplication } = state.detail;
+  const contentSource = campaignContentSource(campaign);
   const isBrand = Boolean(wallet.address && wallet.address === campaign.brandWallet.toLowerCase());
   const canApply = campaign.status === "open" && campaign.fundingStatus === "funded" && !isBrand && !viewerApplication;
+  const canCancel = isBrand && ["funding", "open"].includes(campaign.status);
 
   return (
     <section className="marketplace-detail-shell">
@@ -308,14 +246,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
           <p className="eyebrow"><span /> {campaign.id} / {campaignStatusLabel(campaign.status)}</p>
           <h1>{campaign.title}</h1>
           <p>{campaign.description}</p>
-          <div className="tag-row">
-            <span>{campaign.format.toUpperCase()}</span>
-            <span>{campaign.category.toUpperCase()}</span>
-            <span>{fundingStatusLabel(campaign.fundingStatus)}</span>
-          </div>
+          <div className="tag-row"><span>{contentSourceLabel(contentSource)} POST</span><span>{campaign.category.toUpperCase()}</span><span>{fundingStatusLabel(campaign.fundingStatus)}</span></div>
         </div>
         <aside className="campaign-terms-card">
-          <div><span>BUDGET</span><strong>{usdcAtomsToDisplay(campaign.budgetUsdc)} <small>TEST USDC</small></strong></div>
+          <div><span>BUDGET</span><strong>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} <small>TEST GEN</small></strong></div>
           <div><span>DEADLINE</span><strong>{deadlineLabel(campaign.deadline, state.loadedAt)}</strong><small>{formatDate(campaign.deadline)}</small></div>
           <div><span>APPLICATIONS</span><strong>{campaign.applicationCount}</strong></div>
           <div><span>BRAND</span><strong>{campaign.brandName ?? shortenAddress(campaign.brandWallet)}</strong><small>{shortenAddress(campaign.brandWallet)}</small></div>
@@ -325,51 +259,14 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       <div className="campaign-detail-grid">
         <div>
           <section className="campaign-detail-panel">
-            <div className="detail-panel-head"><span>DELIVERABLES</span><strong>{String(campaign.deliverables.length).padStart(2, "0")} ITEMS</strong></div>
-            {campaign.deliverables.length ? (
-              <ol className="deliverable-list">
-                {campaign.deliverables.map((deliverable, index) => (
-                  <li key={`${index}-${deliverable}`}><strong>{String(index + 1).padStart(2, "0")}</strong><span>{deliverable}</span></li>
-                ))}
-              </ol>
-            ) : <p className="panel-empty">No deliverables were returned for this campaign.</p>}
+            <div className="detail-panel-head"><span>{contentSourceLabel(contentSource)} POST DELIVERABLES</span><strong>{String(campaign.deliverables.length).padStart(2, "0")} ITEMS</strong></div>
+            {campaign.deliverables.length ? <ol className="deliverable-list">{campaign.deliverables.map((deliverable, index) => <li key={`${index}-${deliverable}`}><strong>{String(index + 1).padStart(2, "0")}</strong><span>{deliverable}</span></li>)}</ol> : <p className="panel-empty">No deliverables were returned.</p>}
           </section>
-
-          <section className="campaign-detail-panel resolution-criteria-panel">
-            <div className="detail-panel-head"><span>COMMITTED RESOLUTION CRITERIA</span><strong>GENLAYER INPUT</strong></div>
-            <div className="semantic-brief">
-              <span>SEMANTIC BRIEF</span>
-              <p>{campaign.semanticBrief}</p>
-            </div>
-            <div className="criteria-columns">
-              <div>
-                <span>REQUIRED PHRASES</span>
-                {campaign.requiredPhrases.length
-                  ? <ul>{campaign.requiredPhrases.map((phrase) => <li key={phrase}>{phrase}</li>)}</ul>
-                  : <p>NONE SPECIFIED</p>}
-              </div>
-              <div>
-                <span>FORBIDDEN PHRASES</span>
-                {campaign.forbiddenPhrases.length
-                  ? <ul>{campaign.forbiddenPhrases.map((phrase) => <li key={phrase}>{phrase}</li>)}</ul>
-                  : <p>NONE SPECIFIED</p>}
-              </div>
-            </div>
-            <div className="ad-disclosure-rule">
-              <span>AD DISCLOSURE</span>
-              <strong>{campaign.requireAdDisclosure ? "REQUIRED" : "NOT REQUIRED"}</strong>
-            </div>
-          </section>
-
+          <ResolutionCriteria campaign={campaign} />
           {isBrand ? (
             <BrandApplications
               applications={applications}
-              campaign={campaign}
               actionKey={action.key}
-              loadedAt={state.loadedAt}
-              metricsByWallet={creatorMetrics}
-              selectionRecoveryHashes={selectionRecoveryHashes}
-              onConfirmSelection={confirmSelection}
               onSelect={select}
               onResolve={requestResolution}
             />
@@ -378,184 +275,108 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
 
         <aside className="campaign-action-panel">
           <div className="detail-panel-head"><span>YOUR ACTION</span><strong>{wallet.address ? shortenAddress(wallet.address) : "WALLET REQUIRED"}</strong></div>
-          {!wallet.address ? (
-            <div className="action-intro">
-              <h2>CONNECT YOUR WALLET</h2>
-              <p>Use the same wallet authorized during X verification. The server rejects a mismatched session.</p>
-              <button className="button" type="button" disabled={wallet.authenticating} onClick={() => void wallet.authenticate()}>
-                {wallet.authenticating ? "SIGNING IN…" : "CONNECT + SIGN →"}
-              </button>
-              <Link href="/verify">NEED TO VERIFY? START HERE →</Link>
-            </div>
-          ) : null}
-          {isBrand ? (
-            campaign.fundingStatus === "funded" ? (
-              <div className="action-intro">
-                <p className="card-index">BRAND VIEW</p>
-                <h2>REVIEW APPLICATIONS</h2>
-                <p>Only the campaign’s owning brand can see the applicant list. Select one creator to continue.</p>
-              </div>
-            ) : <CampaignFunding campaign={campaign} onFunded={loadDetail} />
-          ) : null}
+          {!wallet.address ? <WalletIntro wallet={wallet} /> : null}
+          {isBrand && campaign.fundingStatus !== "funded" ? <CampaignFunding campaign={campaign} onFunded={loadDetail} /> : null}
+          {isBrand && campaign.fundingStatus === "funded" ? <div className="action-intro"><p className="card-index">BRAND VIEW</p><h2>REVIEW APPLICATIONS</h2><p>Select a creator or manage the campaign’s remaining native GEN.</p></div> : null}
           {wallet.address && viewerApplication ? (
             <CreatorApplication
-              application={viewerApplication}
+              application={viewerApplication as MarketplaceApplication}
               campaign={campaign}
               actionKey={action.key}
               loadedAt={state.loadedAt}
               onAccept={accept}
+              onDecline={decline}
+              onWithdraw={withdrawApplication}
               onSubmit={submitEvidence}
               onResolve={requestResolution}
+              onRefund={refundUndetermined}
             />
           ) : null}
-          {wallet.address && canApply ? (
-            <ApplicationForm
-              busy={action.key === "apply"}
-              metrics={creatorMetricsForWallet(creatorMetrics, wallet.address)}
-              onSubmit={apply}
-            />
-          ) : null}
-          {wallet.address && !isBrand && !viewerApplication && !canApply ? (
-            <div className="action-intro">
-              <h2>APPLICATIONS CLOSED</h2>
-              <p>
-                Applications are available only when the campaign API reports OPEN and Base funding is explicitly confirmed.
-              </p>
-            </div>
-          ) : null}
-          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? (
-            <SettlementControls
-              campaign={campaign}
-              wallet={wallet}
-              onUpdated={loadDetail}
-            />
-          ) : null}
-          {wallet.hasSession ? (
-            <button className="wallet-signout" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET / SIGN OUT</button>
-          ) : null}
+          {wallet.address && canApply ? <ApplicationForm busy={action.key === "apply"} contentSource={contentSource} onSubmit={apply} /> : null}
+          {wallet.address && !isBrand && !viewerApplication && !canApply ? <div className="action-intro"><h2>APPLICATIONS CLOSED</h2><p>Applications open only after the GEN deposit is finalized and while the campaign remains OPEN.</p></div> : null}
+          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? <SettlementControls campaign={campaign} wallet={wallet} onUpdated={loadDetail} /> : null}
+          {canCancel ? <button className="recovery-retry" type="button" disabled={action.key === "cancel"} onClick={() => void cancelCampaign()}>{action.key === "cancel" ? "CANCELLING…" : "CANCEL + REFUND CAMPAIGN"}</button> : null}
+          {action.notice ? <p className="form-message" role="status">{action.notice}</p> : null}
           {action.error ? <p className="form-message error" role="alert">{action.error}</p> : null}
+          {Object.keys(recoveries).length ? <button className="recovery-retry" type="button" onClick={() => Object.keys(recoveries).forEach(clearRecovery)}>PRIOR TX FAILED — PREPARE A NEW ACTION</button> : null}
           {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
+          {wallet.hasSession ? <button className="wallet-signout" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET / SIGN OUT</button> : null}
         </aside>
       </div>
     </section>
   );
 }
 
-function ApplicationForm({
-  busy,
-  metrics,
-  onSubmit,
-}: {
-  busy: boolean;
-  metrics: CreatorMetricsLookup;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
+function ResolutionCriteria({ campaign }: { campaign: MarketplaceCampaign }) {
+  return (
+    <section className="campaign-detail-panel resolution-criteria-panel">
+      <div className="detail-panel-head"><span>COMMITTED RESOLUTION CRITERIA</span><strong>GENLAYER INPUT</strong></div>
+      <div className="semantic-brief"><span>SEMANTIC BRIEF</span><p>{campaign.semanticBrief}</p></div>
+      <div className="criteria-columns">
+        <div><span>REQUIRED PHRASES</span>{campaign.requiredPhrases.length ? <ul>{campaign.requiredPhrases.map((phrase) => <li key={phrase}>{phrase}</li>)}</ul> : <p>NONE SPECIFIED</p>}</div>
+        <div><span>FORBIDDEN PHRASES</span>{campaign.forbiddenPhrases.length ? <ul>{campaign.forbiddenPhrases.map((phrase) => <li key={phrase}>{phrase}</li>)}</ul> : <p>NONE SPECIFIED</p>}</div>
+      </div>
+      <div className="ad-disclosure-rule"><span>AD DISCLOSURE</span><strong>{campaign.requireAdDisclosure ? "REQUIRED" : "NOT REQUIRED"}</strong></div>
+    </section>
+  );
+}
+
+function WalletIntro({ wallet }: { wallet: ReturnType<typeof useMarketplaceWallet> }) {
+  return (
+    <div className="action-intro">
+      <h2>CONNECT YOUR WALLET</h2>
+      <p>Use the StudioNet wallet linked to your InfluencedX creator or brand activity.</p>
+      <button className="button" type="button" disabled={wallet.authenticating} onClick={() => void wallet.authenticate()}>{wallet.authenticating ? "SIGNING IN…" : "CONNECT + SIGN →"}</button>
+      <Link href="/verify">NEED TO VERIFY? START HERE →</Link>
+    </div>
+  );
+}
+
+function ApplicationForm({ busy, contentSource, onSubmit }: { busy: boolean; contentSource: "X" | "FARCASTER"; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return (
     <form className="application-form" onSubmit={onSubmit}>
-      <p className="card-index">CREATOR APPLICATION</p>
-      <h2>SET YOUR RATE.</h2>
-      <p>Your requested rate is visible to the brand. The evidence-backed estimate is guidance only and never replaces your rate.</p>
-      <CreatorRateEstimate lookup={metrics} />
-      <label>
-        <span>REQUESTED RATE / TEST USDC</span>
-        <input name="requestedRateUsdc" inputMode="decimal" pattern="[0-9]+(?:\.[0-9]{1,6})?" placeholder="1200" required />
-      </label>
-      <label>
-        <span>WHY YOU FIT THIS BRIEF</span>
-        <textarea name="pitch" minLength={20} maxLength={1_500} rows={7} placeholder="Describe your audience, content angle, and relevant public work." required />
-      </label>
-      <button className="button" type="submit" disabled={busy}>{busy ? "SUBMITTING…" : "APPLY TO CAMPAIGN →"}</button>
+      <p className="card-index">CREATOR APPLICATION</p><h2>SET YOUR RATE.</h2>
+      <p>Your requested GEN rate is visible to the brand. An active {contentSourceLabel(contentSource)} identity is required. Set the final rate yourself.</p>
+      <label><span>REQUESTED RATE / TEST GEN</span><input name="requestedRateGen" inputMode="decimal" pattern="[0-9]+(?:\.[0-9]{1,18})?" placeholder="1200" required /></label>
+      <label><span>WHY YOU FIT THIS BRIEF</span><textarea name="pitch" minLength={20} maxLength={1_500} rows={7} placeholder="Describe your audience, content angle, and relevant public work." required /></label>
+      <button className="button" type="submit" disabled={busy}>{busy ? "WAITING FOR FINALITY…" : "APPLY ON GENLAYER →"}</button>
     </form>
   );
 }
 
-function CreatorApplication({
-  application,
-  campaign,
-  actionKey,
-  loadedAt,
-  onAccept,
-  onSubmit,
-  onResolve,
-}: {
+function CreatorApplication({ application, campaign, actionKey, loadedAt, onAccept, onDecline, onWithdraw, onSubmit, onResolve, onRefund }: {
   application: MarketplaceApplication;
   campaign: MarketplaceCampaign;
   actionKey: string | null;
   loadedAt: number;
   onAccept: (application: MarketplaceApplication) => Promise<void>;
+  onDecline: (application: MarketplaceApplication) => Promise<void>;
+  onWithdraw: (application: MarketplaceApplication) => Promise<void>;
   onSubmit: (application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) => Promise<void>;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
+  onRefund: (application: MarketplaceApplication) => Promise<void>;
 }) {
-  const selected = application.status === "selected" && Boolean(application.selectionTxHash);
-  const selectionPending = application.status === "selected" && !application.selectionTxHash;
-  const accepted = application.status === "accepted" && Boolean(application.acceptanceTxHash);
-  const submitted = accepted && Boolean(application.submissionTxHash);
-  const resolving = Boolean(application.requestId && application.resolutionRequestTxHash);
-  const heading = resolving
-    ? "RESOLUTION REQUESTED."
-    : submitted
-      ? "WORK SUBMITTED."
-      : accepted
-        ? "CAMPAIGN ACTIVE."
-        : selected
-          ? "YOU WERE SELECTED."
-          : selectionPending
-            ? "SELECTION PENDING."
-            : "APPLICATION RECORDED.";
+  const selected = application.status === "selected";
+  const accepted = application.status === "accepted";
+  const submitted = Boolean(application.submissionTxHash || application.contentId);
   return (
     <div className="creator-application-summary">
       <p className="card-index">YOUR APPLICATION / {application.status.toUpperCase()}</p>
-      <h2>{heading}</h2>
-      <dl>
-        <div><dt>RATE</dt><dd>{usdcAtomsToDisplay(application.requestedRateUsdc)} TEST USDC</dd></div>
-        <div><dt>STATUS</dt><dd>{application.status.toUpperCase()}</dd></div>
-      </dl>
+      <h2>{submitted ? "WORK SUBMITTED." : accepted ? "CAMPAIGN ACTIVE." : selected ? "YOU WERE SELECTED." : "APPLICATION RECORDED."}</h2>
+      <dl><div><dt>RATE</dt><dd>{genAtomsToDisplay(applicationRateAtoms(application))} TEST GEN</dd></div><div><dt>STATUS</dt><dd>{application.status.toUpperCase()}</dd></div></dl>
       <p>{application.pitch}</p>
-      {selectionPending ? <p>The brand must finish the Base Sepolia selection transaction before you can accept.</p> : null}
       <Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>VIEW PUBLIC PROFILE →</Link>
-      {selected ? (
-        <button className="button" type="button" disabled={actionKey === `accept:${application.id}`} onClick={() => void onAccept(application)}>
-          {actionKey === `accept:${application.id}` ? "ACCEPTING…" : "ACCEPT CAMPAIGN →"}
-        </button>
-      ) : null}
-      {accepted && !submitted && campaign.status === "active" ? (
-        <EvidenceSubmissionForm
-          application={application}
-          busy={actionKey === `submit:${application.id}`}
-          onSubmit={onSubmit}
-        />
-      ) : null}
-      {submitted || resolving ? (
-        <ResolutionControl
-          application={application}
-          campaign={campaign}
-          actionKey={actionKey}
-          loadedAt={loadedAt}
-          onResolve={onResolve}
-        />
-      ) : null}
+      {application.status === "applied" ? <button className="recovery-retry" type="button" disabled={actionKey === `withdraw:${application.id}`} onClick={() => void onWithdraw(application)}>WITHDRAW APPLICATION</button> : null}
+      {selected ? <><button className="button" type="button" disabled={actionKey === `accept:${application.id}`} onClick={() => void onAccept(application)}>ACCEPT CAMPAIGN →</button><button className="recovery-retry" type="button" disabled={actionKey === `decline:${application.id}`} onClick={() => void onDecline(application)}>DECLINE ASSIGNMENT</button></> : null}
+      {accepted && !submitted && campaign.status === "open" ? <EvidenceSubmissionForm application={application} campaign={campaign} busy={actionKey === `submit:${application.id}`} onSubmit={onSubmit} /> : null}
+      {submitted || application.resolutionOutcome ? <ResolutionControl application={application} campaign={campaign} actionKey={actionKey} loadedAt={loadedAt} onResolve={onResolve} onRefund={onRefund} /> : null}
     </div>
   );
 }
 
-function BrandApplications({
-  applications,
-  campaign,
-  actionKey,
-  loadedAt,
-  metricsByWallet,
-  selectionRecoveryHashes,
-  onConfirmSelection,
-  onSelect,
-  onResolve,
-}: {
+function BrandApplications({ applications, actionKey, onSelect, onResolve }: {
   applications: MarketplaceApplication[];
-  campaign: MarketplaceCampaign;
   actionKey: string | null;
-  loadedAt: number;
-  metricsByWallet: Readonly<Record<string, CreatorMetricsLookup>>;
-  selectionRecoveryHashes: Readonly<Record<string, string>>;
-  onConfirmSelection: (application: MarketplaceApplication, txHash: string) => Promise<void>;
   onSelect: (application: MarketplaceApplication) => Promise<void>;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
 }) {
@@ -565,416 +386,216 @@ function BrandApplications({
       {applications.length === 0 ? <p className="panel-empty">No creator applications have been submitted.</p> : null}
       {applications.map((application) => (
         <article className="brand-application" key={application.id}>
-          <div>
-            <Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>
-              {application.creatorHandle ?? shortenAddress(application.creatorWallet)}
-            </Link>
-            <strong>{usdcAtomsToDisplay(application.requestedRateUsdc)} TEST USDC</strong>
-          </div>
-          <CreatorRateEstimate
-            compact
-            lookup={creatorMetricsForWallet(metricsByWallet, application.creatorWallet)}
-          />
+          <div><Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>{application.creatorHandle ?? shortenAddress(application.creatorWallet)}</Link><strong>{genAtomsToDisplay(applicationRateAtoms(application))} TEST GEN</strong></div>
           <p>{application.pitch}</p>
-          <div>
-            <small>{application.status.toUpperCase()} · {formatDate(application.createdAt)}</small>
-            {application.status === "applied" ? (
-              <button className="verify-secondary" type="button" disabled={actionKey === `select:${application.id}`} onClick={() => void onSelect(application)}>
-                {actionKey === `select:${application.id}` ? "CONFIRMING ON BASE…" : "SELECT CREATOR"}
-              </button>
-            ) : null}
-          </div>
-          {application.status === "selected" && !application.selectionTxHash ? (
-            <SelectionRecovery
-              key={`${application.id}:${selectionRecoveryHashes[application.id] ?? "none"}`}
-              application={application}
-              busyKey={actionKey}
-              submittedHash={selectionRecoveryHashes[application.id] ?? null}
-              onConfirm={onConfirmSelection}
-              onRetry={onSelect}
-            />
-          ) : null}
-          {application.submissionTxHash ? (
-            <ResolutionControl
-              application={application}
-              campaign={campaign}
-              actionKey={actionKey}
-              loadedAt={loadedAt}
-              onResolve={onResolve}
-            />
-          ) : null}
+          <div><small>{application.status.toUpperCase()} · {formatDate(application.createdAt)}</small>{application.status === "applied" ? <button className="verify-secondary" type="button" disabled={actionKey === `select:${application.id}`} onClick={() => void onSelect(application)}>{actionKey === `select:${application.id}` ? "WAITING FOR FINALITY…" : "SELECT CREATOR"}</button> : null}</div>
+          {application.submissionTxHash ? <button className="verify-secondary" type="button" disabled={actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>REQUEST RESOLUTION</button> : null}
         </article>
       ))}
     </section>
   );
 }
 
-function SelectionRecovery({
-  application,
-  busyKey,
-  submittedHash,
-  onConfirm,
-  onRetry,
-}: {
-  application: MarketplaceApplication;
-  busyKey: string | null;
-  submittedHash: string | null;
-  onConfirm: (application: MarketplaceApplication, txHash: string) => Promise<void>;
-  onRetry: (application: MarketplaceApplication) => Promise<void>;
-}) {
-  const [txHash, setTxHash] = useState(submittedHash ?? "");
-  const confirming = busyKey === `confirm-select:${application.id}`;
-  const retrying = busyKey === `select:${application.id}`;
-  const validHash = /^0x[0-9a-f]{64}$/i.test(txHash.trim());
-
-  return (
-    <form
-      className="selection-recovery"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (validHash) void onConfirm(application, txHash.trim());
-      }}
-    >
-      <span>ONCHAIN SELECTION RECOVERY</span>
-      <strong>RECONCILE BEFORE RETRYING.</strong>
-      <p>
-        If the wallet transaction succeeded but the app failed to record it, confirm that hash here.
-        Broadcast a new selection only after the previous transaction is known to have failed.
-      </p>
-      <label>
-        <span>BASE SEPOLIA TRANSACTION HASH</span>
-        <input
-          name="selectionTxHash"
-          value={txHash}
-          onChange={(event) => setTxHash(event.currentTarget.value.trim())}
-          pattern="0x[0-9a-fA-F]{64}"
-          placeholder="0x…"
-          spellCheck={false}
-          autoComplete="off"
-        />
-      </label>
-      {submittedHash ? (
-        <a href={`https://sepolia.basescan.org/tx/${submittedHash}`} target="_blank" rel="noreferrer">
-          VIEW LAST SUBMITTED TX →
-        </a>
-      ) : null}
-      <button className="verify-secondary" type="submit" disabled={!validHash || confirming || retrying}>
-        {confirming ? "VERIFYING RECEIPT…" : "CONFIRM EXISTING TX"}
-      </button>
-      <button className="recovery-retry" type="button" disabled={confirming || retrying} onClick={() => void onRetry(application)}>
-        {retrying ? "BROADCASTING…" : "PRIOR TX FAILED — BROADCAST NEW"}
-      </button>
-    </form>
-  );
-}
-
-function SettlementControls({
-  campaign,
-  wallet,
-  onUpdated,
-}: {
-  campaign: MarketplaceCampaign;
-  wallet: ReturnType<typeof useMarketplaceWallet>;
-  onUpdated: (signal?: AbortSignal) => Promise<void>;
-}) {
+function SettlementControls({ campaign, wallet, onUpdated }: { campaign: MarketplaceCampaign; wallet: ReturnType<typeof useMarketplaceWallet>; onUpdated: (signal?: AbortSignal) => Promise<void> }) {
   const [settlement, setSettlement] = useState<MarketplaceSettlementStateDto | null>(null);
-  const [phase, setPhase] = useState<"loading" | "idle" | "crediting" | "withdrawing">("loading");
+  const [phase, setPhase] = useState<"loading" | "idle" | "claiming" | "executing" | "refunding">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [submittedHash, setSubmittedHash] = useState<string | null>(null);
   const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/settlement`;
 
-  const loadSettlement = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await marketplaceRequest<{ settlement: MarketplaceSettlementStateDto }>(
-        basePath,
-        { signal },
-      );
-      setSettlement(response.settlement);
-      setError(null);
-      setPhase("idle");
+      const response = await marketplaceRequest<{ settlement: MarketplaceSettlementStateDto }>(basePath, { signal });
+      setSettlement(response.settlement); setError(null); setPhase("idle");
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === "AbortError") return;
-      setError(marketplaceErrorMessage(loadError));
-      setPhase("idle");
+      setError(marketplaceErrorMessage(loadError)); setPhase("idle");
     }
   }, [basePath]);
 
   useEffect(() => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => void loadSettlement(controller.signal), 0);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [loadSettlement]);
+    const timer = window.setTimeout(() => void load(controller.signal), 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [load]);
 
-  async function runSettlement(kind: "credit" | "withdraw") {
-    setPhase(kind === "credit" ? "crediting" : "withdrawing");
-    setMessage(null);
-    setError(null);
+  async function execute(kind: "claim" | "execute-claim" | "refund-unallocated") {
+    setPhase(kind === "claim" ? "claiming" : kind === "execute-claim" ? "executing" : "refunding"); setMessage(null); setError(null);
     try {
       const actor = await wallet.authenticate();
-      if (!wallet.isBaseSepolia) await wallet.switchToBaseSepolia();
-      const prepared = await marketplaceRequest<MarketplaceSettlementMutationResponse>(
-        `${basePath}/${kind}`,
-        { method: "POST", body: "{}" },
-      );
-      if (!prepared.transaction) {
-        throw new Error("The settlement service did not return an authorized Base transaction.");
+      if (!wallet.isStudioNet) await wallet.switchToStudioNet();
+      const preparePath = kind === "claim"
+        ? `${basePath}/claim`
+        : kind === "execute-claim"
+          ? `${basePath}/claim/execute`
+          : `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/refund-unallocated`;
+      const recoveryKey = settlementRecoveryStorageKey(campaign.id, kind);
+      const recovery = readRecovery(recoveryKey);
+      if (recovery) {
+        setMessage("Reconciling the previously finalized StudioNet transaction…");
+        await marketplaceRequest(`${preparePath}/confirm`, {
+          method: "POST",
+          body: JSON.stringify({ preparedId: recovery.preparedId, txHash: recovery.txHash }),
+        });
+        window.sessionStorage.removeItem(recoveryKey);
+        setMessage(settlementSuccessMessage(kind));
+        await load(); await onUpdated();
+        return;
       }
-      const txHash = await broadcastMarketplaceTransaction(
-        prepared.transaction,
-        actor,
-        { onSubmitted: (hash) => setSubmittedHash(hash) },
-      );
-      const confirmed = await marketplaceRequest<MarketplaceSettlementMutationResponse>(
-        `${basePath}/${kind}/confirm`,
-        { method: "POST", body: JSON.stringify({ txHash }) },
-      );
-      if (!confirmed.confirmation) {
-        throw new Error("The settlement receipt was not confirmed by the server.");
-      }
-      setSettlement(confirmed.settlement);
-      setSubmittedHash(confirmed.confirmation.txHash);
-      setMessage(
-        `${usdcAtomsToDisplay(confirmed.confirmation.amountUsdc)} TEST USDC confirmed at Base block ${confirmed.confirmation.blockNumber}.`,
-      );
-      await onUpdated();
-    } catch (settlementError) {
-      setError(marketplaceErrorMessage(settlementError));
-    } finally {
-      setPhase("idle");
-    }
+      const prepared = await marketplaceRequest<PreparedMutation>(preparePath, { method: "POST", body: "{}" });
+      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
+        expectedFunctionName: kind === "claim"
+          ? "request_withdrawal"
+          : kind === "execute-claim"
+            ? "execute_withdrawal"
+            : "refund_unallocated",
+        expectedValue: "0",
+        onSubmitted: (hash) => window.sessionStorage.setItem(recoveryKey, JSON.stringify({ preparedId: prepared.preparedId, txHash: hash })),
+        onStage: (stage) => setMessage(transactionNotice(stage)),
+      });
+      await marketplaceRequest(`${preparePath}/confirm`, { method: "POST", body: JSON.stringify({ preparedId: prepared.preparedId, txHash }) });
+      window.sessionStorage.removeItem(recoveryKey);
+      setMessage(settlementSuccessMessage(kind));
+      await load(); await onUpdated();
+    } catch (settlementError) { setError(marketplaceErrorMessage(settlementError)); }
+    finally { setPhase("idle"); }
   }
 
-  const busy = phase === "crediting" || phase === "withdrawing";
+  const view = settlement;
+  const claimable = view?.claimableAtto ?? "0";
+  const unallocated = view?.unallocatedAtto ?? "0";
+  const busy = phase === "claiming" || phase === "executing" || phase === "refunding";
   return (
     <section className="settlement-controls" aria-live="polite">
-      <span>BASE ESCROW RECOVERY</span>
-      <strong>WITHDRAW ONCHAIN BALANCES.</strong>
-      <p>
-        InfluencedX prepares the exact escrow call. A balance is shown as recovered only after its
-        receipt and receipt-block contract state are verified.
-      </p>
-      {settlement ? (
-        <dl>
-          <div>
-            <dt>CLAIMABLE</dt>
-            <dd>{usdcAtomsToDisplay(settlement.claimableUsdc)} TEST USDC</dd>
-          </div>
-          {settlement.role === "brand" ? (
-            <div>
-              <dt>UNUSED BUDGET</dt>
-              <dd>{usdcAtomsToDisplay(settlement.unallocatedUsdc)} TEST USDC</dd>
-            </div>
-          ) : null}
-        </dl>
-      ) : null}
-      {phase === "loading" ? <p>READING ESCROW STATE...</p> : null}
-      {settlement?.role === "brand" && settlement.unallocatedUsdc !== "0" ? (
-        <button
-          className="verify-secondary"
-          type="button"
-          disabled={busy || !settlement.canCreditUnallocated}
-          onClick={() => void runSettlement("credit")}
-        >
-          {phase === "crediting" ? "CONFIRMING CREDIT..." : "CREDIT UNUSED BALANCE"}
-        </button>
-      ) : null}
-      {settlement && !settlement.canCreditUnallocated && settlement.role === "brand" && settlement.unallocatedUsdc !== "0" ? (
-        <small>UNUSED BUDGET UNLOCKS AFTER {formatDate(settlement.selectionDeadline)}</small>
-      ) : null}
-      {settlement?.canWithdraw ? (
-        <button
-          className="button"
-          type="button"
-          disabled={busy}
-          onClick={() => void runSettlement("withdraw")}
-        >
-          {phase === "withdrawing" ? "CONFIRMING WITHDRAWAL..." : "WITHDRAW CLAIMABLE"}
-        </button>
-      ) : null}
-      {submittedHash ? (
-        <a href={`https://sepolia.basescan.org/tx/${submittedHash}`} target="_blank" rel="noreferrer">
-          VIEW LAST SETTLEMENT TX -&gt;
-        </a>
-      ) : null}
+      <span>GENLAYER BALANCES</span><strong>CLAIM OR REFUND NATIVE GEN.</strong>
+      <p>Balances are shown only after finalized contract state is reconciled.</p>
+      {view ? <dl><div><dt>CLAIMABLE</dt><dd>{genAtomsToDisplay(claimable)} TEST GEN</dd></div>{view.role === "brand" ? <div><dt>UNUSED BUDGET</dt><dd>{genAtomsToDisplay(unallocated)} TEST GEN</dd></div> : null}{view.withdrawalStatus ? <div><dt>WITHDRAWAL</dt><dd>{view.withdrawalStatus.replaceAll("_", " ")}</dd></div> : null}</dl> : null}
+      {phase === "loading" ? <p>READING GENLAYER STATE…</p> : null}
+      {view?.role === "brand" && unallocated !== "0" ? <button className="verify-secondary" type="button" disabled={busy || !view.canRefundUnallocated} onClick={() => void execute("refund-unallocated")}>{phase === "refunding" ? "WAITING FOR FINALITY…" : "REFUND UNUSED GEN"}</button> : null}
+      {view?.withdrawalStatus === "PENDING" ? <button className="button" type="button" disabled={busy} onClick={() => void execute("execute-claim")}>{phase === "executing" ? "WAITING FOR FINALITY…" : "EXECUTE GEN WITHDRAWAL →"}</button> : null}
+      {view?.withdrawalStatus === "EMITTED_UNCONFIRMED" ? <p className="form-message">TRANSFER EMITTED · AWAITING DELIVERY CONFIRMATION · NOT YET PAID</p> : null}
+      {view?.withdrawalStatus === "CONFIRMED" ? <p className="form-message success">WITHDRAWAL DELIVERY CONFIRMED</p> : null}
+      {(!view?.withdrawalStatus || view.withdrawalStatus === "RESTORED_FAILED") && (view?.canClaim || claimable !== "0") ? <button className="button" type="button" disabled={busy} onClick={() => void execute("claim")}>{phase === "claiming" ? "WAITING FOR FINALITY…" : "REQUEST GEN WITHDRAWAL →"}</button> : null}
       {message ? <p className="form-message success">{message}</p> : null}
-      {error ? (
-        <>
-          <p className="form-message error" role="alert">{error}</p>
-          <button className="recovery-retry" type="button" disabled={busy} onClick={() => void loadSettlement()}>
-            REFRESH ESCROW STATE
-          </button>
-        </>
-      ) : null}
+      {error ? <><p className="form-message error" role="alert">{error}</p><button className="recovery-retry" type="button" disabled={busy} onClick={() => void load()}>REFRESH CONTRACT STATE</button></> : null}
     </section>
   );
 }
 
-function CreatorRateEstimate({
-  lookup,
-  compact = false,
-}: {
-  lookup: CreatorMetricsLookup;
-  compact?: boolean;
-}) {
-  const className = [
-    "creator-rate-estimate",
-    compact ? "compact" : "",
-    lookup.phase === "current" ? `risk-${lookup.metrics.riskLevel}` : lookup.phase,
-  ].filter(Boolean).join(" ");
-
-  if (lookup.phase === "current") {
-    const minimum = usdcAtomsToDisplay(lookup.metrics.estimatedPayMinUsdc);
-    const maximum = usdcAtomsToDisplay(lookup.metrics.estimatedPayMaxUsdc);
-    if (minimum !== "â€”" && maximum !== "â€”") {
-      return (
-        <div className={className} aria-live="polite">
-          <span>ESTIMATED RANGE, CREATOR SETS FINAL RATE</span>
-          <strong>{minimum}â€“{maximum} TEST USDC</strong>
-          <small>
-            {lookup.metrics.riskLevel.toUpperCase()} RISK SIGNAL Â· CURRENT UNTIL {formatDate(lookup.metrics.expiresAt)}
-          </small>
-        </div>
-      );
-    }
-  }
-
-  const message = lookup.phase === "loading"
-    ? "CHECKING CURRENT EVIDENCEâ€¦"
-    : lookup.phase === "expired"
-      ? "ESTIMATE EXPIRED â€” REFRESH CREATOR METRICS"
-      : lookup.phase === "error"
-        ? "METRICS TEMPORARILY UNAVAILABLE"
-        : "NO CURRENT EVIDENCE-BACKED RANGE";
-
-  return (
-    <div className={className} aria-live="polite">
-      <span>ESTIMATED RANGE, CREATOR SETS FINAL RATE</span>
-      <strong>{message}</strong>
-      <small>NO PLACEHOLDER PAY OR RISK FIGURES ARE SHOWN</small>
-    </div>
-  );
-}
-
-function EvidenceSubmissionForm({
-  application,
-  busy,
-  onSubmit,
-}: {
-  application: MarketplaceApplication;
-  busy: boolean;
-  onSubmit: (application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) => Promise<void>;
-}) {
+function EvidenceSubmissionForm({ application, campaign, busy, onSubmit }: { application: MarketplaceApplication; campaign: MarketplaceCampaign; busy: boolean; onSubmit: (application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) => Promise<void> }) {
+  const source = campaignContentSource(campaign);
   const handle = application.creatorHandle?.replace(/^@/, "") ?? "";
-  const retryUrl = handle && application.xPostId ? `https://x.com/${handle}/status/${application.xPostId}` : "";
+  const contentId = application.contentId ?? "";
+  const isFarcaster = source === "FARCASTER";
   return (
     <form className="evidence-form" onSubmit={(event) => void onSubmit(application, event)}>
-      <span>PUBLIC WORK EVIDENCE</span>
-      <strong>SUBMIT YOUR X POST.</strong>
-      <p>The post URL must belong to your verified @{handle || "handle"}. Your wallet submits only its commitment to Base.</p>
+      <span>PUBLIC TEXT-POST EVIDENCE</span><strong>SUBMIT YOUR {contentSourceLabel(source)} POST.</strong>
+      <p>Enter the immutable {isFarcaster ? "cast hash" : "X post ID"} for one original public post from your verified @{handle || "handle"}. Its commitment is recorded on GenLayer.</p>
       <label>
-        <span>CANONICAL X POST URL</span>
+        <span>{isFarcaster ? "FARCASTER CAST HASH" : "X POST ID"}</span>
         <input
-          type="url"
-          name="postUrl"
-          defaultValue={retryUrl}
-          placeholder={handle ? `https://x.com/${handle}/status/…` : "https://x.com/handle/status/…"}
-          autoComplete="url"
+          type="text"
+          name="contentId"
+          defaultValue={contentId}
+          placeholder={isFarcaster ? `0x${"a".repeat(40)}` : "1890123456789012345"}
+          pattern={isFarcaster ? "0x[0-9a-fA-F]{40}" : "[0-9]{5,25}"}
+          inputMode={isFarcaster ? "text" : "numeric"}
+          autoComplete="off"
           required
         />
+        <small>{isFarcaster ? "Use the 0x-prefixed 20-byte cast hash." : "Use only the numeric ID from the canonical X status URL."}</small>
       </label>
-      <button className="button" type="submit" disabled={busy}>{busy ? "CONFIRMING ON BASE…" : "SUBMIT EVIDENCE →"}</button>
+      <button className="button" type="submit" disabled={busy}>{busy ? "WAITING FOR FINALITY…" : "SUBMIT ON GENLAYER →"}</button>
     </form>
   );
 }
 
-function ResolutionControl({
-  application,
-  campaign,
-  actionKey,
-  loadedAt,
-  onResolve,
-}: {
-  application: MarketplaceApplication;
-  campaign: MarketplaceCampaign;
-  actionKey: string | null;
-  loadedAt: number;
-  onResolve: (application: MarketplaceApplication) => Promise<void>;
-}) {
-  if (application.requestId && application.resolutionRequestTxHash) {
-    const submitterStatus = application.genlayerSubmitterStatus;
-    const outcome = application.genlayerResultOutcome;
-    return (
-      <div className="resolution-control confirmed">
-        <span>GENLAYER REQUEST</span>
-        <strong>{submitterStatus === "FINALIZED" && outcome
-          ? `${outcome.toUpperCase()} FINALIZED`
-          : submitterStatus
-            ? submitterStatus.replaceAll("_", " ")
-            : "QUEUEING RESOLUTION"}</strong>
-        <code>{application.requestId}</code>
-        {application.genlayerTxHash ? <code>{application.genlayerTxHash}</code> : null}
-        {application.genlayerErrorCode ? <p>Submitter status: {application.genlayerErrorCode}</p> : null}
-        <a href={`https://sepolia.basescan.org/tx/${application.resolutionRequestTxHash}`} target="_blank" rel="noreferrer">VIEW BASE REQUEST TX →</a>
-      </div>
-    );
+function ResolutionControl({ application, campaign, actionKey, loadedAt, onResolve, onRefund }: { application: MarketplaceApplication; campaign: MarketplaceCampaign; actionKey: string | null; loadedAt: number; onResolve: (application: MarketplaceApplication) => Promise<void>; onRefund: (application: MarketplaceApplication) => Promise<void> }) {
+  const transaction = application.resolutionTxHash ?? application.genlayerTxHash;
+  const transactionUrl = studioNetExplorerLink("tx", transaction);
+  if (application.resolutionOutcome === "undetermined") {
+    return <div className="resolution-control undetermined"><span>PREVIOUS ROUND</span><strong>UNDETERMINED.</strong><p>No payout or refund was assigned. Retry the same committed evidence, or refund after the contract retry ceiling.</p><ResolutionChecks application={application} />{transactionUrl ? <a href={transactionUrl} target="_blank" rel="noreferrer">VIEW STUDIONET TRANSACTION →</a> : null}<button className="verify-secondary" type="button" disabled={actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>RETRY RESOLUTION</button><button className="recovery-retry" type="button" disabled={actionKey === `refund:${application.id}`} onClick={() => void onRefund(application)}>REFUND AFTER RETRY CEILING</button></div>;
   }
-  if (application.resolutionOutcome === "undetermined" && application.resolutionTxHash) {
-    const ready = campaign.status === "submitted";
-    return (
-      <div className="resolution-control undetermined">
-        <span>PREVIOUS ROUND</span>
-        <strong>UNDETERMINED.</strong>
-        <p>
-          No payout or refund was assigned. Once the confirmed Base result is reconciled,
-          either participant may request a fresh round using the same committed evidence.
-        </p>
-        <a href={`https://sepolia.basescan.org/tx/${application.resolutionTxHash}`} target="_blank" rel="noreferrer">VIEW UNDETERMINED TX →</a>
-        <button
-          className="verify-secondary"
-          type="button"
-          disabled={!ready || actionKey === `resolve:${application.id}`}
-          onClick={() => void onResolve(application)}
-        >
-          {actionKey === `resolve:${application.id}` ? "REQUESTING NEXT ROUND…" : ready ? "REQUEST NEXT ROUND" : "AWAITING RECONCILIATION"}
-        </button>
-      </div>
-    );
+  if (application.resolutionOutcome) {
+    return <div className="resolution-control confirmed"><span>FINAL RESOLUTION</span><strong>{application.resolutionOutcome.toUpperCase()}</strong><p>Campaign state: {campaign.status.toUpperCase()}. The result below is the deterministic contract outcome; no generated narrative is shown.</p><ResolutionChecks application={application} />{transactionUrl ? <a href={transactionUrl} target="_blank" rel="noreferrer">VIEW FINAL TRANSACTION →</a> : null}</div>;
   }
-  if (application.resolutionOutcome && application.resolutionTxHash) {
-    return (
-      <div className="resolution-control confirmed">
-        <span>FINAL RESOLUTION</span>
-        <strong>{application.resolutionOutcome.toUpperCase()}</strong>
-        <p>Campaign state: {campaign.status.toUpperCase()}. This reflects the recorded Base settlement event.</p>
-        <a href={`https://sepolia.basescan.org/tx/${application.resolutionTxHash}`} target="_blank" rel="noreferrer">VIEW SETTLEMENT TX →</a>
-        {application.claimTxHash ? (
-          <a href={`https://sepolia.basescan.org/tx/${application.claimTxHash}`} target="_blank" rel="noreferrer">VIEW WITHDRAWAL TX →</a>
-        ) : null}
-      </div>
-    );
+  if (application.requestId || application.genlayerTxHash) {
+    return <div className="resolution-control confirmed"><span>GENLAYER REQUEST</span><strong>{application.status.replaceAll("_", " ").toUpperCase()}</strong>{application.requestId ? <code>{application.requestId}</code> : null}{application.genlayerTxHash ? <code>{application.genlayerTxHash}</code> : null}</div>;
   }
-  if (!application.submissionTxHash || campaign.status !== "submitted" || !application.submittedAt) return null;
+  if (!application.submittedAt) return null;
   const availableAt = new Date(application.submittedAt).getTime() + Number(campaign.retentionSeconds) * 1_000;
   const ready = Number.isFinite(availableAt) && availableAt <= loadedAt;
-  const availableLabel = Number.isFinite(availableAt)
-    ? formatDate(new Date(availableAt).toISOString())
-    : "DATE UNAVAILABLE";
-  return (
-    <div className="resolution-control">
-      <span>GENLAYER RESOLUTION</span>
-      <strong>{ready ? "READY TO RESOLVE." : "RETENTION WINDOW ACTIVE."}</strong>
-      <p>{ready
-        ? "The brand or creator may now request the onchain resolution round."
-        : `Resolution unlocks ${availableLabel}.`}</p>
-      <button className="verify-secondary" type="button" disabled={!ready || actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>
-        {actionKey === `resolve:${application.id}` ? "REQUESTING…" : "REQUEST RESOLUTION"}
-      </button>
-    </div>
-  );
+  return <div className="resolution-control"><span>GENLAYER RESOLUTION</span><strong>{ready ? "READY TO RESOLVE." : "RETENTION WINDOW ACTIVE."}</strong><p>{ready ? "Either participant may request resolution of the frozen text-post evidence." : `Resolution unlocks ${formatDate(new Date(availableAt).toISOString())}.`}</p><button className="verify-secondary" type="button" disabled={!ready || actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>{actionKey === `resolve:${application.id}` ? "WAITING FOR FINALITY…" : "REQUEST RESOLUTION"}</button></div>;
+}
+
+function ResolutionChecks({ application }: { application: MarketplaceApplication }) {
+  const checks = application.resolutionChecks;
+  if (!checks) return null;
+  const rows = [
+    ["AUTHOR MATCH", checks.authorMatch],
+    ["CONTENT ID MATCH", checks.postIdMatch],
+    ...checks.requiredChecks.map((value, index) => [`REQUIRED PHRASE ${String(index + 1).padStart(2, "0")}`, value] as const),
+    ...checks.forbiddenChecks.map((value, index) => [`FORBIDDEN PHRASE MATCH ${String(index + 1).padStart(2, "0")}`, value] as const),
+    ["DISCLOSURE PRESENT", checks.disclosurePresent],
+    ["SEMANTIC PASS", checks.semanticPass],
+  ] as ReadonlyArray<readonly [string, boolean]>;
+  return <dl className="resolution-checks" aria-label="Exact GenLayer resolution checks">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value ? "TRUE" : "FALSE"}</dd></div>)}</dl>;
+}
+
+function applicationPath(campaignId: string, applicationId: string): string {
+  return `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(applicationId)}`;
+}
+
+function recoveryStorageKey(campaignId: string, actionKey: string): string {
+  return `influencedx:studionet-action:${campaignId}:${actionKey}`;
+}
+
+function settlementRecoveryStorageKey(campaignId: string, kind: string): string {
+  return `influencedx:studionet-settlement:${campaignId}:${kind}`;
+}
+
+function readRecovery(storageKey: string): Pick<Recovery, "preparedId" | "txHash"> | null {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
+    if (value && typeof value.preparedId === "string" && typeof value.txHash === "string" && /^0x[\da-f]{64}$/i.test(value.txHash)) {
+      return { preparedId: value.preparedId, txHash: value.txHash };
+    }
+  } catch {
+    window.sessionStorage.removeItem(storageKey);
+  }
+  return null;
+}
+
+function settlementSuccessMessage(kind: "claim" | "execute-claim" | "refund-unallocated"): string {
+  if (kind === "claim") return "Withdrawal request finalized. Execute it to emit the GEN transfer.";
+  if (kind === "execute-claim") return "Transfer emitted. It remains pending until owner reconciliation confirms delivery.";
+  return "Unused GEN refund finalized and added to the brand's claimable balance.";
+}
+
+function loadRecoveries(campaignId: string): Record<string, Recovery> {
+  if (typeof window === "undefined") return {};
+  const prefix = `influencedx:studionet-action:${campaignId}:`;
+  const recovered: Record<string, Recovery> = {};
+  for (let index = 0; index < window.sessionStorage.length; index += 1) {
+    const storageKey = window.sessionStorage.key(index);
+    if (!storageKey?.startsWith(prefix)) continue;
+    try {
+      const value = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
+      if (value && typeof value.preparedId === "string" && typeof value.txHash === "string" && /^0x[\da-f]{64}$/i.test(value.txHash) && typeof value.confirmPath === "string") {
+        recovered[storageKey.slice(prefix.length)] = value as Recovery;
+      }
+    } catch {
+      window.sessionStorage.removeItem(storageKey);
+    }
+  }
+  return recovered;
+}
+
+function transactionNotice(stage: GenLayerTransactionStage): string {
+  if (stage === "wallet") return "Confirm the exact StudioNet action in your wallet…";
+  if (stage === "submitted") return "Transaction submitted. Its hash is saved for recovery.";
+  if (stage === "finality") return "Waiting for GenLayer validator finality…";
+  return "StudioNet transaction finalized.";
 }
 
 function formatDate(value: string): string {

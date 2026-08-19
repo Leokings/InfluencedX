@@ -1,5 +1,10 @@
 # InfluencedX campaign settlement coordinator
 
+> **Historical regression service.** GenLayer Marketplace V2 holds native GEN
+> and settles inside one Intelligent Contract; it has no Base receiver, watcher
+> quorum, or cross-network relay. Keep this service disabled and do not copy its
+> environment into the V2 release.
+
 Private Vercel Function that turns a persisted FINALIZED StudioNet campaign
 result from the pinned APV2 resolver into a fenced Base Sepolia
 `submitCampaignResolution` transaction.

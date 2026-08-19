@@ -2,41 +2,47 @@ import { DuplicateMessageError, send } from "@vercel/queue";
 import { ApiProblem } from "./verification-api.ts";
 
 export const CAMPAIGN_PROGRESSION_QUEUE_TOPIC =
-  "influencedx-studionet-campaign-progression-v2";
-export const CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION = 1;
+  "influencedx-studionet-campaign-progression-v3";
+export const CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION = 2;
 export const CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS =
   7 * 24 * 60 * 60;
 
 export type CampaignProgressionQueueMessage = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
+  assignmentId: string;
   requestId: string;
-  campaignId: string;
-  applicationId: string;
 }>;
 
 type QueueSend = typeof send;
 
 /**
- * Publishes only the immutable identifiers persisted from the confirmed Base
- * resolution-request event. Vercel OIDC authenticates the SDK; no application
- * signer, watcher key, or raw X evidence is included in the message.
+ * Publishes only the immutable identifiers projected from the finalized
+ * GenLayer resolution request. Vercel OIDC authenticates the SDK; no signer
+ * key or raw social evidence is included in the message.
  */
 export async function enqueueCampaignProgression(
-  input: Omit<CampaignProgressionQueueMessage, "schemaVersion">,
+  input: Omit<CampaignProgressionQueueMessage, "schemaVersion"> & {
+    delaySeconds?: number;
+  },
   sendImplementation: QueueSend = send,
 ): Promise<Readonly<{ messageId: string | null }>> {
+  const delaySeconds = input.delaySeconds ?? 0;
+  if (!Number.isSafeInteger(delaySeconds) || delaySeconds < 0 || delaySeconds > CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS) {
+    throw new Error("The campaign progression delay is invalid.");
+  }
   const message = validateCampaignProgressionQueueMessage({
     schemaVersion: CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION,
-    ...input,
+    assignmentId: input.assignmentId,
+    requestId: input.requestId,
   });
   try {
     const result = await sendImplementation(
       CAMPAIGN_PROGRESSION_QUEUE_TOPIC,
       message,
       {
-        idempotencyKey: `influencedx-campaign-progression:${message.requestId}`,
+        idempotencyKey: `influencedx-campaign-progression-v3:${message.assignmentId}:${message.requestId}`,
         retentionSeconds: CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS,
-        delaySeconds: 0,
+        delaySeconds,
       },
     );
     return Object.freeze({ messageId: result.messageId });
@@ -57,8 +63,7 @@ export function validateCampaignProgressionQueueMessage(
 ): CampaignProgressionQueueMessage {
   if (!plainObject(value)) throw invalidMessage();
   const expectedKeys = [
-    "applicationId",
-    "campaignId",
+    "assignmentId",
     "requestId",
     "schemaVersion",
   ];
@@ -67,8 +72,8 @@ export function validateCampaignProgressionQueueMessage(
     actualKeys.length !== expectedKeys.length ||
     actualKeys.some((key, index) => key !== expectedKeys[index]) ||
     value.schemaVersion !== CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION ||
-    !uuid(value.campaignId) ||
-    !uuid(value.applicationId) ||
+    typeof value.assignmentId !== "string" ||
+    !/^0x[0-9a-f]{64}$/.test(value.assignmentId) ||
     typeof value.requestId !== "string" ||
     !/^0x[0-9a-f]{64}$/.test(value.requestId)
   ) {
@@ -76,9 +81,8 @@ export function validateCampaignProgressionQueueMessage(
   }
   return Object.freeze({
     schemaVersion: CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION,
+    assignmentId: value.assignmentId,
     requestId: value.requestId,
-    campaignId: value.campaignId,
-    applicationId: value.applicationId,
   });
 }
 
@@ -95,13 +99,4 @@ export class CampaignProgressionQueueMessageError extends Error {
 
 function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function uuid(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
-    )
-  );
 }

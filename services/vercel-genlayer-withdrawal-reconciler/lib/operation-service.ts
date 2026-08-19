@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import {
   CONFIRM_METHOD,
   MARKETPLACE_ADDRESS,
-  MARKETPLACE_OWNER,
   MAX_CONFIRMATION_POLL_ATTEMPTS,
   PRECHECK_LEASE_MS,
   RECONCILER_NETWORK,
@@ -49,7 +48,12 @@ export class ReconciliationService {
     );
     const boundaryError = recordBoundaryError(record, this.client.contractAddress, this.client.signerAddress);
     if (boundaryError) {
-      await this.repository.markPoisoned(record.withdrawalId, boundaryError);
+      if (TERMINAL_STATUSES.has(record.status)) return;
+      if (["BROADCASTING", "SUBMITTED", "POLLING"].includes(record.status)) {
+        await this.repository.requireManual(record.withdrawalId, boundaryError);
+      } else {
+        await this.repository.markPoisoned(record.withdrawalId, boundaryError);
+      }
       return;
     }
     if (TERMINAL_STATUSES.has(record.status)) return;
@@ -263,7 +267,7 @@ export function project(record: ReconciliationRecord): ReconciliationProjection 
 function recordBoundaryError(record: ReconciliationRecord, contractAddress: string, signerAddress: string): string | null {
   if (record.network !== RECONCILER_NETWORK || record.chainId !== STUDIONET_CHAIN_ID) return "RECONCILIATION_NETWORK_MISMATCH";
   if (record.contractAddress !== MARKETPLACE_ADDRESS || record.contractAddress !== contractAddress) return "RECONCILIATION_CONTRACT_MISMATCH";
-  if (record.contractOwner !== MARKETPLACE_OWNER || signerAddress !== MARKETPLACE_OWNER) return "RECONCILIATION_OWNER_MISMATCH";
+  if (record.withdrawalConfirmer !== signerAddress) return "RECONCILIATION_WITHDRAWAL_CONFIRMER_MISMATCH";
   if (record.functionName !== CONFIRM_METHOD || record.valueAtto !== ZERO_VALUE_ATTO) return "RECONCILIATION_CALL_BOUNDARY_MISMATCH";
   return null;
 }

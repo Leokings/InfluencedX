@@ -3,7 +3,7 @@ import { LegalDocument } from "../legal/LegalDocument";
 
 export const metadata: Metadata = {
   title: "Privacy notice · InfluencedX",
-  description: "How the InfluencedX testnet application handles wallet sessions, public X evidence, marketplace records, and blockchain commitments.",
+  description: "How the InfluencedX testnet application handles wallet sessions, public X and Farcaster evidence, marketplace records, and blockchain commitments.",
 };
 
 export default function PrivacyPage() {
@@ -15,7 +15,7 @@ export default function PrivacyPage() {
         <>
           <strong>InfluencedX is an experimental testnet application.</strong>
           <p>
-            It uses a wallet-bound session, reads public X evidence, stores application records in Neon Postgres,
+            It uses a wallet-bound session, reads public X or Farcaster evidence, stores application records in Neon Postgres,
             and writes commitments to public test networks. Never provide a seed phrase, private key, or confidential content.
           </p>
         </>
@@ -25,36 +25,36 @@ export default function PrivacyPage() {
         <span>01 / SCOPE</span>
         <h2>WHAT THIS NOTICE COVERS</h2>
         <p>
-          This notice describes the InfluencedX web application as it exists on August 11, 2026. The current build is
-          hosted on Vercel and operates only with Base Sepolia, GenLayer StudioNet, and test USDC. It is not a mainnet
+          This notice describes the InfluencedX web application as it exists on August 19, 2026. The current build is
+          hosted on Vercel and operates on GenLayer StudioNet with native test GEN. It is not a mainnet
           service and should not be used for real-value transactions or sensitive personal information.
         </p>
       </section>
 
       <section id="data">
         <span>02 / DATA PROCESSED</span>
-        <h2>WALLET, X, AND MARKETPLACE RECORDS</h2>
+        <h2>WALLET, SOCIAL, AND MARKETPLACE RECORDS</h2>
         <h3>Wallet sessions</h3>
         <p>
           The application processes an EVM wallet address, signed authentication messages, session issue and expiry
           times, and a pseudonymous session subject. The authenticated session is stored in a signed, HttpOnly,
           SameSite=Strict cookie. The application does not need or ask for a wallet seed phrase or private key.
         </p>
-        <h3>Public X evidence</h3>
+        <h3>Public X and Farcaster evidence</h3>
         <p>
-          Ownership and campaign flows may process a public X handle, account profile information, public post URL and
-          identifier, public post text, timestamps, follower and engagement counts, and availability signals such as a
-          deleted, protected, suspended, edited, or renamed account. InfluencedX does not use X OAuth and cannot post
-          from an X account on a creator&apos;s behalf.
+          Ownership and campaign flows may process a public X handle or Farcaster username and FID, public post or cast
+          identifiers and text, timestamps, and availability signals such as deleted, protected, suspended, edited, or
+          renamed accounts and content. InfluencedX does not use X OAuth or Farcaster custody APIs and cannot publish
+          from a creator&apos;s account.
         </p>
         <p>
-          Raw X responses used to calculate marketplace metrics are not persisted in the metrics tables. Ownership
-          material needed for the fixed verification relay is sealed server-side at rest and is subject to the purge
+          Raw social-provider responses used to verify public evidence are not persisted as creator metrics. Ownership
+          material needed for a fixed verification request is sealed server-side at rest and is subject to the purge
           process described below.
         </p>
         <h3>Marketplace records</h3>
         <p>
-          Neon Postgres stores campaign briefs and criteria, budgets denominated in test-USDC units, applications,
+          Neon Postgres stores campaign briefs and criteria, budgets denominated in native test-GEN units, applications,
           creator pitches and requested rates, selections, acceptances, public-post submissions, resolution state,
           receipt hashes, and public creator profile commitments. Application details are returned only to the owning
           brand and the applying creator by the current API authorization rules.
@@ -73,8 +73,8 @@ export default function PrivacyPage() {
         <h2>WHY THE DATA IS USED</h2>
         <ul>
           <li>Authenticate the wallet that creates, applies to, or acts on a campaign.</li>
-          <li>Verify that a creator controls the public X account they claim.</li>
-          <li>Operate the marketplace lifecycle and reconcile it with confirmed Base Sepolia receipts.</li>
+          <li>Verify that a creator controls the public X or Farcaster identity they claim.</li>
+          <li>Operate the marketplace lifecycle and reconcile it with finalized GenLayer transactions.</li>
           <li>Ask GenLayer validators to evaluate the committed public evidence and campaign criteria.</li>
           <li>Produce sanitized creator metrics, estimated pay ranges, and risk signals when evidence is current.</li>
           <li>Prevent abuse, diagnose failures, enforce rate limits, and avoid duplicate broadcasts.</li>
@@ -86,12 +86,11 @@ export default function PrivacyPage() {
         <h2>WHERE RECORDS GO</h2>
         <div className="legal-grid">
           <div><strong>VERCEL</strong><p>Hosts the Next.js application and server-side testnet services. Hosting and security systems may process request metadata.</p></div>
-          <div><strong>NEON POSTGRES</strong><p>Stores verification state, marketplace records, sealed relay material, sanitized metrics, and reconciliation status.</p></div>
-          <div><strong>BASE SEPOLIA</strong><p>Publicly records wallet addresses, commitments, test-USDC amounts, campaign events, and transaction outcomes.</p></div>
-          <div><strong>GENLAYER STUDIONET</strong><p>Validators retrieve and interpret committed public X evidence. Requests, results, and related transaction data may be publicly observable.</p></div>
+          <div><strong>NEON POSTGRES</strong><p>Stores verification state, private pitches, marketplace projections, sealed evidence, sanitized metrics, and reconciliation status.</p></div>
+          <div><strong>GENLAYER STUDIONET</strong><p>Publicly records wallet addresses, commitments, test-GEN amounts, campaign state, evidence requests, results, and settlement outcomes.</p></div>
         </div>
         <p>
-          X, wallet software, RPC providers, block explorers, Base, GenLayer, Vercel, and Neon operate under their own
+          X, Farcaster, wallet software, RPC providers, block explorers, GenLayer, Vercel, and Neon operate under their own
           terms and data practices. Deleting an InfluencedX database record does not delete data those services already
           received or independently hold.
         </p>
@@ -101,17 +100,17 @@ export default function PrivacyPage() {
         <span>05 / RETENTION + DELETION</span>
         <h2>DELETABLE DATA IS NOT THE SAME AS BLOCKCHAIN DATA</h2>
         <p>
-          X-derived database records are designed for expiry and deletion. The purge path removes expired challenges
-          and metric evidence and removes stored X identifiers, handles, and post URLs when they are no longer needed,
+          Social-evidence database records are designed for expiry and deletion. The purge path removes expired challenges
+          and removes stored X or Farcaster identifiers, handles, and content references when they are no longer needed,
           while retaining the minimum commitments required to reconcile immutable chain state. A signed wallet session
           can be ended with the in-app sign-out control and otherwise expires automatically.
         </p>
         <div className="legal-warning">
           <strong>PUBLIC RECORD WARNING</strong>
           <p>
-            Base Sepolia is a public test network and GenLayer StudioNet is a temporary hosted network. Wallet addresses, hashes,
-            transaction data, and outcomes written there cannot be erased by InfluencedX. Public X posts may also remain
-            available through X or third-party archives after an offchain InfluencedX copy is removed.
+            GenLayer StudioNet is a temporary public developer network. Wallet addresses, hashes, transaction data,
+            test-GEN amounts, and outcomes written there cannot be erased by InfluencedX. Public posts and casts may also
+            remain available through X, Farcaster, or third-party archives after an offchain InfluencedX copy is removed.
           </p>
         </div>
         <p>
@@ -128,7 +127,7 @@ export default function PrivacyPage() {
         <ul>
           <li>Use the sign-out or switch-wallet control to clear the InfluencedX wallet-session cookie.</li>
           <li>Reject a wallet signature or transaction before it is broadcast.</li>
-          <li>Manage or delete the original X post through X, understanding that this can make verification or resolution unavailable.</li>
+          <li>Manage the original post or cast through its social network, understanding that removal can make verification or resolution unavailable.</li>
           <li>Use a fresh test wallet and avoid submitting sensitive content during this testnet phase.</li>
         </ul>
       </section>

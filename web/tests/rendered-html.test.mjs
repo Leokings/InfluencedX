@@ -51,17 +51,17 @@ async function render(pathname = "/", headers = {}) {
   });
 }
 
-test("server-renders the X ownership flow without claiming verification", async () => {
+test("server-renders the source-keyed identity flow without claiming verification", async () => {
   const response = await render("/verify");
   assert.equal(response.status, 200);
 
   const html = await response.text();
   assert.match(html, /PROVE/);
-  assert.match(html, /YOUR X\./);
+  assert.match(html, /YOUR ID\./);
+  assert.match(html, /public X or Farcaster account/);
   assert.match(html, /SECURITY GATE/);
-  assert.match(html, /GenLayer finality and Base watcher quorum are separate stages/);
-  assert.match(html, /a submitted post is never presented as verified/);
-  assert.doesNotMatch(html, /BASE VERIFIED|VERIFICATION COMPLETE/i);
+  assert.match(html, /source-keyed GenLayer identity/);
+  assert.doesNotMatch(html, /BASE|USDC|VERIFICATION COMPLETE/i);
 });
 
 test("serves the InfluencedX share card through Next static assets", async () => {
@@ -117,21 +117,22 @@ test("server-renders accurate public privacy and testnet terms pages", async () 
   ]);
 
   assert.match(privacy, /PRIVACY NOTICE/);
-  assert.match(privacy, /AUGUST 11, 2026/);
+  assert.match(privacy, /AUGUST 19, 2026/);
   assert.match(privacy, /HttpOnly/);
   assert.match(privacy, /NEON POSTGRES/);
-  assert.match(privacy, /BASE SEPOLIA/);
   assert.match(privacy, /GENLAYER STUDIONET/);
-  assert.doesNotMatch(privacy, /GENLAYER BRADBURY/);
+  assert.match(privacy, /Public X and Farcaster evidence/);
+  assert.doesNotMatch(privacy, /BASE SEPOLIA|USDC|GENLAYER BRADBURY/i);
   assert.match(privacy, /cannot be erased by InfluencedX/i);
-  assert.match(privacy, /does not use X OAuth/i);
+  assert.match(privacy, /does not use X OAuth or Farcaster custody APIs/i);
 
   assert.match(terms, /TESTNET TERMS/);
-  assert.match(terms, /AUGUST 11, 2026/);
+  assert.match(terms, /AUGUST 19, 2026/);
   assert.match(terms, /NO GUARANTEED PAYMENT OR REFUND/);
-  assert.match(terms, /TEST USDC HAS NO PROMISED MONETARY VALUE/);
+  assert.match(terms, /TEST GEN HAS NO PROMISED MONETARY VALUE/);
+  assert.match(terms, /X OR FARCASTER CREATOR CAMPAIGNS/i);
   assert.match(terms, /does not take custody of wallet keys/i);
-  assert.match(terms, /not a Base payment/i);
+  assert.doesNotMatch(terms, /BASE SEPOLIA|USDC|BASE PAYMENT/i);
   assert.match(terms, /href="\/privacy"/);
   assert.doesNotMatch(terms, /Delaware|United States|Nigeria|registered office/i);
 });

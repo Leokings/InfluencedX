@@ -41,13 +41,32 @@ test("ingress is idempotent and queues only the withdrawal ID", async () => {
   ]);
 });
 
-test("pending withdrawals are monitored without touching the owner signer", async () => {
+test("pending withdrawals are monitored without touching the confirmer signer", async () => {
   const { repository, client, queue, service } = await setup();
   client.withdrawal = { ...client.withdrawal!, status: "PENDING", emittedAtEpoch: 0 };
   await service.process(message(), 1);
   assert.equal(repository.records.get(WITHDRAWAL_ID)?.status, "WAITING_FOR_EMISSION");
   assert.equal(client.submitCalls.length, 0);
   assert.deepEqual(queue.discoveries, [{ withdrawalId: WITHDRAWAL_ID, attempt: 1 }]);
+});
+
+test("a persisted confirmer mismatch fails closed before any signer use", async () => {
+  const early = await setup();
+  early.repository.patchForTest(WITHDRAWAL_ID, {
+    withdrawalConfirmer: `0x${"ab".repeat(20)}`,
+  });
+  await early.service.process(message(), 1);
+  assert.equal(early.repository.records.get(WITHDRAWAL_ID)?.status, "POISONED");
+  assert.equal(early.client.submitCalls.length, 0);
+
+  const postBroadcast = await setup();
+  postBroadcast.repository.patchForTest(WITHDRAWAL_ID, {
+    status: "SUBMITTED",
+    withdrawalConfirmer: `0x${"ab".repeat(20)}`,
+  });
+  await postBroadcast.service.process(message(), 1);
+  assert.equal(postBroadcast.repository.records.get(WITHDRAWAL_ID)?.status, "RECONCILIATION_REQUIRED");
+  assert.equal(postBroadcast.client.submitCalls.length, 0);
 });
 
 test("a finalized parent-child proof produces only confirm_withdrawal then exact finalized state", async () => {
@@ -113,7 +132,7 @@ test("wrong confirmation receipt or accounting is never reported finalized", asy
   }
 });
 
-test("an externally confirmed or restored withdrawal never causes another owner write", async () => {
+test("an externally confirmed or restored withdrawal never causes another confirmer write", async () => {
   for (const status of ["CONFIRMED", "RESTORED_FAILED"] as const) {
     const { repository, client, service } = await setup();
     client.withdrawal = { ...client.withdrawal!, status };

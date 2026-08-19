@@ -2,10 +2,10 @@ import type { ReconcilerConfig } from "../lib/config";
 import {
   CONFIRM_METHOD,
   MARKETPLACE_ADDRESS,
-  MARKETPLACE_OWNER,
   MARKETPLACE_PROTOCOL,
   MARKETPLACE_RPC_ADDRESS,
   MARKETPLACE_SCHEMA_VERSION,
+  MARKETPLACE_WITHDRAWAL_CONFIRMER,
   PRECHECK_LEASE_MS,
   RECONCILER_NETWORK,
   STUDIONET_CHAIN_ID,
@@ -34,6 +34,8 @@ export const PARENT_TX = `0x${"34".repeat(32)}`;
 export const CHILD_TX = `0x${"56".repeat(32)}`;
 export const CONFIRM_TX = `0x${"78".repeat(32)}`;
 export const RECIPIENT = `0x${"9a".repeat(20)}`;
+export const WITHDRAWAL_CONFIRMER = MARKETPLACE_WITHDRAWAL_CONFIRMER;
+export const TEST_PRIVATE_KEY_SIGNER = "0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a";
 
 export function validEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -44,10 +46,10 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): No
     INFLUENCEDX_GENLAYER_CHAIN_ID: String(STUDIONET_CHAIN_ID),
     INFLUENCEDX_GENLAYER_RPC_URL: STUDIONET_RPC_URL,
     INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS: MARKETPLACE_ADDRESS,
-    INFLUENCEDX_GENLAYER_MARKETPLACE_OWNER: MARKETPLACE_OWNER,
+    INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER: WITHDRAWAL_CONFIRMER,
     INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL: MARKETPLACE_PROTOCOL,
     INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION: String(MARKETPLACE_SCHEMA_VERSION),
-    GENLAYER_WITHDRAWAL_OWNER_PRIVATE_KEY: `0x${"11".repeat(32)}`,
+    GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY: `0x${"11".repeat(32)}`,
     DATABASE_URL: "postgresql://example.invalid/influencedx",
     INFLUENCEDX_WITHDRAWAL_RECONCILER_SERVICE_TOKEN: "aa".repeat(32),
     INFLUENCEDX_WITHDRAWAL_CALLER_TEAM_SLUG: "leokings588-5902s-projects",
@@ -68,7 +70,7 @@ export function configFixture(): ReconcilerConfig {
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: MARKETPLACE_ADDRESS,
     rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
-    contractOwner: MARKETPLACE_OWNER,
+    contractWithdrawalConfirmer: WITHDRAWAL_CONFIRMER,
     contractProtocol: MARKETPLACE_PROTOCOL,
     contractSchemaVersion: MARKETPLACE_SCHEMA_VERSION,
     privateKey: `0x${"11".repeat(32)}`,
@@ -152,7 +154,7 @@ export function confirmationReceipt(overrides: Receipt = {}): Receipt {
   const proof = transferProof();
   return {
     hash: CONFIRM_TX,
-    sender: MARKETPLACE_OWNER,
+    sender: WITHDRAWAL_CONFIRMER,
     recipient: MARKETPLACE_ADDRESS,
     rawValueAtto: "0",
     statusName: "FINALIZED",
@@ -187,7 +189,7 @@ export class FakeQueue implements QueuePublisher {
 }
 
 export class FakeClient implements WithdrawalClient {
-  readonly signerAddress = MARKETPLACE_OWNER;
+  readonly signerAddress = WITHDRAWAL_CONFIRMER;
   readonly contractAddress = MARKETPLACE_ADDRESS;
   withdrawal: WithdrawalState | null = emittedWithdrawal();
   finalWithdrawal: WithdrawalState | null = emittedWithdrawal({
@@ -243,7 +245,7 @@ export class MemoryRepository implements ReconciliationRepository {
       network: RECONCILER_NETWORK,
       chainId: STUDIONET_CHAIN_ID,
       contractAddress: MARKETPLACE_ADDRESS,
-      contractOwner: MARKETPLACE_OWNER,
+      withdrawalConfirmer: WITHDRAWAL_CONFIRMER,
       functionName: CONFIRM_METHOD,
       valueAtto: "0",
       status: "QUEUED",

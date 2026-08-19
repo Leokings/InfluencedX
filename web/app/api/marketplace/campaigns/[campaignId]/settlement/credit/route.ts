@@ -2,7 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { prepareMarketplaceUnallocatedCredit } from "@/lib/marketplace-settlement";
+import { prepareGenLayerRefundUnallocated } from "@/lib/marketplace-genlayer-actions";
 import { ApiProblem, apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -24,7 +24,7 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await prepareMarketplaceUnallocatedCredit({ campaignId, session });
+    const result = await prepareGenLayerRefundUnallocated({ campaignId, session, body });
     return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },
     });

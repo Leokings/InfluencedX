@@ -23,10 +23,10 @@ import {
   type SettlementChainCampaign,
 } from "./marketplace-settlement-validation.ts";
 import type {
-  MarketplaceCampaignDto,
-  MarketplaceSettlementMutationResponse,
-  MarketplaceSettlementStateDto,
-  MarketplaceTransactionDto,
+  LegacyMarketplaceCampaignDto as MarketplaceCampaignDto,
+  LegacyMarketplaceSettlementMutationResponse as MarketplaceSettlementMutationResponse,
+  LegacyMarketplaceSettlementStateDto as MarketplaceSettlementStateDto,
+  LegacyMarketplaceTransactionDto as MarketplaceTransactionDto,
 } from "./marketplace-types.ts";
 import { ApiProblem } from "./verification-api.ts";
 import type { AuthenticatedWalletSession } from "./wallet-session.ts";

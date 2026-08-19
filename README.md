@@ -1,183 +1,187 @@
 # InfluencedX
 
-InfluencedX is an X-only creator marketplace. Brands publish campaigns and
-escrow test USDC on Base Sepolia; verified creators apply, accept work, submit a
-public X post, and have the frozen campaign rules evaluated on GenLayer
-StudioNet.
+InfluencedX is a creator marketplace whose active V2 protocol runs entirely on
+GenLayer. Brands escrow native GEN in a campaign; creators prove an X or
+Farcaster identity, apply for work, publish the required post or cast, and let
+GenLayer validators evaluate the frozen campaign terms. PASS, FAIL, and
+retryable UNDETERMINED outcomes settle inside the same Intelligent Contract.
 
-**Live Preview:** [influencedx-preview.vercel.app](https://influencedx-preview.vercel.app)
+> **Current network:** GenLayer StudioNet (`61999`) with developer-network GEN.
+> StudioNet is temporary and resettable. This repository does not claim a
+> mainnet launch or that StudioNet GEN has monetary value.
 
-The Preview is the current submission build. Its six hosted deployments are
-enabled: the web app, isolated StudioNet submitter, three independently keyed
-watchers, and the Base settlement coordinator/relayer. Marketplace discovery,
-wallet authentication, creator verification, profiles, campaign workflows, and
-automatic hosted settlement are available without a laptop or local operator
-process. A fresh complete StudioNet ownership proof and campaign-to-final-Base
-receipt still need to be recorded before the submission demo is complete.
-
-**Source:** [github.com/Leokings/InfluencedX](https://github.com/Leokings/InfluencedX)
-
-> **Submission network:** Base Sepolia (`84532`) + GenLayer StudioNet (`61999`)
-> + Base Sepolia test USDC. This is not a mainnet deployment, the assets have no
-> monetary value, and the current 2-of-3 watcher relay is an explicit trust
-> boundary rather than a native GenLayer-to-Base bridge. StudioNet is a
-> temporary, resettable developer network, so its state is demo evidence rather
-> than durable production state.
-
-The deployed ownership protocol intentionally retains the compatibility names
-`XProof v2`, `XProofAttestationReceiver`, `XPROOF_*`, and `AdProof*`. Renaming
-those identifiers would invalidate existing signatures, configuration, or
-deployed-contract integrations; the user-facing product name is **InfluencedX**.
-
-## Verified developer-network evidence
-
-| Component | Network | Address or transaction | Recorded state |
-| --- | --- | --- | --- |
-| APV2 ownership resolver | GenLayer StudioNet (`61999`) | `0x0913b5593Ff16974E2fd616cA678A4986Cb48600` | Deployment tx `0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591`; FINALIZED; eight-argument APV2 ABI |
-| Creator registry | Base Sepolia | [`0x10079EF049D283BC3f212CCaC4291b3aC2719C48`](https://sepolia.basescan.org/address/0x10079EF049D283BC3f212CCaC4291b3aC2719C48) | Deployed and wired to the receiver |
-| Campaign escrow | Base Sepolia | [`0x7e9B6B757d1Ef12509889826B2f2A42906661927`](https://sepolia.basescan.org/address/0x7e9B6B757d1Ef12509889826B2f2A42906661927) | Deployed with 250 bps test fee |
-| Attestation receiver | Base Sepolia | [`0x15dDbCd98F97065746a1c35f88BB670a7A942264`](https://sepolia.basescan.org/address/0x15dDbCd98F97065746a1c35f88BB670a7A942264) | StudioNet resolver set in [cutover tx `0x6b2032...bc839`](https://sepolia.basescan.org/tx/0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839); unpaused; three watchers; threshold two |
-| Test USDC | Base Sepolia | [`0x036CbD53842c5426634e7929541eC2318f3dCF7e`](https://sepolia.basescan.org/address/0x036CbD53842c5426634e7929541eC2318f3dCF7e) | Six-decimal test token only |
-| Hosted Preview | Vercel Preview | [influencedx-preview.vercel.app](https://influencedx-preview.vercel.app) | All six services enabled; queues `influencedx-studionet-submissions-v1` and `influencedx-studionet-campaign-progression-v2` |
-| Historical ownership proof relay | Base Sepolia | [`0x0b26bffd19643ea816b740432c0293eee26bccbf6b0b7cb0407cb1c3063c6406`](https://sepolia.basescan.org/tx/0x0b26bffd19643ea816b740432c0293eee26bccbf6b0b7cb0407cb1c3063c6406) | Created active registry profile `1` during the earlier Bradbury phase; new proofs use StudioNet |
-
-The current deployment records are
-[`deployments/base-sepolia.json`](deployments/base-sepolia.json) and
+The active contract is
+[`InfluencedXMarketplace.py`](contracts/genlayer/InfluencedXMarketplace.py),
+deployed at
+[`0x58D598B8323E9C1d041989DccE80E737109DE347`](https://explorer-studio.genlayer.com/address/0x58D598B8323E9C1d041989DccE80E737109DE347).
+The immutable deployment record is
 [`deployments/genlayer-studionet.json`](deployments/genlayer-studionet.json).
-[`deployments/genlayer-bradbury.json`](deployments/genlayer-bradbury.json) is
-retained as immutable historical evidence and is not active configuration.
-Never infer a live result from the interface alone; verify the receipt or API
-state before presenting a campaign as funded, verified, paid, or refunded.
 
-## Architecture
+## Release status
+
+The contract source and deployment are frozen as V2. The native web/API,
+database migration, marketplace operator, and restricted withdrawal reconciler
+are deployed and enabled in an isolated Preview release at
+[`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app).
+**The existing public URL has not yet been cut over to this GenLayer-only
+build.** A public V2 claim still requires the following user-driven evidence:
+
+1. one fresh X identity and one fresh Farcaster identity finalize against V2;
+2. one native-GEN campaign completes create, apply, select, accept, submit,
+   resolve, credit, request withdrawal, execute withdrawal, and confirmed
+   delivery; and
+3. the resulting hashes and final contract state are recorded in
+   [the verification report](docs/TEST-REPORT.md).
+
+Until those checks pass, screenshots or database rows are not proof that a
+campaign is funded, settled, or paid.
+
+## Frozen StudioNet deployment
+
+| Setting | Value |
+| --- | --- |
+| Network | `studionet` |
+| Chain ID | `61999` |
+| RPC | `https://studio.genlayer.com/api` |
+| Explorer | `https://explorer-studio.genlayer.com` |
+| Marketplace V2 | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
+| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Protocol / storage | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
+| Native asset | `GEN`, 18 decimals |
+| Protocol fee | `250` bps, snapshotted per campaign |
+| Upgrade delay | `604800` seconds (seven full days) |
+
+The deployment transaction reached `FINALIZED` with `MAJORITY_AGREE` and a
+successful leader return. The manifest also records the owner, treasury,
+dedicated upgrade administrator, source hash, and retired V1 deployment. Do not
+copy addresses from prose into runtime configuration without comparing the
+manifest and live `get_config()` result.
+
+## Active architecture
 
 ```mermaid
 flowchart LR
-    U["Brand or creator"] --> UI["InfluencedX Next.js app"]
-    U --> W["EVM wallet"]
-    UI --> DB["Neon PostgreSQL<br/>marketplace + deletable X data"]
-    W --> BASE["Base Sepolia<br/>registry + escrow + receiver"]
-    UI --> SUB["OIDC-authenticated<br/>StudioNet submitter"]
-    SUB --> GL["GenLayer StudioNet<br/>APV2 resolver"]
+    U["Brand or creator"] --> APP["InfluencedX web app"]
+    U --> WALLET["GenLayer-compatible wallet"]
+    APP --> DB["PostgreSQL projection + private app data"]
+    WALLET --> GL["InfluencedXMarketplace V2<br/>StudioNet 61999"]
     X["Public X post/profile"] --> GL
-    GL --> Q["Three hosted independent watchers<br/>2-of-3 quorum"]
-    Q --> R["Hosted settlement coordinator<br/>low-balance Base relayer"]
-    R --> BASE
-    BASE --> UI
+    F["Public Farcaster cast/profile"] --> GL
+    APP --> OP["Hosted marketplace operator"]
+    OP --> GL
+    APP --> WR["Hosted withdrawal reconciler"]
+    WR --> GL
 ```
 
-- **Base Sepolia is authoritative** for wallet-to-X commitments, campaign
-  agreements, test-USDC custody, lifecycle events, and settlement accounting.
-- **GenLayer StudioNet is authoritative** for interpreting public X evidence
-  against the immutable ownership or campaign rules.
-- **The hosted watcher quorum and coordinator are an explicit bridge trust
-  boundary.** They automate the StudioNet-to-Base handoff, but a result is not
-  paid or refunded until the exact Base receipt succeeds.
-- **PostgreSQL is authoritative only for application state** that does not
-  belong onchain: campaign discovery, pitches, sanitized public metrics, sealed
-  evidence, and reconciliation state.
-- **X is an external availability dependency.** No OAuth is used. A protected,
-  deleted, rate-limited, or ambiguous source must resolve to `UNDETERMINED`, not
-  an automatic creator failure.
+- **GenLayer is authoritative** for source-keyed creator identities, campaign
+  terms, native GEN custody, applications, assignments, evidence, consensus
+  resolution, credits, fees, refunds, withdrawals, and the upgrade schedule.
+- **Users sign their own writes.** The server prepares an exact contract call;
+  the connected wallet signs it; the backend accepts the state transition only
+  after matching sender, contract, method, arguments, native value, finalized
+  receipt, and resulting contract state.
+- **PostgreSQL is a projection and application store.** It holds sessions,
+  private pitches, idempotency records, queue state, and deletable supporting
+  data. It never replaces authoritative contract state or custody.
+- **The marketplace operator is permissionless maintenance automation.** Its
+  dedicated StudioNet key can call only `resolve_assignment`,
+  `expire_assignment`, and `finalize_campaign`, always with zero value.
+- **The withdrawal reconciler uses a separate restricted confirmer.** It proves
+  the exact finalized native child transfer before it can call only
+  `confirm_withdrawal`. Ambiguity is quarantined for manual review.
+- **X and Farcaster are availability dependencies.** Ambiguous or transient
+  retrieval resolves to UNDETERMINED, not an automatic creator loss.
 
 See [the detailed architecture](docs/ARCHITECTURE.md),
-[the StudioNet boundary](docs/STUDIONET.md),
-[the APV2 ownership specification](docs/OWNERSHIP-V2.md), and
-[the verification report](docs/TEST-REPORT.md).
+[the V2 protocol reference](docs/GENLAYER-MARKETPLACE.md), and
+[the StudioNet boundary](docs/STUDIONET.md).
 
-## Complete user flow
+## Product flow
 
-1. A user connects an EVM wallet and signs a short-lived login challenge. The
-   server binds its HttpOnly session to that wallet; the user can sign out and
-   switch wallets explicitly.
-2. A creator requests an APV2 challenge, publishes the exact one-time text from
-   the X account, and submits the canonical `x.com/<handle>/status/<id>` URL.
-3. GenLayer validators retrieve the public post and profile, derive the immutable
-   numeric X identity, and finalize a structured ownership result. A watcher
-   quorum relays the verified commitment to the Base creator registry.
-4. A brand creates a campaign with deliverables, disclosure rules, required and
-   forbidden phrases, semantic brief, budget, and deadlines. The server freezes
-   those fields into an exact terms document and hash.
-5. The brand approves the exact test-USDC amount and creates the campaign in the
-   Base escrow. InfluencedX records `funded` only after verifying the receipt and
-   `CampaignCreated` event.
-6. A verified creator applies with a pitch and requested rate. The owning brand
-   can see its applications; another viewer cannot enumerate private pitches.
-7. The brand selects an application through a prepared Base transaction and the
-   creator accepts the resulting agreement through a second Base transaction.
-   Each database transition occurs only after its exact receipt is confirmed.
-8. The creator publishes the work on X and submits its canonical post URL. Base
-   stores commitments, not the raw post text; the receipt moves the campaign to
-   `submitted`.
-9. After the retention period, the brand or creator requests resolution on Base.
-   The app confirms that receipt, then queues and polls the exact request through
-   the StudioNet submitter without accepting caller-controlled resolver methods or
-   arguments.
-10. After GenLayer finality, the hosted coordinator obtains matching signatures
-    from at least two of the three isolated watchers, revalidates the complete
-    binding, and uses the low-balance relayer to submit the exact Base receiver
-    call. The receiver settles PASS, FAIL, or retryable UNDETERMINED. Do not call
-    a campaign paid or refunded unless that final Base receipt is visible.
+1. A user connects a GenLayer-compatible wallet and signs a short-lived login
+   challenge. The server binds the HttpOnly session to that address.
+2. A creator chooses X or Farcaster, publishes the exact one-time challenge,
+   and signs `activate_creator` or `activate_farcaster_creator` directly on V2.
+   Validators derive and bind the stable X user ID or Farcaster FID.
+3. A brand defines a source-specific campaign. `create_campaign` receives the
+   exact budget as native call value, freezes the terms, and holds GEN in V2.
+4. A verified creator for the campaign's source applies. The brand selects a
+   creator, who accepts and later commits the X post ID or Farcaster cast hash.
+5. After retention, the hosted operator calls the fixed permissionless
+   resolution method. Validators retrieve the frozen source and evaluate exact
+   and semantic requirements.
+6. PASS credits the creator minus the snapshotted fee; FAIL credits the brand;
+   UNDETERMINED follows bounded retry and refund rules. Funds remain pull-based.
+7. A user requests and executes a withdrawal. The reconciler proves the exact
+   child native transfer and its restricted confirmer records it on V2. Only contract status
+   `CONFIRMED` is displayed as delivered.
 
-## Local setup and validation
+## Local validation
 
-Requirements: Node.js 24, npm, PostgreSQL/Neon for live marketplace mutations,
-Python for direct GenLayer tests, and the GenLayer CLI/GenVM linter for contract
-deployment checks.
+Requirements are Node.js 24, npm, Python 3.13, PostgreSQL/Neon for database
+checks, the GenLayer CLI, and the GenVM linter.
 
 ```powershell
 cd C:\path\to\adproof
-npm ci
-npm run contracts:compile
-npm run test:base
-npm run test:relay
-npm run test:operator
-npm run test:services
-npm run test:submitter
+python -m pip install --requirement requirements-direct.txt
+genvm-lint check contracts/genlayer/InfluencedXMarketplace.py --json
+python -m pytest tests/direct -q
 
 cd web
 npm ci
 Copy-Item .env.example .env.local
-npm run db:migrate
-npm run db:verify
-npm test
 npm run lint
-npm run dev
+npm test
+
+cd ..\services\vercel-genlayer-marketplace-operator
+npm ci
+npm run lint
+npm test
+npm run build
+
+cd ..\vercel-genlayer-withdrawal-reconciler
+npm ci
+npm run lint
+npm test
+npm run build
 ```
 
-Fill the copied `.env.local` only on the developer machine or through the hosting
-provider's encrypted environment store. Never commit `.env.local`, `.secrets/`,
-password files, private keys, keystores, Vercel metadata, or runtime reports.
-The committed `.env.example` files contain names and safe public testnet values
-only.
+`tests/integration/` contains network-mutating StudioNet checks and is not part
+of deterministic CI. Run it only with an explicitly selected, disposable,
+funded StudioNet account and record every resulting hash.
 
-Optional GenLayer checks from the repository root:
+Copy [the web environment template](web/.env.example) and fill secrets only in
+the hosting provider's encrypted environment store or an ignored local file.
+Never commit `.env.local`, `.secrets/`, private keys, wallet exports, database
+URLs, service tokens, Vercel metadata, or runtime reports.
 
-```powershell
-python -m pytest tests/direct -v
-genvm-lint check contracts/genlayer/AdProofXResolver.py
-```
+## Active versus historical commands
 
-## Continuous integration
+The root `package.json` still contains Solidity, Base Sepolia, watcher, relay,
+and legacy submitter commands so the former prototype can be reproduced and
+audited. They are **historical tests and operators, not V2 deployment steps**.
+In particular, do not run `deploy:base-sepolia`, `cutover:base:studionet`,
+`brand:fund:base-sepolia`, `settlement:*`, `relay:*`, or `test:services` when
+operating the GenLayer-only product. V2 operations use the contract, web app,
+marketplace operator, and withdrawal reconciler named above.
 
-- [`ci.yml`](.github/workflows/ci.yml) runs only deterministic, secret-free
-  protocol, web, StudioNet submitter, campaign relay, and watcher checks on Node
-  24. It has read-only repository permission and no migration, deployment,
-  signer, live-RPC, or broadcast command.
-- [`x-stress.yml`](.github/workflows/x-stress.yml) is a separate scheduled/manual
-  public-X availability regression. It persists only the sanitized stress
-  report artifact and is intentionally excluded from pull-request CI.
+Historical Base/USDC/watcher evidence is isolated in
+[`docs/preview-base-sepolia-relay.md`](docs/preview-base-sepolia-relay.md),
+[`docs/campaign-settlement-services.md`](docs/campaign-settlement-services.md),
+[`docs/WATCHER-KEYS.md`](docs/WATCHER-KEYS.md), and
+[`deployments/base-sepolia.json`](deployments/base-sepolia.json). None of those
+files is active V2 runtime configuration.
 
-## Submission and operations
+## Operations and submission
 
-- [Three-minute demo script and recording checklist](docs/DEMO-SCRIPT.md)
-- [Deployment and rollback runbook](docs/DEPLOYMENT.md)
-- [Retired Bradbury ownership-relay record](docs/preview-base-sepolia-relay.md)
-- [Watcher-key separation](docs/WATCHER-KEYS.md)
-- [Web runtime and environment gates](web/README.md)
+- [Deployment, cutover, rollback, and reset runbook](docs/DEPLOYMENT.md)
+- [Current verification evidence and open gates](docs/TEST-REPORT.md)
+- [GenLayer V2 three-minute demo checklist](docs/DEMO-SCRIPT.md)
+- [Marketplace operator service](services/vercel-genlayer-marketplace-operator/README.md)
+- [Withdrawal reconciler service](services/vercel-genlayer-withdrawal-reconciler/README.md)
 
-The repository demonstrates a production-oriented architecture on testnets. It
-does **not** claim a mainnet launch, independent audit, native cross-chain proof,
-or safe custody of real funds. Remaining submission evidence is one fresh
-complete StudioNet ownership flow, one full campaign through its final Base
-receipt, and the three-minute demo video.
+The current StudioNet deployment is suitable for developer-network testing,
+not real-value custody. A future mainnet release requires fresh network-scoped
+deployment records, production signer governance, independent security review,
+operational monitoring, backup/restore drills, and a complete value-transfer
+rehearsal on the target network.

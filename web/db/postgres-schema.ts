@@ -244,6 +244,17 @@ export const postgresVerificationRequests = pgTable(
     xChallengeIssuedAt: epochMs("x_challenge_issued_at"),
     xChallengeExpiresAt: epochMs("x_challenge_expires_at"),
     credentialExpiresAt: epochMs("credential_expires_at"),
+    identitySource: text("identity_source").$type<"X" | "FARCASTER">(),
+    farcasterUsername: text("farcaster_username"),
+    farcasterFid: text("farcaster_fid"),
+    farcasterChallenge: text("farcaster_challenge"),
+    farcasterCastText: text("farcaster_cast_text"),
+    farcasterChallengeIssuedAt: epochMs("farcaster_challenge_issued_at"),
+    farcasterChallengeExpiresAt: epochMs("farcaster_challenge_expires_at"),
+    farcasterCastHash: text("farcaster_cast_hash"),
+    activationPreparedId: text("activation_prepared_id"),
+    activationTxHash: text("activation_tx_hash"),
+    activationConfirmedAt: epochMs("activation_confirmed_at"),
 
     normalizedVerificationPostUrl: text("normalized_verification_post_url"),
     verificationPostId: text("verification_post_id"),
@@ -351,7 +362,7 @@ export const postgresVerificationRequests = pgTable(
     ),
     check(
       "verification_requests_expiry_state",
-      sql`(${table.status} = 'EXPIRED' and ${table.activeOwnerUserId} is null) or (${table.status} <> 'EXPIRED' and ${table.activeOwnerUserId} is not null)`,
+      sql`(${table.status} = 'EXPIRED' and ${table.activeOwnerUserId} is null) or (${table.status} <> 'EXPIRED' and (${table.activeOwnerUserId} is not null or (${table.activationConfirmedAt} is not null and ${table.genlayerOutcome} in ('VERIFIED', 'REJECTED'))))`,
     ),
     check(
       "verification_requests_intent_state",
@@ -912,6 +923,736 @@ export const marketplaceApplications = pgTable(
     check(
       "marketplace_applications_progression_error_code_format",
       sql`${table.progressionErrorCode} is null or ${table.progressionErrorCode} ~ '^[A-Z0-9_]{1,64}$'`,
+    ),
+  ],
+);
+
+/**
+ * GenLayer-native marketplace projections.
+ *
+ * The pre-existing marketplace tables remain the immutable historical index
+ * for Base Sepolia campaigns.  These tables are deliberately additive: every
+ * StudioNet value-bearing fact is namespaced by network + contract and uses
+ * native GEN atto units (18 decimals). Private pitches live only in the
+ * GenLayer-private application table and are represented onchain by a hash.
+ */
+export const marketplaceGenLayerTransactionStatuses = [
+  "PREPARED",
+  "SUBMITTED",
+  "ACCEPTED",
+  "FINALIZED",
+  "EXECUTION_FAILED",
+  "NETWORK_TERMINATED",
+  "RECONCILIATION_REQUIRED",
+] as const;
+
+export type MarketplaceGenLayerTransactionStatus =
+  (typeof marketplaceGenLayerTransactionStatuses)[number];
+
+export const marketplaceGenLayerOperations = [
+  "ACTIVATE_CREATOR",
+  "CREATE_CAMPAIGN",
+  "APPLY",
+  "WITHDRAW_APPLICATION",
+  "SELECT_CREATOR",
+  "ACCEPT_ASSIGNMENT",
+  "DECLINE_ASSIGNMENT",
+  "SUBMIT_EVIDENCE",
+  "RESOLVE_ASSIGNMENT",
+  "EXPIRE_ASSIGNMENT",
+  "REFUND_UNALLOCATED",
+  "CANCEL_CAMPAIGN",
+  "FINALIZE_CAMPAIGN",
+  "REFUND_UNDETERMINED",
+  "REQUEST_WITHDRAWAL",
+  "EXECUTE_WITHDRAWAL",
+  "RECAPITALIZE_FAILED_WITHDRAWAL",
+] as const;
+
+export type MarketplaceGenLayerOperation =
+  (typeof marketplaceGenLayerOperations)[number];
+
+export const marketplaceGenLayerCampaignDrafts = pgTable(
+  "marketplace_genlayer_campaign_drafts",
+  {
+    id: text("id").primaryKey(),
+    brandWallet: text("brand_wallet").notNull(),
+    brandName: text("brand_name").notNull(),
+    contentSource: text("content_source")
+      .$type<"X" | "FARCASTER">()
+      .notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    category: text("category").notNull(),
+    format: text("format").notNull(),
+    deliverables: jsonb("deliverables").$type<string[]>().notNull(),
+    requiredPhrases: jsonb("required_phrases").$type<string[]>().notNull(),
+    forbiddenPhrases: jsonb("forbidden_phrases").$type<string[]>().notNull(),
+    requireAdDisclosure: boolean("require_ad_disclosure").notNull(),
+    semanticBrief: text("semantic_brief").notNull(),
+    termsDocument: jsonb("terms_document")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    termsHash: text("terms_hash").notNull(),
+    clientNonce: text("client_nonce").notNull(),
+    budgetAtto: numeric("budget_atto", { precision: 78, scale: 0 }).notNull(),
+    applicationDeadlineAt: epochMs("application_deadline_at").notNull(),
+    selectionDeadlineAt: epochMs("selection_deadline_at").notNull(),
+    submissionDeadlineAt: epochMs("submission_deadline_at").notNull(),
+    retentionSeconds: epochMs("retention_seconds").notNull(),
+    maxUndeterminedRetries: integer("max_undetermined_retries")
+      .notNull()
+      .default(2),
+    status: text("status").notNull().default("FUNDING"),
+    revision: epochMs("revision").notNull().default(0),
+    createdAt: epochMs("created_at").notNull(),
+    updatedAt: epochMs("updated_at").notNull(),
+  },
+  (table) => [
+    index("marketplace_genlayer_campaign_drafts_brand_idx").on(
+      table.brandWallet,
+      table.createdAt.desc(),
+    ),
+    index("marketplace_genlayer_campaign_drafts_status_idx").on(
+      table.status,
+      table.createdAt.desc(),
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_wallet",
+      sql`${table.brandWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_source",
+      sql`${table.contentSource} in ('X', 'FARCASTER')`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_terms",
+      sql`${table.termsHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_money",
+      sql`${table.budgetAtto} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_deadlines",
+      sql`${table.applicationDeadlineAt} > 0 and ${table.selectionDeadlineAt} > ${table.applicationDeadlineAt} and ${table.submissionDeadlineAt} > ${table.selectionDeadlineAt} and ${table.retentionSeconds} between 60 and 604800`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_status",
+      sql`${table.status} in ('FUNDING', 'OPEN', 'CANCELLED', 'CLOSED')`,
+    ),
+    check(
+      "marketplace_genlayer_campaign_drafts_retries",
+      sql`${table.maxUndeterminedRetries} between 1 and 5`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerProfiles = pgTable(
+  "marketplace_genlayer_profiles",
+  {
+    projectionId: text("projection_id").primaryKey(),
+    // V2 identities are wallet + source keyed. identity_hash is the stable,
+    // collision-resistant external identity. No Base profile identifier exists.
+    identityHash: text("identity_hash").notNull(),
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    ownerWallet: text("owner_wallet").notNull(),
+    source: text("source").$type<"X" | "FARCASTER">().notNull(),
+    handle: text("handle").notNull(),
+    externalUserId: text("external_user_id").notNull(),
+    ownershipRequestId: text("ownership_request_id").notNull(),
+    activationTxHash: text("activation_tx_hash").notNull(),
+    publicHandle: text("public_handle"),
+    displayName: text("display_name"),
+    bio: text("bio"),
+    categories: jsonb("categories").$type<string[]>().notNull().default([]),
+    visibility: marketplaceProfileVisibilityEnum("visibility")
+      .notNull()
+      .default("PUBLIC"),
+    active: boolean("active").notNull(),
+    verifiedAt: epochMs("verified_at").notNull(),
+    expiresAt: epochMs("expires_at").notNull(),
+    finalizedAt: epochMs("finalized_at").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    projectedAt: epochMs("projected_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_profiles_owner_contract_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.ownerWallet,
+      table.source,
+    ),
+    uniqueIndex("marketplace_genlayer_profiles_identity_contract_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.identityHash,
+    ),
+    check(
+      "marketplace_genlayer_profiles_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_profiles_hashes",
+      sql`${table.projectionId} ~ '^0x[0-9a-f]{64}$' and ${table.identityHash} ~ '^0x[0-9a-f]{64}$' and ${table.ownershipRequestId} ~ '^0x[0-9a-f]{64}$' and ${table.activationTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_profiles_addresses",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.ownerWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_profiles_source",
+      sql`${table.source} in ('X', 'FARCASTER')`,
+    ),
+    check(
+      "marketplace_genlayer_profiles_time_order",
+      sql`${table.expiresAt} > ${table.verifiedAt} and ${table.projectedAt} >= ${table.finalizedAt}`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerApplicationsPrivate = pgTable(
+  "marketplace_genlayer_applications_private",
+  {
+    id: text("id").primaryKey(),
+    localCampaignId: text("local_campaign_id")
+      .notNull()
+      .references(() => marketplaceGenLayerCampaignDrafts.id, {
+        onDelete: "restrict",
+      }),
+    creatorProfileProjectionId: text("creator_profile_projection_id")
+      .notNull()
+      .references(() => marketplaceGenLayerProfiles.projectionId, {
+        onDelete: "restrict",
+      }),
+    creatorWallet: text("creator_wallet").notNull(),
+    requestedRateAtto: numeric("requested_rate_atto", {
+      precision: 78,
+      scale: 0,
+    }).notNull(),
+    pitch: text("pitch").notNull(),
+    pitchCommitment: text("pitch_commitment").notNull(),
+    status: text("status").notNull().default("PENDING_ONCHAIN"),
+    revision: epochMs("revision").notNull().default(0),
+    createdAt: epochMs("created_at").notNull(),
+    updatedAt: epochMs("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_applications_campaign_creator_idx").on(
+      table.localCampaignId,
+      table.creatorWallet,
+    ),
+    index("marketplace_genlayer_applications_creator_idx").on(
+      table.creatorWallet,
+      table.createdAt.desc(),
+    ),
+    check(
+      "marketplace_genlayer_applications_wallet",
+      sql`${table.creatorWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_applications_money",
+      sql`${table.requestedRateAtto} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_applications_commitment",
+      sql`${table.pitchCommitment} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_applications_status",
+      sql`${table.status} in ('PENDING_ONCHAIN', 'APPLIED', 'SELECTED', 'ACCEPTED', 'DECLINED', 'REJECTED', 'WITHDRAWN')`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerCampaigns = pgTable(
+  "marketplace_genlayer_campaigns",
+  {
+    projectionId: text("projection_id").primaryKey(),
+    campaignId: text("campaign_id").notNull(),
+    localCampaignId: text("local_campaign_id")
+      .notNull()
+      .references(() => marketplaceGenLayerCampaignDrafts.id, {
+        onDelete: "restrict",
+      }),
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    brandWallet: text("brand_wallet").notNull(),
+    clientNonce: text("client_nonce").notNull(),
+    contentSource: text("content_source")
+      .$type<"X" | "FARCASTER">()
+      .notNull(),
+    termsHash: text("terms_hash").notNull(),
+    budgetAtto: numeric("budget_atto", { precision: 78, scale: 0 }).notNull(),
+    availableAtto: numeric("available_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    reservedAtto: numeric("reserved_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    settledAtto: numeric("settled_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    creatorPaidAtto: numeric("creator_paid_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    brandRefundedAtto: numeric("brand_refunded_atto", {
+      precision: 78,
+      scale: 0,
+    })
+      .notNull()
+      .default("0"),
+    feeAtto: numeric("fee_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    status: text("status").notNull(),
+    feeBps: integer("fee_bps").notNull(),
+    treasuryWallet: text("treasury_wallet").notNull(),
+    applicationCount: integer("application_count").notNull(),
+    assignmentCount: integer("assignment_count").notNull(),
+    maxUndeterminedRetries: integer("max_undetermined_retries").notNull(),
+    applicationDeadlineEpoch: epochMs("application_deadline_epoch").notNull(),
+    selectionDeadlineEpoch: epochMs("selection_deadline_epoch").notNull(),
+    submissionDeadlineEpoch: epochMs("submission_deadline_epoch").notNull(),
+    retentionSeconds: epochMs("retention_seconds").notNull(),
+    createdAtEpoch: epochMs("created_at_epoch").notNull(),
+    closedAtEpoch: epochMs("closed_at_epoch").notNull(),
+    creationTxHash: text("creation_tx_hash").notNull(),
+    lastTxHash: text("last_tx_hash").notNull(),
+    finalizedAt: epochMs("finalized_at").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    projectedAt: epochMs("projected_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_campaigns_local_idx").on(
+      table.localCampaignId,
+    ),
+    uniqueIndex("marketplace_genlayer_campaigns_entity_contract_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.campaignId,
+    ),
+    uniqueIndex("marketplace_genlayer_campaigns_tx_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.creationTxHash,
+    ),
+    index("marketplace_genlayer_campaigns_status_idx").on(
+      table.status,
+      table.projectedAt,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_hashes",
+      sql`${table.projectionId} ~ '^0x[0-9a-f]{64}$' and ${table.campaignId} ~ '^0x[0-9a-f]{64}$' and ${table.termsHash} ~ '^0x[0-9a-f]{64}$' and ${table.creationTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.lastTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_addresses",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.brandWallet} ~ '^0x[0-9a-f]{40}$' and ${table.treasuryWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_source",
+      sql`${table.contentSource} in ('X', 'FARCASTER')`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_money",
+      sql`${table.budgetAtto} > 0 and ${table.availableAtto} >= 0 and ${table.reservedAtto} >= 0 and ${table.settledAtto} >= 0 and ${table.creatorPaidAtto} >= 0 and ${table.brandRefundedAtto} >= 0 and ${table.feeAtto} >= 0 and ${table.availableAtto} + ${table.reservedAtto} + ${table.creatorPaidAtto} + ${table.brandRefundedAtto} + ${table.feeAtto} = ${table.budgetAtto} and ${table.settledAtto} = ${table.creatorPaidAtto} + ${table.brandRefundedAtto} + ${table.feeAtto}`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_deadlines",
+      sql`${table.applicationDeadlineEpoch} > 0 and ${table.selectionDeadlineEpoch} > ${table.applicationDeadlineEpoch} and ${table.submissionDeadlineEpoch} > ${table.selectionDeadlineEpoch} and ${table.retentionSeconds} between 60 and 604800`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_retries",
+      sql`${table.maxUndeterminedRetries} between 1 and 5`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_status",
+      sql`${table.status} in ('OPEN', 'CANCELLED', 'CLOSED')`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_counts",
+      sql`${table.applicationCount} >= 0 and ${table.assignmentCount} >= 0 and ${table.feeBps} between 0 and 1000`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerAssignments = pgTable(
+  "marketplace_genlayer_assignments",
+  {
+    projectionId: text("projection_id").primaryKey(),
+    assignmentId: text("assignment_id").notNull(),
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    campaignProjectionId: text("campaign_projection_id")
+      .notNull()
+      .references(() => marketplaceGenLayerCampaigns.projectionId, {
+        onDelete: "restrict",
+      }),
+    campaignId: text("campaign_id").notNull(),
+    localApplicationId: text("local_application_id")
+      .notNull()
+      .references(() => marketplaceGenLayerApplicationsPrivate.id, {
+        onDelete: "restrict",
+      }),
+    brandWallet: text("brand_wallet").notNull(),
+    creatorWallet: text("creator_wallet").notNull(),
+    contentSource: text("content_source")
+      .$type<"X" | "FARCASTER">()
+      .notNull(),
+    creatorHandle: text("creator_handle").notNull(),
+    creatorExternalUserId: text("creator_external_user_id").notNull(),
+    creatorIdentityHash: text("creator_identity_hash").notNull(),
+    applicationId: text("application_id").notNull(),
+    agreedRateAtto: numeric("agreed_rate_atto", {
+      precision: 78,
+      scale: 0,
+    }).notNull(),
+    agreementHash: text("agreement_hash").notNull(),
+    status: text("status").notNull(),
+    selectedAtEpoch: epochMs("selected_at_epoch").notNull(),
+    acceptanceDeadlineEpoch: epochMs("acceptance_deadline_epoch").notNull(),
+    acceptedAtEpoch: epochMs("accepted_at_epoch").notNull(),
+    postId: text("post_id").notNull(),
+    submissionHash: text("submission_hash"),
+    resolutionRequestId: text("resolution_request_id"),
+    resolutionAttempts: integer("resolution_attempts").notNull().default(0),
+    resolutionEligibleAtEpoch: epochMs("resolution_eligible_at_epoch")
+      .notNull()
+      .default(0),
+    lastResolutionAtEpoch: epochMs("last_resolution_at_epoch")
+      .notNull()
+      .default(0),
+    evidenceHash: text("evidence_hash"),
+    outcome: marketplaceResolutionOutcomeEnum("outcome"),
+    reasoning: text("reasoning").notNull().default(""),
+    resolutionChecks: jsonb("resolution_checks")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    resolutionRound: integer("resolution_round").notNull().default(0),
+    maxUndeterminedRetries: integer("max_undetermined_retries").notNull(),
+    creatorCreditAtto: numeric("creator_credit_atto", {
+      precision: 78,
+      scale: 0,
+    })
+      .notNull()
+      .default("0"),
+    brandCreditAtto: numeric("brand_credit_atto", {
+      precision: 78,
+      scale: 0,
+    })
+      .notNull()
+      .default("0"),
+    feeAtto: numeric("fee_atto", {
+      precision: 78,
+      scale: 0,
+    })
+      .notNull()
+      .default("0"),
+    submittedAtEpoch: epochMs("submitted_at_epoch").notNull().default(0),
+    settledAtEpoch: epochMs("settled_at_epoch").notNull().default(0),
+    closedAtEpoch: epochMs("closed_at_epoch").notNull().default(0),
+    selectionTxHash: text("selection_tx_hash").notNull(),
+    lastTxHash: text("last_tx_hash").notNull(),
+    finalizedAt: epochMs("finalized_at").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    projectedAt: epochMs("projected_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_assignments_application_idx").on(
+      table.localApplicationId,
+    ),
+    uniqueIndex("marketplace_genlayer_assignments_entity_contract_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.assignmentId,
+    ),
+    uniqueIndex("marketplace_genlayer_assignments_selection_tx_idx").on(
+      table.campaignProjectionId,
+      table.selectionTxHash,
+    ),
+    index("marketplace_genlayer_assignments_campaign_status_idx").on(
+      table.campaignId,
+      table.status,
+    ),
+    check(
+      "marketplace_genlayer_assignments_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_hashes",
+      sql`${table.projectionId} ~ '^0x[0-9a-f]{64}$' and ${table.assignmentId} ~ '^0x[0-9a-f]{64}$' and ${table.campaignId} ~ '^0x[0-9a-f]{64}$' and ${table.applicationId} ~ '^0x[0-9a-f]{64}$' and ${table.agreementHash} ~ '^0x[0-9a-f]{64}$' and ${table.creatorIdentityHash} ~ '^0x[0-9a-f]{64}$' and ${table.selectionTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.lastTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$' and (${table.resolutionRequestId} is null or ${table.resolutionRequestId} ~ '^0x[0-9a-f]{64}$') and (${table.submissionHash} is null or ${table.submissionHash} ~ '^0x[0-9a-f]{64}$') and (${table.evidenceHash} is null or ${table.evidenceHash} ~ '^0x[0-9a-f]{64}$')`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_creator",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.brandWallet} ~ '^0x[0-9a-f]{40}$' and ${table.creatorWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_source",
+      sql`${table.contentSource} in ('X', 'FARCASTER')`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_money",
+      sql`${table.agreedRateAtto} > 0 and ${table.creatorCreditAtto} >= 0 and ${table.brandCreditAtto} >= 0 and ${table.feeAtto} >= 0 and ${table.creatorCreditAtto} + ${table.brandCreditAtto} + ${table.feeAtto} <= ${table.agreedRateAtto}`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_rounds",
+      sql`${table.resolutionRound} >= 0 and ${table.resolutionAttempts} >= 0 and ${table.maxUndeterminedRetries} between 1 and 5 and ${table.resolutionAttempts} <= ${table.maxUndeterminedRetries}`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_status",
+      sql`${table.status} in ('SELECTED', 'ACCEPTED', 'SUBMITTED', 'UNDETERMINED', 'SETTLED_PASS', 'SETTLED_FAIL', 'DECLINED', 'EXPIRED', 'REFUNDED')`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerTransactions = pgTable(
+  "marketplace_genlayer_transactions",
+  {
+    preparedId: text("prepared_id").primaryKey(),
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    operation: text("operation")
+      .$type<MarketplaceGenLayerOperation>()
+      .notNull(),
+    functionName: text("function_name").notNull(),
+    args: jsonb("args").$type<unknown[]>().notNull(),
+    argTypes: jsonb("arg_types")
+      .$type<Array<"string" | "bool" | "uint256" | "address">>()
+      .notNull(),
+    argsHash: text("args_hash").notNull(),
+    valueAtto: numeric("value_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    actorWallet: text("actor_wallet").notNull(),
+    localCampaignId: text("local_campaign_id").references(
+      () => marketplaceGenLayerCampaignDrafts.id,
+      { onDelete: "restrict" },
+    ),
+    localApplicationId: text("local_application_id").references(
+      () => marketplaceGenLayerApplicationsPrivate.id,
+      { onDelete: "restrict" },
+    ),
+    onchainEntityId: text("onchain_entity_id"),
+    transactionHash: text("transaction_hash"),
+    status: text("status")
+      .$type<MarketplaceGenLayerTransactionStatus>()
+      .notNull()
+      .default("PREPARED"),
+    lifecycleStatus: text("lifecycle_status"),
+    executionResult: text("execution_result"),
+    errorCode: text("error_code"),
+    submittedAt: epochMs("submitted_at"),
+    acceptedAt: epochMs("accepted_at"),
+    finalizedAt: epochMs("finalized_at"),
+    lastCheckedAt: epochMs("last_checked_at"),
+    reconciliationAttempts: integer("reconciliation_attempts")
+      .notNull()
+      .default(0),
+    nextReconcileAt: epochMs("next_reconcile_at").notNull().default(0),
+    fenceToken: text("fence_token"),
+    fenceExpiresAt: epochMs("fence_expires_at"),
+    createdAt: epochMs("created_at").notNull(),
+    updatedAt: epochMs("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_transactions_hash_idx")
+      .on(table.network, table.chainId, table.transactionHash)
+      .where(sql`${table.transactionHash} is not null`),
+    index("marketplace_genlayer_transactions_reconcile_idx")
+      .on(table.nextReconcileAt, table.updatedAt)
+      .where(
+        sql`${table.status} in ('SUBMITTED', 'ACCEPTED', 'RECONCILIATION_REQUIRED')`,
+      ),
+    index("marketplace_genlayer_transactions_campaign_idx").on(
+      table.localCampaignId,
+      table.createdAt,
+    ),
+    check(
+      "marketplace_genlayer_transactions_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_status",
+      sql`${table.status} in ('PREPARED', 'SUBMITTED', 'ACCEPTED', 'FINALIZED', 'EXECUTION_FAILED', 'NETWORK_TERMINATED', 'RECONCILIATION_REQUIRED')`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_operation",
+      sql`${table.operation} in ('ACTIVATE_CREATOR', 'CREATE_CAMPAIGN', 'APPLY', 'WITHDRAW_APPLICATION', 'SELECT_CREATOR', 'ACCEPT_ASSIGNMENT', 'DECLINE_ASSIGNMENT', 'SUBMIT_EVIDENCE', 'RESOLVE_ASSIGNMENT', 'EXPIRE_ASSIGNMENT', 'REFUND_UNALLOCATED', 'CANCEL_CAMPAIGN', 'FINALIZE_CAMPAIGN', 'REFUND_UNDETERMINED', 'REQUEST_WITHDRAWAL', 'EXECUTE_WITHDRAWAL', 'RECAPITALIZE_FAILED_WITHDRAWAL')`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_addresses",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.actorWallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_hashes",
+      sql`${table.argsHash} ~ '^0x[0-9a-f]{64}$' and (${table.transactionHash} is null or ${table.transactionHash} ~ '^0x[0-9a-f]{64}$') and (${table.onchainEntityId} is null or ${table.onchainEntityId} ~ '^0x[0-9a-f]{64}$')`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_money",
+      sql`${table.valueAtto} >= 0`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_finality",
+      sql`${table.status} <> 'FINALIZED' or (${table.transactionHash} is not null and ${table.finalizedAt} is not null and ${table.errorCode} is null)`,
+    ),
+    check(
+      "marketplace_genlayer_transactions_fence",
+      sql`(${table.fenceToken} is null) = (${table.fenceExpiresAt} is null)`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerClaimableBalances = pgTable(
+  "marketplace_genlayer_claimable_balances",
+  {
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    wallet: text("wallet").notNull(),
+    amountAtto: numeric("amount_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    nextWithdrawalNonce: epochMs("next_withdrawal_nonce")
+      .notNull()
+      .default(0),
+    lastTransactionHash: text("last_transaction_hash").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    projectedAt: epochMs("projected_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "marketplace_genlayer_claimable_balances_pk",
+      columns: [table.network, table.chainId, table.contractAddress, table.wallet],
+    }),
+    check(
+      "marketplace_genlayer_claimable_balances_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_claimable_balances_addresses",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.wallet} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_claimable_balances_amount",
+      sql`${table.amountAtto} >= 0`,
+    ),
+    check(
+      "marketplace_genlayer_claimable_balances_tx",
+      sql`${table.lastTransactionHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerWithdrawals = pgTable(
+  "marketplace_genlayer_withdrawals",
+  {
+    projectionId: text("projection_id").primaryKey(),
+    withdrawalId: text("withdrawal_id").notNull(),
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    account: text("account").notNull(),
+    nonce: epochMs("nonce").notNull(),
+    amountAtto: numeric("amount_atto", { precision: 78, scale: 0 }).notNull(),
+    status: text("status").notNull(),
+    requestedAtEpoch: epochMs("requested_at_epoch").notNull(),
+    emittedAtEpoch: epochMs("emitted_at_epoch").notNull(),
+    reconciledAtEpoch: epochMs("reconciled_at_epoch").notNull(),
+    evidenceHash: text("evidence_hash").notNull(),
+    recapitalizedAtto: numeric("recapitalized_atto", { precision: 78, scale: 0 })
+      .notNull()
+      .default("0"),
+    requestTxHash: text("request_tx_hash").notNull(),
+    lastTxHash: text("last_tx_hash").notNull(),
+    finalizedAt: epochMs("finalized_at").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    projectedAt: epochMs("projected_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("marketplace_genlayer_withdrawals_entity_contract_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.withdrawalId,
+    ),
+    index("marketplace_genlayer_withdrawals_account_status_idx").on(
+      table.network,
+      table.chainId,
+      table.contractAddress,
+      table.account,
+      table.status,
+      table.projectedAt.desc(),
+    ),
+    check(
+      "marketplace_genlayer_withdrawals_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_withdrawals_addresses",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$' and ${table.account} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_withdrawals_hashes",
+      sql`${table.projectionId} ~ '^0x[0-9a-f]{64}$' and ${table.withdrawalId} ~ '^0x[0-9a-f]{64}$' and ${table.evidenceHash} ~ '^0x[0-9a-f]{64}$' and ${table.requestTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.lastTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_withdrawals_money",
+      sql`${table.amountAtto} > 0 and ${table.recapitalizedAtto} >= 0 and ${table.recapitalizedAtto} <= ${table.amountAtto}`,
+    ),
+    check(
+      "marketplace_genlayer_withdrawals_status",
+      sql`${table.status} in ('PENDING', 'EMITTED_UNCONFIRMED', 'CONFIRMED', 'RESTORED_FAILED')`,
+    ),
+  ],
+);
+
+export const marketplaceGenLayerProjectionCursors = pgTable(
+  "marketplace_genlayer_projection_cursors",
+  {
+    network: text("network").notNull().default("studionet"),
+    chainId: integer("chain_id").notNull().default(61_999),
+    contractAddress: text("contract_address").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    lastTransactionHash: text("last_transaction_hash"),
+    lastFinalizedAt: epochMs("last_finalized_at"),
+    snapshotHash: text("snapshot_hash"),
+    revision: epochMs("revision").notNull().default(0),
+    updatedAt: epochMs("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "marketplace_genlayer_projection_cursors_pk",
+      columns: [table.network, table.chainId, table.contractAddress],
+    }),
+    check(
+      "marketplace_genlayer_projection_cursors_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
+    ),
+    check(
+      "marketplace_genlayer_projection_cursors_address",
+      sql`${table.contractAddress} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_projection_cursors_hashes",
+      sql`(${table.lastTransactionHash} is null or ${table.lastTransactionHash} ~ '^0x[0-9a-f]{64}$') and (${table.snapshotHash} is null or ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$')`,
     ),
   ],
 );

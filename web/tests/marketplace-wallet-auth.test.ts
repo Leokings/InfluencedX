@@ -27,7 +27,7 @@ test("marketplace sign-in binds the exact origin, wallet, session nonce, chain, 
   assert.match(message, /^InfluencedX wallet sign-in/);
   assert.match(message, /Domain: influencedx\.example/);
   assert.match(message, /URI: https:\/\/influencedx\.example/);
-  assert.match(message, /Chain ID: 84532/);
+  assert.match(message, /Chain ID: 61999/);
   assert.match(message, new RegExp(`Wallet: ${wallet}`));
   assert.match(message, new RegExp(`Nonce: ${session.subject}`));
   assert.match(message, /does not approve a payment or blockchain transaction/);

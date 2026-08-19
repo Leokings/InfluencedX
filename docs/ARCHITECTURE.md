@@ -1,160 +1,249 @@
-# InfluencedX architecture
+# InfluencedX GenLayer-only architecture
+
+InfluencedX V2 has one protocol authority:
+[`InfluencedXMarketplace.py`](../contracts/genlayer/InfluencedXMarketplace.py).
+Creator identity, campaign custody, lifecycle, consensus resolution, credits,
+refunds, fees, withdrawals, and governance all live on GenLayer. Base, USDC,
+watchers, and the former cross-network relay are not part of active V2.
+
+## System map
+
+```mermaid
+flowchart TB
+    subgraph Client
+        B["Brand"]
+        C["Creator"]
+        W["GenLayer-compatible wallet"]
+    end
+
+    subgraph Hosted
+        WEB["Next.js web/API"]
+        DB["PostgreSQL<br/>projection + private app state"]
+        Q1["Progression queue"]
+        OP["Marketplace operator<br/>permissionless zero-value writes"]
+        Q2["Withdrawal reconciliation queue"]
+        REC["Withdrawal reconciler<br/>scoped confirmer only"]
+    end
+
+    subgraph GenLayer
+        IC["InfluencedXMarketplace V2<br/>StudioNet 61999"]
+    end
+
+    X["Public X"]
+    F["Public Farcaster"]
+
+    B --> WEB
+    C --> WEB
+    WEB --> W
+    WEB <--> DB
+    W --> IC
+    WEB --> Q1 --> OP --> IC
+    WEB --> Q2 --> REC --> IC
+    IC --> X
+    IC --> F
+```
+
+## Authority and trust boundaries
+
+### GenLayer contract
+
+The contract is authoritative for:
+
+- wallet-bound X identities keyed by stable numeric X user ID;
+- wallet-bound Farcaster identities keyed by stable FID;
+- immutable, source-specific campaign terms and native GEN escrow;
+- application commitments and assignment agreements;
+- X post IDs or Farcaster cast hashes submitted as evidence;
+- validator consensus outcomes and deterministic evidence hashes;
+- per-campaign accounting, protocol fees, claimable credits, refunds, and
+  withdrawal state;
+- owner, treasury, pause state, and the seven-day code-upgrade schedule.
+
+One wallet can bind both sources. A campaign freezes exactly one
+`content_source`, and its assignment freezes that source's stable identity.
+Changing a handle or username cannot substitute another stable identity.
+
+### Wallet and browser
+
+Users authorize their own economic and identity actions. The web server returns
+a prepared call containing the exact StudioNet chain, V2 address, method,
+ordered arguments, argument types, and native value. The wallet signs and sends
+the transaction directly to GenLayer.
+
+Confirmation is not “the browser returned a hash.” The backend loads a finalized
+transaction and verifies all of the following before updating its projection:
+
+1. sender equals the wallet-bound session;
+2. recipient equals the pinned V2 contract;
+3. method and canonical ordered arguments match the prepared record;
+4. native value is exact (`budget_atto` only for `create_campaign`, otherwise
+   zero);
+5. lifecycle is `FINALIZED`, consensus is `MAJORITY_AGREE`, and the unique
+   leader receipt reports `SUCCESS` plus `return`; and
+6. the resulting contract record matches the intended state transition.
+
+### Web and PostgreSQL
+
+PostgreSQL is not an alternate ledger. It stores:
+
+- wallet-bound HttpOnly sessions and short-lived challenges;
+- private pitches whose hashes are committed onchain;
+- immutable prepared-call envelopes and confirmation idempotency records;
+- deployment-scoped campaign/assignment/profile projections;
+- queue progression and reconciliation state;
+- deletable, non-authoritative source previews and operational metadata.
+
+Every projection is scoped by network, chain ID, contract address, protocol
+version, and storage schema so a StudioNet reset or V3 deployment cannot be
+silently combined with V2 state.
+
+### Hosted marketplace operator
+
+The operator has a dedicated StudioNet key with no governance role. Its adapter
+accepts only three fixed operations:
+
+- `resolve_assignment(assignment_id, request_id)`;
+- `expire_assignment(assignment_id)`; and
+- `finalize_campaign(campaign_id)`.
+
+The caller cannot choose a target, arbitrary method, raw arguments, or value.
+The service re-reads V2 pre-state, uses durable idempotency and a fenced signer
+gate, requires exact finalized receipt bindings, and re-reads post-state. An
+unknown broadcast result is quarantined instead of retried with another hash.
+
+### Hosted withdrawal reconciler
+
+Native withdrawals are deliberately two-phase because a parent GenLayer call
+and its external value-transfer child must be reconciled. The user first signs
+`request_withdrawal`, then `execute_withdrawal`. V2 records
+`EMITTED_UNCONFIRMED`; that is not a delivered payment.
+
+The separate reconciler derives the recipient and amount from V2, proves the
+unique finalized child transfer and exact credited value, repeats discovery
+under a signer fence, and can call only
+`confirm_withdrawal(withdrawal_id, evidence_hash)` with zero value. Only the
+resulting `CONFIRMED` contract state is presented as delivered. Missing,
+contradictory, or ambiguous evidence becomes a manual reconciliation alert.
+The service never automatically restores a withdrawal or recapitalizes funds.
+
+### X and Farcaster
+
+Both sources remain outside the protocol's availability control. Validators
+retrieve public evidence independently:
+
+- X ownership binds the public challenge post and derives the stable X user ID;
+- Farcaster ownership binds the public challenge cast, username proof, FID, and
+  cast hash;
+- campaign resolution retrieves the frozen source and content ID.
+
+Authentication failures, rate limits, malformed success responses,
+inconsistent providers, or unavailable timestamps are UNDETERMINED. Definitive
+missing evidence may become FAIL only under the contract's explicit provider
+and retention rules. This fail-safe boundary prevents a transient platform
+outage from automatically taking a creator's campaign credit.
+
+## Lifecycle
 
 ```mermaid
 sequenceDiagram
     actor Brand
     actor Creator
-    participant App as InfluencedX / PostgreSQL
-    participant Base as Base Sepolia escrow
-    participant GL as GenLayer StudioNet
-    participant Watchers as 2-of-3 watchers
-    participant X as Public X
+    participant App as InfluencedX web/API
+    participant DB as PostgreSQL projection
+    participant Wallet as User wallet
+    participant IC as Marketplace V2
+    participant Source as X or Farcaster
+    participant Operator as Hosted operator
+    participant Reconciler as Withdrawal reconciler
 
-    Creator->>App: Prove wallet session and publish APV2 challenge
-    App->>GL: Submit fixed ownership request
-    GL->>X: Independently retrieve post and profile
-    GL-->>Watchers: Finalized structured result
-    Watchers->>Base: Threshold ownership attestation
-    Brand->>Base: Fund frozen campaign terms with test USDC
-    Creator->>App: Apply with pitch and creator-set rate
-    Brand->>Base: Select creator
-    Creator->>Base: Accept agreement and commit X submission
-    Brand->>Base: Request resolution after retention
-    App->>GL: Submit exact Base-bound campaign request
-    GL->>X: Evaluate frozen public-post requirements
-    GL-->>Watchers: PASS, FAIL, or UNDETERMINED
-    Watchers->>Base: Threshold campaign attestation
-    Base-->>Creator: Pull-based payout after PASS
+    Creator->>App: Request source-specific challenge
+    Creator->>Source: Publish exact challenge post/cast
+    App-->>Wallet: Prepare activation call
+    Wallet->>IC: activate_creator / activate_farcaster_creator
+    IC->>Source: Validators retrieve identity evidence
+    IC-->>App: Finalized identity result
+    App->>DB: Store verified projection
+
+    Brand->>App: Freeze campaign terms and budget
+    App-->>Wallet: Prepare create_campaign + exact GEN value
+    Wallet->>IC: Create and escrow campaign
+    Creator->>IC: Apply
+    Brand->>IC: Select creator
+    Creator->>IC: Accept and submit evidence
+    App->>Operator: Enqueue eligible resolution
+    Operator->>IC: resolve_assignment
+    IC->>Source: Validators evaluate frozen evidence
+    IC-->>App: PASS / FAIL / UNDETERMINED
+
+    Brand->>IC: Refund path if contract rules permit
+    Creator->>IC: Request and execute credited withdrawal
+    App->>Reconciler: Enqueue emitted withdrawal
+    Reconciler->>IC: Confirm exact delivered child transfer
+    IC-->>App: CONFIRMED
 ```
 
-## Consensus boundary
+## Accounting model
 
-User action -> public X URL -> GenLayer validators independently retrieve the
-post/profile -> the Intelligent Contract applies explicit equivalence rules ->
-a finalized structured result is observed by threshold relay watchers -> Base
-Sepolia changes escrow or identity state.
+Campaign creation is payable and must satisfy
+`gl.message.value == budget_atto`. One GEN is `10^18` atto-GEN. The fee and
+treasury are snapshotted at campaign creation so later governance changes do
+not rewrite an existing agreement.
 
-### Frontend/backend owns
+PASS credits the creator's agreed rate minus the fee and credits the treasury.
+FAIL credits the brand. Unallocated and contract-authorized UNDETERMINED paths
+also credit the brand. Credits are pull-based and never marked externally
+delivered before reconciliation.
 
-- Search, profiles, applications, campaign drafts, notifications, and messages.
-- Generation and expiry of single-use APV2 X verification challenges, followed
-  by post-ID-bound request finalization after publication.
-- Deletable copies of X handles, post text, metrics, and evidence previews.
-- Indexing Base and GenLayer events and preparing threshold attestations.
-- Non-authoritative estimated-pay previews.
-- Wallet-session challenges, explicit sign-out/switch-wallet behavior, and
-  receipt reconciliation for every marketplace lifecycle transition.
+The contract checks both per-campaign and global conservation after every value
+transition. See [the V2 protocol reference](GENLAYER-MARKETPLACE.md) for states
+and invariants.
 
-### GenLayer owns
+## Governance and upgrades
 
-- Whether a public X post contains the exact wallet, challenge, and validity
-  markers and was authored by the expected handle.
-- The immutable numeric X user ID and its identity commitment, derived from the
-  public profile during validator consensus rather than supplied by the caller.
-- A structured public profile snapshot, including explicit insufficiency when
-  public evidence is unavailable.
-- Whether a submitted campaign post satisfies the frozen public requirements.
-- Stable request/result identifiers consumed by relay watchers.
+The V2 owner controls pause, fee, treasury, withdrawal-confirmer rotation,
+two-step owner transfer, and the exceptional withdrawal recovery process. A
+narrowly scoped `withdrawal_confirmer` can only finalize evidence-bound
+withdrawal delivery; it cannot administer the protocol. A separate
+`upgrade_admin` controls GenVM Root upgrades.
 
-### Base owns
+An upgrade requires:
 
-- Wallet-to-X identity commitments, never raw X handles or post text.
-- Campaign and accepted-agreement hashes.
-- Test USDC custody, accounting, settlement, and pull-based withdrawals.
-- Replay protection and the threshold signer policy for relayed results.
+1. the marketplace is paused;
+2. the upgrade administrator schedules the exact SHA-256 of the candidate
+   source;
+3. at least `604800` seconds elapse;
+4. the marketplace remains paused; and
+5. execution supplies code whose bytes exactly match the scheduled hash.
 
-### External sources own
+The owner or upgrade administrator can cancel. Rescheduling restarts the full
+delay. Storage must remain append-only and the constructor does not rerun.
 
-- X owns the source post/profile and can edit, remove, restrict, or rate-limit
-  it. Retrieval failure must produce `UNDETERMINED`, not an automatic creator
-  failure.
+The StudioNet owner and upgrade administrator are EOAs for developer-network
+testing. Mainnet requires reviewed multisignature or governance boundaries and
+must not reuse these keys.
 
-No X OAuth is used. Account ownership is proven by an original public APV2
-challenge post containing the creator's checksummed full Base wallet, random
-challenge, issue time, challenge expiry, and credential expiry. After
-publication, the request
-ID binds those fields to the X post ID. GenLayer derives the immutable numeric X
-user ID; neither the browser nor backend may assert it. A handle change does not
-change the derived identity commitment. Protected accounts are rejected because
-independent validators cannot retrieve the same public evidence.
+## Failure handling
 
-Follower count, account age, recent post engagement, view medians, and sample
-consistency feed a versioned estimated-pay range. The estimate is marketplace
-guidance only: creators choose their application price and brands choose whom
-to hire. These metrics can raise manipulation warnings but do not prove that
-engagement is genuine.
+| Failure | Required behavior |
+| --- | --- |
+| Wallet rejected or wrong call | Do not mutate the database projection; prepare a fresh exact call only if still eligible. |
+| Transaction pending | Poll the same hash; never submit an alternate write automatically. |
+| Finalized contract error | Show sanitized error and keep authoritative pre-state. |
+| Operator unknown broadcast | Fence signer and enter manual reconciliation. |
+| Source unavailable | Preserve UNDETERMINED/retry path; never infer FAIL. |
+| Withdrawal evidence ambiguous | Keep `EMITTED_UNCONFIRMED`; alert manual operations. |
+| Hosted release broken | Disable mutation/automation gates and roll web back; never roll chain state back. |
+| StudioNet reset | Freeze mutations, deploy a fresh contract, create a new manifest/projection scope, and run fresh E2E. |
 
-## Identity flow
+## Historical archive boundary
 
-1. Backend creates a random APV2 challenge bound to a Base wallet, expected
-   handle, issue time, challenge expiry, and credential expiry. No X user ID or
-   request ID exists yet.
-2. Creator publishes the exact challenge text in an original public X post.
-3. Backend extracts the post ID and computes the normalized, post-bound APV2
-   request ID.
-4. GenLayer recomputes that request ID, fetches the direct X URL, oEmbed, and
-   profile, then derives the immutable X user ID and identity hash.
-5. Validators compare stable decision fields: request, author, post ID, exact
-   markers, derived identity, publication time, and outcome.
-6. Threshold watchers sign the finalized GenLayer result.
-7. `AdProofAttestationReceiver` verifies the watcher quorum and calls
-   `AdProofCreatorRegistry`.
+The former architecture used Base Sepolia, test USDC, a separate APV2 resolver,
+watchers, and a relay. Its code and receipts are retained for auditability only:
 
-The exact challenge envelope and resolver ABI are specified in
-[OWNERSHIP-V2.md](OWNERSHIP-V2.md).
+- [historical Base relay record](preview-base-sepolia-relay.md);
+- [historical settlement services](campaign-settlement-services.md);
+- [historical watcher-key model](WATCHER-KEYS.md); and
+- [historical Base deployment manifest](../deployments/base-sepolia.json).
 
-## Campaign flow
-
-1. The backend validates campaign fields, freezes deliverables, semantic brief,
-   disclosure and phrase rules, deadlines, budget atomics, and Base addresses in
-   one canonical terms document, then derives its hash.
-2. The brand approves the exact Base Sepolia test-USDC amount and creates the
-   campaign on Base. The API records funding only after verifying the receipt
-   and event against that persisted terms document.
-3. Applications remain in PostgreSQL, scoped to the authenticated wallet. Only
-   the owning brand can enumerate pitches; a creator sees its own application.
-4. The brand selects a verified creator through a prepared Base transaction and
-   the creator accepts the exact agreement through another Base transaction.
-5. The creator submits a canonical X post URL. Base stores commitments rather
-   than raw X content; the API confirms the exact submission event.
-6. After the retention interval, Base emits a deterministic resolution request.
-7. The app queues only that persisted request through the isolated StudioNet
-   submitter. The public route accepts no caller-controlled method or resolver
-   arguments and polls idempotently to a terminal lifecycle.
-8. GenLayer resolves the public post against the frozen rules.
-9. Threshold watchers independently read and sign the finalized result.
-10. The Base receiver pays the creator or credits the brand. `UNDETERMINED` can
-    be retried. In the current testnet package, the final watcher submission is
-    an explicit operator boundary and must not be described as automatic unless
-    its Base receipt is present.
-
-## Bridge migration
-
-The escrow depends only on an `attestationReceiver` address. The current
-receiver requires M-of-N EIP-712 watcher signatures. It can later be replaced
-with a receiver backed by a verified GenLayer/Base messaging protocol without
-changing campaign accounting.
-
-The testnet receiver is deliberately a 2-of-3 EIP-712 threshold relay. Each
-watcher independently reads a FINALIZED StudioNet result, rebuilds the exact
-typed payload, and signs on a separate host. The Base submitter rejects duplicate
-or unauthorized signers, the receiver rejects non-allowlisted resolver sources,
-and each request ID is consumed once. The contract will not permit fewer than
-three watchers or a threshold below two. This is an explicit trust boundary,
-not a claim that Base currently verifies GenLayer consensus directly.
-
-StudioNet is a gasless, temporary developer network whose state may be reset.
-That makes it suitable for the submission rehearsal, but not a durable
-production ledger. A later persistent-network cutover requires a new resolver,
-receiver-source update, environment migration, and fresh end-to-end proofs.
-
-## Data minimization
-
-On Base store only hashes/commitments, addresses, amounts, timestamps, and
-outcomes. PostgreSQL rows containing X-derived data include deletion timestamps
-and source-status fields so content can be removed without attempting to mutate
-blockchain history.
-
-The PostgreSQL purge migration deletes challenges and metric evidence, removes
-stored X IDs/handles/post URLs, and retains only commitments needed to reconcile
-immutable chain state.
+None is an active dependency, deployment step, secret, queue, or trust boundary
+for GenLayer Marketplace V2.

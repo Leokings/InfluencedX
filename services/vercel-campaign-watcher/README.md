@@ -1,5 +1,9 @@
 # InfluencedX campaign watcher
 
+> **Historical regression service.** Marketplace V2 has no watcher quorum or
+> Base settlement leg. Keep this service disabled; the code and tests remain
+> only as an auditable record of the retired architecture.
+
 Private Vercel Function that signs one `CampaignResolution` only after it
 independently re-reads the finalized StudioNet transaction/result from the
 pinned APV2 resolver and the exact live Base Sepolia receiver, escrow

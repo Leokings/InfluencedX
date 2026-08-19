@@ -2,8 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { confirmMarketplaceResolutionRequest } from "@/lib/marketplace-service";
-import { enqueueCampaignProgression } from "@/lib/campaign-progression-queue";
+import { confirmGenLayerResolution } from "@/lib/marketplace-genlayer-actions";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -22,19 +21,11 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await confirmMarketplaceResolutionRequest({
+    const result = await confirmGenLayerResolution({
       campaignId,
       applicationId,
       session,
       body,
-    });
-    if (!result.application.requestId) {
-      throw new Error("The confirmed campaign resolution request is missing its durable ID.");
-    }
-    await enqueueCampaignProgression({
-      requestId: result.application.requestId,
-      campaignId: result.campaign.id,
-      applicationId: result.application.id,
     });
     return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },

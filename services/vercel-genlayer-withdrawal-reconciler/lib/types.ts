@@ -59,7 +59,7 @@ export type ReconciliationRecord = Readonly<{
   network: string;
   chainId: number;
   contractAddress: string;
-  contractOwner: string;
+  withdrawalConfirmer: string;
   functionName: "confirm_withdrawal";
   valueAtto: "0";
   status: ReconciliationStatus;

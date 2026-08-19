@@ -45,6 +45,7 @@ export function requestFingerprint(request: ReconciliationRequest, config: Recon
     network: RECONCILER_NETWORK,
     chainId: STUDIONET_CHAIN_ID,
     contractAddress: config.contractAddress,
+    withdrawalConfirmer: config.contractWithdrawalConfirmer,
     withdrawalId: request.withdrawalId,
   });
 }

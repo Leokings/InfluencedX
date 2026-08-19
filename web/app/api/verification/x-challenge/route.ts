@@ -1,10 +1,11 @@
 import {
   ApiProblem,
+  assertExactJsonKeys,
   apiError,
   readSameOriginJson,
   requireString,
 } from "@/lib/verification-api";
-import { issueXChallenge } from "@/lib/verification-service";
+import { issueNativeXChallenge } from "@/lib/verification-native-service";
 import { requireWalletBoundRequest } from "@/lib/verification-route-session";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 import {
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
+    assertExactJsonKeys(body, ["requestId", "handle"]);
     const session = readWalletSession(request);
     await enforceVerificationRateLimit(request, "x-challenge", {
       subject: session?.subject,
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
     }
     const requestId = requireString(body, "requestId", 128);
     await requireWalletBoundRequest(session, requestId);
-    const issued = await issueXChallenge({
+    const issued = await issueNativeXChallenge({
       ownerUserId: session.subject,
       requestId,
       handle: body.handle,

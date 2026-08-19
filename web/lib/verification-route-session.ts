@@ -1,5 +1,5 @@
 import { ApiProblem } from "@/lib/verification-api";
-import { getVerificationStatus } from "@/lib/verification-service";
+import { getNativeVerificationStatus } from "@/lib/verification-native-service";
 import {
   walletSessionMatches,
   type AuthenticatedWalletSession,
@@ -9,7 +9,7 @@ export async function requireWalletBoundRequest(
   session: AuthenticatedWalletSession,
   requestId: string,
 ): Promise<void> {
-  const current = await getVerificationStatus({
+  const current = await getNativeVerificationStatus({
     ownerUserId: session.subject,
     requestId,
   });

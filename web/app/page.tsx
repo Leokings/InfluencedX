@@ -14,7 +14,7 @@ export default function Home() {
           <h2>WORK.<br /><em>RESOLVED.</em></h2>
           <p>
             A creator’s public X post, campaign terms, and deadlines form a resolution request.
-            GenLayer evaluates the public evidence before a Base Sepolia testnet settlement can proceed.
+            GenLayer evaluates the public evidence and atomically credits the creator or refunds the brand.
           </p>
           <Link className="button" href="/verify">VERIFY YOUR X →</Link>
         </div>
@@ -28,7 +28,7 @@ export default function Home() {
             ["01", "CAMPAIGN TERMS", "HASHED BRIEF + DELIVERABLES", "REQUIRED"],
             ["02", "CREATOR SUBMISSION", "PUBLIC X POST", "REQUIRED"],
             ["03", "GENLAYER RESOLUTION", "VALIDATOR CONSENSUS", "PENDING"],
-            ["04", "BASE SETTLEMENT", "PAY OR REFUND", "AFTER FINALITY"],
+            ["04", "GENLAYER SETTLEMENT", "CREDIT OR REFUND", "AFTER FINALITY"],
           ].map(([number, title, detail, status]) => (
             <div className="proof-step" key={number}>
               <strong>{number}</strong>
@@ -39,7 +39,7 @@ export default function Home() {
           <div className="proof-result proof-result-neutral">
             <span>SETTLEMENT RULE</span>
             <strong>FINAL EVIDENCE ONLY</strong>
-            <span>BASE SEPOLIA TEST USDC</span>
+            <span>NATIVE TEST GEN</span>
           </div>
         </div>
       </section>

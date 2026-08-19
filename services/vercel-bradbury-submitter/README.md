@@ -1,5 +1,10 @@
 # InfluencedX Vercel StudioNet submitter
 
+> **Historical regression service.** Marketplace V2 performs X/Farcaster
+> identity and campaign resolution inside `InfluencedXMarketplace` and does not
+> use this submitter. Keep it disabled; its source and tests remain only to
+> reproduce/audit the former APV2 architecture.
+
 This is a separate, StudioNet-only Vercel service that accepts exact InfluencedX
 ownership, campaign-resolution, and creator-metrics envelopes and submits only
 their three allowlisted Intelligent Contract calls to GenLayer StudioNet. It is

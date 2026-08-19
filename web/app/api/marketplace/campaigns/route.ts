@@ -4,9 +4,9 @@ import {
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
 import {
-  createMarketplaceCampaign,
-  listMarketplaceCampaigns,
-} from "@/lib/marketplace-service";
+  createGenLayerMarketplaceCampaign,
+  listGenLayerMarketplaceCampaigns,
+} from "@/lib/marketplace-genlayer-service";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const result = await listMarketplaceCampaigns({
+    const result = await listGenLayerMarketplaceCampaigns({
       requestUrl: request.url,
       viewerWallet: optionalMarketplaceWallet(request),
     });
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
         wallet: session.wallet,
       },
     );
-    const campaign = await createMarketplaceCampaign({ session, body });
+    const campaign = await createGenLayerMarketplaceCampaign({ session, body });
     return Response.json(
       { campaign },
       {

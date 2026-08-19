@@ -20,7 +20,7 @@ env:
 
 jobs:
   protocol:
-    name: Protocol and relay tests
+    name: GenLayer V2 plus historical protocol regressions
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,13 +32,27 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-direct.txt
       - run: npm ci
-      - run: npm run contracts:compile
-      - run: npm run test:base
-      - run: npm run test:relay
-      - run: npm run test:operator
-      - run: node --test tests/services/*.test.mjs
-      - run: npm run test:submitter
+      - run: python -m pip install --requirement requirements-direct.txt
+      - run: genvm-lint check contracts/genlayer/InfluencedXMarketplace.py --json
+      - run: python -m pytest tests/direct -q
+      - name: Historical regression - compile retired Solidity contracts
+        run: npm run contracts:compile
+      - name: Historical regression - Base contract tests
+        run: npm run test:base
+      - name: Historical regression - watcher relay tests
+        run: npm run test:relay
+      - name: Historical regression - retired operator scripts
+        run: npm run test:operator
+      - name: Historical regression - retired service scripts
+        run: node --test tests/services/*.test.mjs
+      - name: Historical regression - APV2 submitter
+        run: npm run test:submitter
 
   web:
     name: Web lint, build, and tests
@@ -68,12 +82,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Bradbury submitter
+          - name: Historical regression - APV2 submitter
             directory: services/vercel-bradbury-submitter
-          - name: Campaign settlement relay
+          - name: Historical regression - Base campaign relay
             directory: services/vercel-campaign-relay
-          - name: Campaign watcher
+          - name: Historical regression - Base campaign watcher
             directory: services/vercel-campaign-watcher
+          - name: GenLayer marketplace operator
+            directory: services/vercel-genlayer-marketplace-operator
+          - name: GenLayer withdrawal reconciler
+            directory: services/vercel-genlayer-withdrawal-reconciler
     steps:
       - uses: actions/checkout@v4
         with:

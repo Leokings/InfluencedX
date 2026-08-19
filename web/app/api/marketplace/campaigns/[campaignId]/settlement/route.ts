@@ -1,5 +1,5 @@
 import { requireMarketplaceSession } from "@/lib/marketplace-api";
-import { getMarketplaceSettlementState } from "@/lib/marketplace-settlement";
+import { getGenLayerSettlement } from "@/lib/marketplace-genlayer-actions";
 import { apiError } from "@/lib/verification-api";
 
 export const dynamic = "force-dynamic";
@@ -11,8 +11,8 @@ export async function GET(
   try {
     const session = requireMarketplaceSession(request);
     const { campaignId } = await params;
-    const settlement = await getMarketplaceSettlementState({ campaignId, session });
-    return Response.json({ settlement }, {
+    const result = await getGenLayerSettlement({ campaignId, session, body: {} });
+    return Response.json(result, {
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {

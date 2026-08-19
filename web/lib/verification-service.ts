@@ -75,6 +75,14 @@ export type VerificationProjection = {
   xChallengeIssuedAt: string | null;
   xChallengeExpiresAt: string | null;
   credentialExpiresAt: string | null;
+  source: "X" | "FARCASTER" | null;
+  farcasterUsername: string | null;
+  farcasterFid: string | null;
+  farcasterCastText: string | null;
+  farcasterCastHash: string | null;
+  farcasterChallengeIssuedAt: string | null;
+  farcasterChallengeExpiresAt: string | null;
+  activationTxHash: string | null;
   normalizedVerificationPostUrl: string | null;
   verificationPostId: string | null;
   verificationPostCreatedAt: string | null;
@@ -283,7 +291,15 @@ export async function issueXChallenge(input: {
     .set({
       status: "X_CHALLENGE_ISSUED",
       statusUpdatedAt: nowMs,
+      identitySource: "X",
       handle,
+      farcasterUsername: null,
+      farcasterFid: null,
+      farcasterChallenge: null,
+      farcasterCastText: null,
+      farcasterChallengeIssuedAt: null,
+      farcasterChallengeExpiresAt: null,
+      farcasterCastHash: null,
       xChallenge,
       tweetText,
       tweetTextHash: sha256(stringToHex(tweetText)),
@@ -1070,6 +1086,14 @@ function toProjection(row: VerificationRow): VerificationProjection {
     xChallengeIssuedAt: toIso(row.xChallengeIssuedAt),
     xChallengeExpiresAt: toIso(row.xChallengeExpiresAt),
     credentialExpiresAt: toIso(row.credentialExpiresAt),
+    source: row.identitySource,
+    farcasterUsername: row.farcasterUsername,
+    farcasterFid: row.farcasterFid,
+    farcasterCastText: row.farcasterCastText,
+    farcasterCastHash: row.farcasterCastHash,
+    farcasterChallengeIssuedAt: toIso(row.farcasterChallengeIssuedAt),
+    farcasterChallengeExpiresAt: toIso(row.farcasterChallengeExpiresAt),
+    activationTxHash: row.activationTxHash,
     normalizedVerificationPostUrl: row.normalizedVerificationPostUrl,
     verificationPostId: row.verificationPostId,
     verificationPostCreatedAt: toIso(row.verificationPostCreatedAt),

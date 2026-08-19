@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import {
   BASE_SEPOLIA_CHAIN_ID,
   BASE_SEPOLIA_USDC_ADDRESS,
-  type CampaignDetailResponse,
-  type CampaignListResponse,
-  type MarketplaceApplicationDto,
-  type MarketplaceCampaignDto,
+  type LegacyCampaignDetailResponse as CampaignDetailResponse,
+  type LegacyCampaignListResponse as CampaignListResponse,
+  type LegacyMarketplaceApplicationDto as MarketplaceApplicationDto,
+  type LegacyMarketplaceCampaignDto as MarketplaceCampaignDto,
   type MarketplaceCreatorProfileDto,
   type MarketplaceMetricsDto,
 } from "./marketplace-types.ts";
@@ -76,7 +76,7 @@ import {
   requireTransactionHash,
   type ConfirmedMarketplaceTransaction,
 } from "./marketplace-receipts.ts";
-import type { MarketplaceTransactionDto } from "./marketplace-types.ts";
+import type { LegacyMarketplaceTransactionDto as MarketplaceTransactionDto } from "./marketplace-types.ts";
 import { resolveCampaignRetentionSeconds } from "./marketplace-retention.ts";
 
 export async function createMarketplaceCampaign(input: {

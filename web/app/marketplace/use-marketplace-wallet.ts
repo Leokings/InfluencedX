@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { marketplaceRequest } from "./marketplace-api";
-import { BASE_SEPOLIA_CHAIN_ID_HEX } from "./marketplace-types";
+import {
+  STUDIONET_CHAIN_ID_HEX,
+  STUDIONET_EXPLORER_URL,
+  STUDIONET_RPC_URL,
+} from "./marketplace-types";
 
 type EthereumProvider = {
   request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
@@ -124,13 +128,27 @@ export function useMarketplaceWallet() {
     }
   }, [address]);
 
-  const switchToBaseSepolia = useCallback(async () => {
+  const switchToStudioNet = useCallback(async () => {
     const provider = requireProvider();
-    await provider.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: BASE_SEPOLIA_CHAIN_ID_HEX }],
-    });
-    setChainId(BASE_SEPOLIA_CHAIN_ID_HEX);
+    try {
+      await provider.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: STUDIONET_CHAIN_ID_HEX }],
+      });
+    } catch (error) {
+      if (!isMissingChainError(error)) throw error;
+      await provider.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: STUDIONET_CHAIN_ID_HEX,
+          chainName: "GenLayer StudioNet",
+          nativeCurrency: { name: "GEN Token", symbol: "GEN", decimals: 18 },
+          rpcUrls: [STUDIONET_RPC_URL],
+          blockExplorerUrls: [STUDIONET_EXPLORER_URL],
+        }],
+      });
+    }
+    setChainId(STUDIONET_CHAIN_ID_HEX);
   }, []);
 
   const signOut = useCallback(async () => {
@@ -157,11 +175,11 @@ export function useMarketplaceWallet() {
     hasSession: sessionWallet !== null,
     sessionWallet,
     walletError,
-    isBaseSepolia: chainId === BASE_SEPOLIA_CHAIN_ID_HEX,
+    isStudioNet: chainId === STUDIONET_CHAIN_ID_HEX,
     connect,
     authenticate,
     signOut,
-    switchToBaseSepolia,
+    switchToStudioNet,
   };
 }
 
@@ -180,7 +198,7 @@ type WalletChallengeResponse = {
 
 function requireProvider(): EthereumProvider {
   if (!window.ethereum) {
-    throw new Error("No browser wallet found. Install an EVM wallet and try again.");
+    throw new Error("No browser wallet found. Install a wallet that supports GenLayer StudioNet and try again.");
   }
   return window.ethereum;
 }
@@ -195,4 +213,10 @@ function messageToHex(message: string): `0x${string}` {
   return `0x${Array.from(new TextEncoder().encode(message), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("")}`;
+}
+
+function isMissingChainError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? Number(error.code) : NaN;
+  return code === 4_902;
 }

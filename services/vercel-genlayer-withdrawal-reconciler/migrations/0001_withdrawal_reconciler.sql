@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS influencedx_withdrawal_reconciliations (
   )),
   network text NOT NULL CHECK (network = 'studionet'),
   chain_id integer NOT NULL CHECK (chain_id = 61999),
-  contract_address text NOT NULL CHECK (contract_address = '0x17eb37a3578e21662f4d654b245238df520663fa'),
-  contract_owner text NOT NULL CHECK (contract_owner = '0x797d3b25fb2cca0ff93f60df1910267f3822d655'),
+  contract_address text NOT NULL CHECK (contract_address = '0x58d598b8323e9c1d041989dcce80e737109de347'),
+  withdrawal_confirmer text NOT NULL CHECK (
+    withdrawal_confirmer = '0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8'
+  ),
   function_name text NOT NULL CHECK (function_name = 'confirm_withdrawal'),
   value_atto text NOT NULL CHECK (value_atto = '0'),
   evidence_hash text CHECK (evidence_hash IS NULL OR evidence_hash ~ '^0x[0-9a-f]{64}$'),
@@ -55,7 +57,7 @@ CREATE TABLE IF NOT EXISTS influencedx_withdrawal_reconciliation_jobs (
 );
 
 CREATE TABLE IF NOT EXISTS influencedx_withdrawal_reconciliation_signer_gate (
-  gate_name text PRIMARY KEY CHECK (gate_name = 'influencedx-withdrawal-owner-signer-v1'),
+  gate_name text PRIMARY KEY CHECK (gate_name = 'influencedx-withdrawal-confirmer-signer-v1'),
   fencing_token bigint NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
   holder_id uuid,
   active_withdrawal_id text REFERENCES influencedx_withdrawal_reconciliations(withdrawal_id) ON DELETE RESTRICT,
@@ -72,10 +74,6 @@ CREATE TABLE IF NOT EXISTS influencedx_withdrawal_reconciliation_signer_gate (
   )
 );
 
-INSERT INTO influencedx_withdrawal_reconciliation_signer_gate (gate_name)
-VALUES ('influencedx-withdrawal-owner-signer-v1')
-ON CONFLICT (gate_name) DO NOTHING;
-
 CREATE INDEX IF NOT EXISTS influencedx_withdrawal_reconciliations_status_idx
   ON influencedx_withdrawal_reconciliations (status, updated_at)
   WHERE status NOT IN ('FINALIZED', 'RECONCILIATION_REQUIRED', 'POLLING_EXHAUSTED', 'POISONED');
@@ -85,6 +83,6 @@ COMMENT ON TABLE influencedx_withdrawal_reconciliations IS
 COMMENT ON TABLE influencedx_withdrawal_reconciliation_jobs IS
   'Private finalized state and exact parent-child transfer proof. Ingress supplies only withdrawal_id.';
 COMMENT ON TABLE influencedx_withdrawal_reconciliation_signer_gate IS
-  'Singleton owner signer fence. BROADCASTING never expires; ambiguous outcomes require manual governance.';
+  'Singleton withdrawal confirmer signer fence. BROADCASTING never expires; ambiguous outcomes require manual governance.';
 
 COMMIT;

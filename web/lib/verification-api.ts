@@ -119,6 +119,29 @@ export function requireString(
   return value.trim();
 }
 
+/**
+ * Reject ambiguous mutation payloads before any durable or onchain work.
+ * `allowed` is the complete public contract; `required` defaults to all of it.
+ */
+export function assertExactJsonKeys(
+  body: Record<string, unknown>,
+  allowed: readonly string[],
+  required: readonly string[] = allowed,
+): void {
+  const allowedSet = new Set(allowed);
+  const actual = Object.keys(body);
+  if (
+    actual.some((key) => !allowedSet.has(key)) ||
+    required.some((key) => !Object.prototype.hasOwnProperty.call(body, key))
+  ) {
+    throw new ApiProblem(
+      400,
+      "INVALID_REQUEST_BODY",
+      `Request body must use exactly the documented fields: ${allowed.join(", ") || "(none)"}.`,
+    );
+  }
+}
+
 export function apiError(error: unknown): Response {
   if (error instanceof ApiProblem) {
     const headers = new Headers(error.responseHeaders);

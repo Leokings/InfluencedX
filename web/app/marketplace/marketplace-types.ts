@@ -1,24 +1,18 @@
-import {
-  BASE_SEPOLIA_CHAIN_ID,
-  BASE_SEPOLIA_USDC_ADDRESS,
-  type ApplicationStatus,
-  type CampaignDetailResponse,
-  type CampaignListResponse,
-  type CampaignStatus,
-  type FundingStatus,
-  type MarketplaceApplicationDto,
-  type MarketplaceCampaignDto,
-  type MarketplaceSettlementMutationResponse,
-  type MarketplaceSettlementStateDto,
-  type MarketplaceTransactionDto,
+import type {
+  ApplicationStatus,
+  CampaignDetailResponse as CoreCampaignDetailResponse,
+  CampaignListResponse as CoreCampaignListResponse,
+  CampaignStatus,
+  FundingStatus,
+  MarketplaceApplicationDto,
+  MarketplaceCampaignDto,
+  MarketplaceSettlementMutationResponse,
+  MarketplaceSettlementStateDto,
+  MarketplaceTransactionDto,
 } from "../../lib/marketplace-types.ts";
 
 export {
-  BASE_SEPOLIA_CHAIN_ID,
-  BASE_SEPOLIA_USDC_ADDRESS,
   type ApplicationStatus,
-  type CampaignDetailResponse,
-  type CampaignListResponse,
   type CampaignStatus,
   type FundingStatus,
   type MarketplaceSettlementMutationResponse,
@@ -26,10 +20,22 @@ export {
   type MarketplaceTransactionDto,
 };
 
-export const BASE_SEPOLIA_CHAIN_ID_HEX = "0x14a34";
+export const STUDIONET_CHAIN_ID = 61_999 as const;
+export const STUDIONET_CHAIN_ID_HEX = "0xf22f" as const;
+export const STUDIONET_RPC_URL = "https://studio.genlayer.com/api" as const;
+export const STUDIONET_EXPLORER_URL = "https://explorer-studio.genlayer.com" as const;
+export const STUDIONET_FUNDING_GUIDE_URL = "https://docs.genlayer.com/developers/networks#studionet" as const;
+export const STUDIONET_MARKETPLACE_ADDRESS = "0x58D598B8323E9C1d041989DccE80E737109DE347" as const;
+export const STUDIONET_MARKETPLACE_DEPLOYMENT_TX = "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a" as const;
+export const GEN_DECIMALS = 18 as const;
+export const GEN_SYMBOL = "GEN" as const;
+export const CONTENT_SOURCES = ["X", "FARCASTER"] as const;
+export type ContentSource = (typeof CONTENT_SOURCES)[number];
 
 export type MarketplaceCampaign = MarketplaceCampaignDto;
 export type MarketplaceApplication = MarketplaceApplicationDto;
+export type CampaignListResponse = CoreCampaignListResponse;
+export type CampaignDetailResponse = CoreCampaignDetailResponse;
 
 export type MarketplaceActivity = {
   id: string;
@@ -52,23 +58,48 @@ export type PreparedApplicationMutationResponse = ApplicationMutationResponse & 
   transaction: MarketplaceTransactionDto;
 };
 
-export function usdcAtomsToDisplay(value: string | null | undefined): string {
+export function campaignBudgetAtoms(campaign: MarketplaceCampaign): string {
+  return campaign.budgetGen;
+}
+
+export function campaignContentSource(campaign: MarketplaceCampaign): ContentSource {
+  if (campaign.contentSource !== "X" && campaign.contentSource !== "FARCASTER") {
+    throw new Error("The campaign content source is unavailable.");
+  }
+  return campaign.contentSource;
+}
+
+export function contentSourceLabel(source: ContentSource): string {
+  return source === "FARCASTER" ? "FARCASTER" : "X";
+}
+
+export function applicationRateAtoms(application: MarketplaceApplication): string {
+  return application.requestedRateGen;
+}
+
+export function genAtomsToDisplay(value: string | null | undefined): string {
   if (!value || !/^\d+$/.test(value)) return "—";
   const atoms = BigInt(value);
-  const whole = atoms / 1_000_000n;
-  const fractional = (atoms % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  const scale = 10n ** BigInt(GEN_DECIMALS);
+  const whole = atoms / scale;
+  const fractional = (atoms % scale)
+    .toString()
+    .padStart(GEN_DECIMALS, "0")
+    .replace(/0+$/, "")
+    .slice(0, 6);
   const grouped = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(whole);
   return fractional ? `${grouped}.${fractional}` : grouped;
 }
 
-export function usdcInputToAtoms(value: string): string {
+export function genInputToAtoms(value: string): string {
   const normalized = value.trim().replace(/,/g, "");
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(normalized)) {
-    throw new Error("Enter a valid test USDC amount with no more than 6 decimal places.");
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(normalized)) {
+    throw new Error("Enter a valid GEN amount with no more than 18 decimal places.");
   }
   const [whole, fractional = ""] = normalized.split(".");
-  const atoms = BigInt(whole) * 1_000_000n + BigInt(fractional.padEnd(6, "0"));
-  if (atoms <= 0n) throw new Error("The campaign budget must be greater than zero.");
+  const atoms = BigInt(whole) * (10n ** BigInt(GEN_DECIMALS))
+    + BigInt(fractional.padEnd(GEN_DECIMALS, "0"));
+  if (atoms <= 0n) throw new Error("The amount must be greater than zero.");
   return atoms.toString();
 }
 
@@ -78,9 +109,7 @@ export function campaignStatusLabel(status: CampaignStatus): string {
 
 export function fundingStatusLabel(status: FundingStatus | null | undefined): string {
   if (!status) return "FUNDING UNAVAILABLE";
-  if (status === "funded") return "FUNDED ON BASE";
-  if (status === "pending") return "FUNDING PENDING";
-  if (status === "failed") return "FUNDING FAILED";
+  if (status === "funded") return "FUNDED ON GENLAYER";
   return "NOT YET FUNDED";
 }
 
@@ -97,4 +126,13 @@ export function deadlineLabel(value: string, nowMs: number): string {
 export function shortenAddress(value: string | null | undefined): string {
   if (!value || value.length < 13) return value ?? "—";
   return `${value.slice(0, 7)}…${value.slice(-5)}`;
+}
+
+export function studioNetExplorerLink(kind: "tx" | "address", value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (kind === "tx" && !/^0x[\da-f]{64}$/i.test(value)) return null;
+  if (kind === "address" && !/^0x[\da-f]{40}$/i.test(value)) return null;
+  return kind === "tx"
+    ? `${STUDIONET_EXPLORER_URL}/tx/${value}`
+    : `${STUDIONET_EXPLORER_URL}/address/${value}`;
 }

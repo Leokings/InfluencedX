@@ -316,7 +316,7 @@ test("finalized metrics idempotency key rejects every semantic mutation", () => 
   );
 });
 
-test("metrics refresh route accepts no caller-provided counts or resolver arguments", async () => {
+test("legacy Base metrics route is retired from the GenLayer-native API", async () => {
   const source = await readFile(
     new URL(
       "../app/api/marketplace/creators/[wallet]/metrics/route.ts",
@@ -324,10 +324,9 @@ test("metrics refresh route accepts no caller-provided counts or resolver argume
     ),
     "utf8",
   );
-  assert.match(source, /Object\.keys\(body\)\.length !== 0/);
-  assert.match(source, /refreshMarketplaceCreatorMetrics/);
-  assert.match(source, /getMarketplaceCreatorMetricsStatus/);
-  assert.doesNotMatch(source, /body\.(?:followers|following|engagement|pay|handle|identity)/i);
+  assert.match(source, /GENLAYER_NATIVE_METRICS_NOT_AVAILABLE/);
+  assert.match(source, /status: 410/);
+  assert.doesNotMatch(source, /marketplace-metrics-(?:service|binding)/);
 });
 
 test("0005 marketplace migration is journaled and includes all durable tables", async () => {
@@ -379,7 +378,7 @@ test("0005 marketplace migration is journaled and includes all durable tables", 
     ),
   ) as { entries: Array<{ tag: string }> };
   assert.ok(journal.entries.some((entry) => entry.tag === "0005_influencedx_marketplace"));
-  assert.equal(journal.entries.at(-1)?.tag, "0008_studionet_cutover");
+  assert.equal(journal.entries.at(-1)?.tag, "0009_genlayer_native_marketplace");
 });
 
 test("0007 adds a recoverable CAS lease without storing signer material", async () => {

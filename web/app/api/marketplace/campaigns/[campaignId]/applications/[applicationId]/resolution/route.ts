@@ -2,7 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { prepareMarketplaceResolutionRequest } from "@/lib/marketplace-service";
+import { prepareGenLayerResolution } from "@/lib/marketplace-genlayer-actions";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -21,7 +21,7 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await prepareMarketplaceResolutionRequest({
+    const result = await prepareGenLayerResolution({
       campaignId,
       applicationId,
       session,

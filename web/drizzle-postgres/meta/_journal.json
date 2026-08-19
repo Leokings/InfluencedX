@@ -64,6 +64,13 @@
       "when": 1787130000000,
       "tag": "0008_studionet_cutover",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787140800000,
+      "tag": "0009_genlayer_native_marketplace",
+      "breakpoints": true
     }
   ]
 }

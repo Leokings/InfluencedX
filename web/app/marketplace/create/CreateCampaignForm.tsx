@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { marketplaceErrorMessage, marketplaceRequest } from "../marketplace-api";
 import {
+  type ContentSource,
   type CampaignMutationResponse,
+  genInputToAtoms,
   shortenAddress,
-  usdcInputToAtoms,
+  STUDIONET_FUNDING_GUIDE_URL,
 } from "../marketplace-types";
 import { useMarketplaceWallet } from "../use-marketplace-wallet";
 
@@ -19,6 +21,7 @@ type SubmissionState =
 export function CreateCampaignForm() {
   const router = useRouter();
   const wallet = useMarketplaceWallet();
+  const [contentSource, setContentSource] = useState<ContentSource>("X");
   const [submission, setSubmission] = useState<SubmissionState>({ phase: "idle", message: null });
 
   async function submitCampaign(event: FormEvent<HTMLFormElement>) {
@@ -49,13 +52,14 @@ export function CreateCampaignForm() {
           title: String(values.get("title") ?? "").trim(),
           description,
           category: String(values.get("category") ?? "").trim(),
-          format: String(values.get("format") ?? "").trim(),
+          contentSource,
+          format: "Post",
           deliverables,
           requiredPhrases,
           forbiddenPhrases,
           requireAdDisclosure: values.get("requireAdDisclosure") === "on",
           semanticBrief,
-          budgetUsdc: usdcInputToAtoms(String(values.get("budgetUsdc") ?? "")),
+          budgetGen: genInputToAtoms(String(values.get("budgetGen") ?? "")),
           deadline: deadline.toISOString(),
         }),
       });
@@ -69,7 +73,7 @@ export function CreateCampaignForm() {
     <form className="marketplace-form" onSubmit={submitCampaign}>
       <div className="marketplace-form-head">
         <div><span>CAMPAIGN RECORD</span><strong>NEW / UNFUNDED</strong></div>
-        <span className="run-state"><i /> BASE SEPOLIA</span>
+        <span className="run-state"><i /> GENLAYER STUDIONET</span>
       </div>
 
       <div className="marketplace-wallet-panel">
@@ -83,15 +87,15 @@ export function CreateCampaignForm() {
         {wallet.hasSession ? (
           <button className="verify-secondary" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET</button>
         ) : null}
-        {wallet.address && !wallet.isBaseSepolia ? (
-          <button className="verify-secondary" type="button" onClick={() => void wallet.switchToBaseSepolia()}>
-            SWITCH TO BASE SEPOLIA
+        {wallet.address && !wallet.isStudioNet ? (
+          <button className="verify-secondary" type="button" onClick={() => void wallet.switchToStudioNet()}>
+            SWITCH TO STUDIONET
           </button>
         ) : null}
       </div>
       {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
       <p className="marketplace-auth-note">
-        The brand signs a one-time, gasless wallet challenge to create an HttpOnly session. Creators still need an active X ownership profile to apply. <Link href="/verify">Verify a creator wallet →</Link>
+        The brand signs a one-time, gasless wallet challenge to create an HttpOnly session. Creators need an active identity for the campaign&apos;s selected source. <Link href="/verify">Verify a creator wallet →</Link>
       </p>
 
       <div className="marketplace-form-fields">
@@ -101,7 +105,7 @@ export function CreateCampaignForm() {
         </label>
         <label>
           <span>CAMPAIGN TITLE</span>
-          <input name="title" maxLength={100} minLength={3} placeholder="BASE BUILDER SPRINT" required />
+          <input name="title" maxLength={100} minLength={3} placeholder="CREATOR LAUNCH SPRINT" required />
         </label>
         <label className="field-wide">
           <span>PUBLIC BRIEF</span>
@@ -120,15 +124,25 @@ export function CreateCampaignForm() {
         </label>
         <label>
           <span>CONTENT FORMAT</span>
-          <select name="format" defaultValue="Thread" required>
-            <option>Thread</option>
-            <option>Video</option>
-            <option>Post</option>
-          </select>
+          <input name="format" value="Post" readOnly aria-describedby="format-note" />
+          <small id="format-note">The current MVP verifies one original public text post.</small>
         </label>
         <label>
-          <span>BUDGET / TEST USDC</span>
-          <input name="budgetUsdc" inputMode="decimal" placeholder="1200" pattern="[0-9]+(?:\.[0-9]{1,6})?" required />
+          <span>CONTENT SOURCE</span>
+          <select
+            name="contentSource"
+            value={contentSource}
+            onChange={(event) => setContentSource(event.target.value as ContentSource)}
+            required
+          >
+            <option value="X">X</option>
+            <option value="FARCASTER">Farcaster</option>
+          </select>
+          <small>Applicants must verify an identity on this exact source.</small>
+        </label>
+        <label>
+          <span>BUDGET / TEST GEN</span>
+          <input name="budgetGen" inputMode="decimal" placeholder="1200" pattern="[0-9]+(?:\.[0-9]{1,18})?" required />
         </label>
         <label>
           <span>APPLICATION DEADLINE</span>
@@ -136,7 +150,13 @@ export function CreateCampaignForm() {
         </label>
         <label className="field-wide">
           <span>DELIVERABLES / ONE PER LINE</span>
-          <textarea name="deliverables" maxLength={2_000} rows={5} placeholder={"One original X thread with at least 6 posts\nMention @brand and include #ad\nKeep the post public for 14 days"} required />
+          <textarea
+            name="deliverables"
+            maxLength={2_000}
+            rows={5}
+            placeholder={`One original public ${contentSource === "FARCASTER" ? "Farcaster cast" : "X post"}\nMention @brand and include #ad\nKeep the post public for 14 days`}
+            required
+          />
         </label>
         <div className="field-wide resolution-criteria-head">
           <span>GENLAYER RESOLUTION CRITERIA</span>
@@ -144,7 +164,7 @@ export function CreateCampaignForm() {
         </div>
         <label>
           <span>REQUIRED PHRASES / ONE PER LINE</span>
-          <textarea name="requiredPhrases" maxLength={3_220} rows={4} placeholder={"InfluencedX\nBase"} />
+          <textarea name="requiredPhrases" maxLength={3_220} rows={4} placeholder={"InfluencedX\nGenLayer"} />
         </label>
         <label>
           <span>FORBIDDEN PHRASES / ONE PER LINE</span>
@@ -162,7 +182,7 @@ export function CreateCampaignForm() {
 
       <div className="marketplace-disclosure">
         <strong>TESTNET SAFETY</strong>
-        <p>This form creates a database record only. Funding is a separate wallet transaction and uses Base Sepolia test USDC—not real funds.</p>
+        <p>This creates a draft. Funding is a separate payable StudioNet transaction that locks native test GEN in the InfluencedX contract. Need GEN? Use GenLayer Studio&apos;s built-in 💧 faucet and confirm it funded the same wallet address. <a href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">OFFICIAL INSTRUCTIONS ↗</a></p>
       </div>
       {submission.phase === "error" ? <p className="form-message error" role="alert">{submission.message}</p> : null}
       {submission.phase === "submitting" ? <p className="form-message" role="status">{submission.message}</p> : null}

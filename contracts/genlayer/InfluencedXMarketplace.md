@@ -31,7 +31,8 @@ Withdrawals deliberately use four observable states:
 
 1. `PENDING`: value is reserved from the user's claimable balance.
 2. `EMITTED_UNCONFIRMED`: an external native transfer to the EOA was emitted.
-3. `CONFIRMED`: the owner reconciler supplied finalized transfer evidence.
+3. `CONFIRMED`: the narrowly scoped withdrawal confirmer supplied finalized
+   transfer evidence.
 4. `RESTORED_FAILED`: after the recovery delay, while paused, the owner supplied
    failure evidence, recapitalized the exact lost value, and restored the user
    credit.
@@ -77,10 +78,23 @@ cannot be supplied by a leader.
 ## Deployment and administration
 
 Constructor arguments are
-`(treasury: Address, protocol_fee_bps: u256, upgrade_admin: Address)`. The
+`(treasury: Address, protocol_fee_bps: u256, upgrade_admin: Address, withdrawal_confirmer: Address)`.
+The
 fee is capped at 1,000 bps and snapshotted into each campaign. Treasury and
-two-step owner-transfer addresses cannot be zero. Pause blocks new risk while
+all constructor role addresses cannot be zero. Pause blocks new risk while
 refund, withdrawal, and recovery paths stay available.
+
+`confirm_withdrawal` is callable only by `withdrawal_confirmer`. That role has
+no pause, fee, treasury, ownership, recovery, or upgrade authority. The owner
+may rotate it with `set_withdrawal_confirmer`; exceptional recapitalization and
+restoration remain owner-only. The contract rejects a confirmer that overlaps
+the owner, pending owner, or upgrade administrator, including across owner
+transfer and confirmer rotation.
+
+For an in-place upgrade, the appended `withdrawal_confirmer` slot starts at the
+zero address because constructors do not rerun. Confirmation therefore fails
+closed until the owner initializes the role with `set_withdrawal_confirmer`.
+A fresh deployment supplies the role as the fourth constructor argument.
 
 The dedicated upgrade administrator is the only GenVM Root upgrader. An
 upgrade must be scheduled by the exact SHA-256 of the new source, the

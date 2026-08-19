@@ -95,6 +95,6 @@ Deploy this directory as its own Vercel project only after v2 is deployed and ve
 
 ## Governance boundary
 
-Owner-only withdrawal reconciliation (`confirm_withdrawal` / `restore_failed_withdrawal`), pause/unpause, fee changes, treasury changes, and upgrades are intentionally excluded. They require a separate governance service/process, distinct keys, independent approvals, a seven-day timelock, and an audit trail. Do not add those methods to this operator's signer adapter or queue topic.
+Withdrawal reconciliation (`confirm_withdrawal`), owner-only recovery (`restore_failed_withdrawal`), pause/unpause, fee changes, treasury changes, and upgrades are intentionally excluded. The exact transfer confirmation is handled by the separately keyed restricted withdrawal reconciler; governance and recovery require cold, independently approved administration with an audit trail. Do not add any of those methods to this operator's signer adapter or queue topic.
 
 Vercel Queues currently provides at-least-once delivery and an air-gapped push consumer when configured with a `queue/v2beta` trigger. See the [Vercel Queues documentation](https://vercel.com/docs/queues).

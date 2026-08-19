@@ -2,7 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { applyToMarketplaceCampaign } from "@/lib/marketplace-service";
+import { prepareGenLayerApplication } from "@/lib/marketplace-genlayer-actions";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -21,13 +21,13 @@ export async function POST(
       wallet: session.wallet,
       requestId: campaignId,
     });
-    const result = await applyToMarketplaceCampaign({
+    const result = await prepareGenLayerApplication({
       campaignId,
       session,
       body,
     });
     return Response.json(result, {
-      status: 201,
+      status: 200,
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {

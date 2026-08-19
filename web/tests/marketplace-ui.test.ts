@@ -3,13 +3,19 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   fundingStatusLabel,
-  usdcAtomsToDisplay,
-  usdcInputToAtoms,
+  genAtomsToDisplay,
+  genInputToAtoms,
+  STUDIONET_MARKETPLACE_ADDRESS,
+  STUDIONET_MARKETPLACE_DEPLOYMENT_TX,
+  studioNetExplorerLink,
 } from "../app/marketplace/marketplace-types.ts";
 import {
-  MarketplaceApiError,
-  marketplaceErrorMessage,
-} from "../app/marketplace/marketplace-api.ts";
+  assertMarketplaceTransactionFinality,
+  assertMarketplaceWalletContext,
+  hydrateArgs,
+  validatePlan,
+} from "../app/marketplace/marketplace-transaction.ts";
+import { MarketplaceApiError, marketplaceErrorMessage } from "../app/marketplace/marketplace-api.ts";
 import {
   classifyCreatorMetrics,
   MAX_CREATOR_METRICS_CONCURRENCY,
@@ -17,203 +23,292 @@ import {
 } from "../app/marketplace/use-creator-metrics.ts";
 import type { MarketplaceMetricsDto } from "../lib/marketplace-types.ts";
 
-test("formats test USDC only from canonical base-unit strings", () => {
-  assert.equal(usdcAtomsToDisplay("0"), "0");
-  assert.equal(usdcAtomsToDisplay("1200000000"), "1,200");
-  assert.equal(usdcAtomsToDisplay("1234567"), "1.234567");
-  assert.equal(usdcAtomsToDisplay("not-money"), "—");
+test("formats native GEN only from canonical 18-decimal atomic strings", () => {
+  assert.equal(genAtomsToDisplay("0"), "0");
+  assert.equal(genAtomsToDisplay("1200000000000000000000"), "1,200");
+  assert.equal(genAtomsToDisplay("1234567000000000000"), "1.234567");
+  assert.equal(genAtomsToDisplay("not-money"), "—");
 });
 
-test("converts creator and campaign amounts to six-decimal USDC atomics", () => {
-  assert.equal(usdcInputToAtoms("1,200"), "1200000000");
-  assert.equal(usdcInputToAtoms("0.000001"), "1");
-  assert.throws(() => usdcInputToAtoms("1.0000001"), /no more than 6 decimal places/);
-  assert.throws(() => usdcInputToAtoms("0"), /greater than zero/);
+test("converts creator and campaign amounts to 18-decimal GEN atomics", () => {
+  assert.equal(genInputToAtoms("1,200"), "1200000000000000000000");
+  assert.equal(genInputToAtoms("0.000000000000000001"), "1");
+  assert.throws(() => genInputToAtoms("1.0000000000000000001"), /no more than 18 decimal places/);
+  assert.throws(() => genInputToAtoms("0"), /greater than zero/);
 });
 
-test("never presents absent funding data as confirmed", () => {
+test("never presents absent GenLayer funding as confirmed", () => {
   assert.equal(fundingStatusLabel(undefined), "FUNDING UNAVAILABLE");
   assert.equal(fundingStatusLabel("unfunded"), "NOT YET FUNDED");
-  assert.equal(fundingStatusLabel("funded"), "FUNDED ON BASE");
+  assert.equal(fundingStatusLabel("funded"), "FUNDED ON GENLAYER");
+});
+
+test("uses the live StudioNet explorer route shapes", () => {
+  const transactionHash = `0x${"12".repeat(32)}`;
+  const address = `0x${"34".repeat(20)}`;
+  assert.equal(studioNetExplorerLink("tx", transactionHash), `https://explorer-studio.genlayer.com/tx/${transactionHash}`);
+  assert.equal(studioNetExplorerLink("address", address), `https://explorer-studio.genlayer.com/address/${address}`);
+  assert.equal(STUDIONET_MARKETPLACE_ADDRESS, "0x58D598B8323E9C1d041989DccE80E737109DE347");
+  assert.equal(STUDIONET_MARKETPLACE_DEPLOYMENT_TX, "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a");
 });
 
 test("adds wallet recovery guidance only to wallet-session conflicts", () => {
-  assert.equal(
-    marketplaceErrorMessage(new MarketplaceApiError(409, "Deadline passed.", "INVALID_MARKETPLACE_STATE")),
-    "Deadline passed.",
+  assert.equal(marketplaceErrorMessage(new MarketplaceApiError(409, "Deadline passed.", "INVALID_MARKETPLACE_STATE")), "Deadline passed.");
+  assert.match(marketplaceErrorMessage(new MarketplaceApiError(409, "Wallet mismatch.", "SESSION_WALLET_MISMATCH")), /Sign out, then reconnect/);
+});
+
+test("rejects a wrong active account and a non-StudioNet wallet chain", () => {
+  const actor = "0x1111111111111111111111111111111111111111";
+  assert.throws(
+    () => assertMarketplaceWalletContext(["0x2222222222222222222222222222222222222222"], "0xf22f", actor),
+    /active wallet account no longer matches/,
   );
-  assert.match(
-    marketplaceErrorMessage(new MarketplaceApiError(409, "Wallet mismatch.", "SESSION_WALLET_MISMATCH")),
-    /Sign out, then reconnect/,
+  assert.throws(() => assertMarketplaceWalletContext([actor], "0x1", actor), /Switch.*StudioNet/);
+  assert.doesNotThrow(() => assertMarketplaceWalletContext([actor.toUpperCase()], "0xF22F", actor));
+});
+
+test("accepts only StudioNet FINALIZED majority agreement with one successful leader return", () => {
+  const finalized = {
+    status_name: "FINALIZED",
+    result_name: "MAJORITY_AGREE",
+    consensus_data: {
+      leader_receipt: [{ mode: "leader", execution_result: "SUCCESS", result: { status: "return" } }],
+    },
+  };
+  assert.doesNotThrow(() => assertMarketplaceTransactionFinality(finalized));
+  assert.doesNotThrow(() => assertMarketplaceTransactionFinality({
+    status_name: "FINALIZED",
+    result_name: "MAJORITY_AGREE",
+    txExecutionResultName: "FINISHED_WITH_RETURN",
+    consensus_data: {
+      leader_receipt: [{ mode: "leader", execution_result: "SUCCESS", result: { status: "return" } }],
+    },
+  }));
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, status_name: "ACCEPTED" }), /validator finality/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, result_name: "MAJORITY_DISAGREE" }), /majority agreement/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, txExecutionResultName: "NOT_VOTED" }), /without a successful contract return/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, txExecutionResultName: "FINISHED_WITH_ERROR" }), /without a successful contract return/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, consensus_data: { leader_receipt: [{ mode: "leader", execution_result: "SUCCESS", result: { status: "rollback" } }] } }), /without a successful contract return/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, consensus_data: { leader_receipt: [{ mode: "validator", execution_result: "SUCCESS", result: { status: "return" } }] } }), /without a successful contract return/);
+  assert.throws(() => assertMarketplaceTransactionFinality({ ...finalized, consensus_data: { leader_receipt: [
+    { mode: "leader", execution_result: "SUCCESS", result: { status: "return" } },
+    { mode: "leader", execution_result: "SUCCESS", result: { status: "return" } },
+  ] } }), /without a successful contract return/);
+});
+
+test("hydrates prepared u256 and address arguments into GenLayer calldata types", () => {
+  class TestCalldataAddress {
+    readonly bytes: Uint8Array;
+
+    constructor(bytes: Uint8Array) {
+      this.bytes = bytes;
+    }
+  }
+  const address = `0x${"ab".repeat(20)}`;
+  const hydrated = hydrateArgs(
+    ["340282366920938463463374607431768211456", address, true, "proof"],
+    ["u256", "address", "bool", "string"],
+    TestCalldataAddress,
   );
+  assert.equal(hydrated[0], 2n ** 128n);
+  assert.ok(hydrated[1] instanceof TestCalldataAddress);
+  assert.deepEqual(Array.from((hydrated[1] as TestCalldataAddress).bytes), Array(20).fill(0xab));
+  assert.equal(hydrated[2], true);
+  assert.equal(hydrated[3], "proof");
+  assert.throws(
+    () => hydrateArgs([`0x${"ab".repeat(19)}`], ["address"], TestCalldataAddress),
+    /not a valid address/,
+  );
+  assert.throws(
+    () => hydrateArgs([(2n ** 256n).toString()], ["uint256"], TestCalldataAddress),
+    /exceeds uint256/,
+  );
+});
+
+test("wallet signing pins the V2 contract, method schema, and GEN value", () => {
+  const contract = "0x1111111111111111111111111111111111111111";
+  const base = {
+    network: "studionet" as const,
+    chainId: 61_999 as const,
+    contractAddress: contract,
+    functionName: "apply_to_campaign",
+    args: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`, "1", `0x${"33".repeat(32)}`],
+    argTypes: ["string", "string", "u256", "string"] as const,
+    value: "0",
+  };
+  assert.doesNotThrow(() => validatePlan(base as never, contract, "apply_to_campaign", "0"));
+  assert.throws(
+    () => validatePlan(base as never, contract, "submit_evidence", "0"),
+    /does not match the expected submit_evidence action/,
+  );
+  assert.throws(
+    () => validatePlan(base as never, contract, "apply_to_campaign", "1"),
+    /does not match the expected marketplace action/,
+  );
+  assert.throws(() => validatePlan({ ...base, contractAddress: "0x2222222222222222222222222222222222222222" } as never, contract), /unauthorized GenLayer contract/);
+  assert.throws(() => validatePlan({ ...base, functionName: "set_treasury", args: [contract], argTypes: ["address"] } as never, contract), /not authorized/);
+  assert.throws(() => validatePlan({ ...base, value: "1" } as never, contract), /must not transfer GEN/);
+
+  const campaignArgs = Array.from({ length: 14 }, (_, index) => index >= 8 ? "1" : index === 7 ? true : "x");
+  const campaignTypes = ["string", "string", "string", "string", "string", "string", "string", "bool", "u256", "u256", "u256", "u256", "u256", "u256"] as const;
+  assert.doesNotThrow(() => validatePlan({ ...base, functionName: "create_campaign", args: campaignArgs, argTypes: campaignTypes, value: "1" } as never, contract));
+  assert.throws(() => validatePlan({ ...base, functionName: "create_campaign", args: campaignArgs, argTypes: campaignTypes, value: "2" } as never, contract), /committed budget/);
 });
 
 test("deduplicates creator metric requests and caps the client fetch pool", () => {
   const first = "0x1111111111111111111111111111111111111111";
   const second = "0x2222222222222222222222222222222222222222";
-  assert.deepEqual(
-    normalizeCreatorMetricWallets([second, first.toUpperCase(), first, "not-a-wallet"]),
-    [first, second],
-  );
+  assert.deepEqual(normalizeCreatorMetricWallets([second, first.toUpperCase(), first, "not-a-wallet"]), [first, second]);
   assert.equal(MAX_CREATOR_METRICS_CONCURRENCY, 4);
 });
 
 test("shows a pay range only while its sanitized metrics snapshot is current", () => {
-  const metrics: MarketplaceMetricsDto = {
+  const metrics = {
     id: "metrics-1",
     followersCount: "25000",
     accountCreatedAt: "2020-01-01T00:00:00.000Z",
     postsSampled: 20,
     medianEngagementCount: "850",
     engagementRateBps: 340,
-    estimatedPayMinUsdc: "500000000",
-    estimatedPayMaxUsdc: "900000000",
+    estimatedPayMinGen: "500000000000000000000",
+    estimatedPayMaxGen: "900000000000000000000",
     riskLevel: "low",
     evidenceHash: `0x${"11".repeat(32)}`,
     capturedAt: "2026-08-11T10:00:00.000Z",
     expiresAt: "2026-08-11T12:00:00.000Z",
-  };
-
-  assert.equal(
-    classifyCreatorMetrics(metrics, Date.parse("2026-08-11T11:00:00.000Z")).phase,
-    "current",
-  );
-  assert.equal(
-    classifyCreatorMetrics(metrics, Date.parse("2026-08-11T12:00:00.000Z")).phase,
-    "expired",
-  );
+  } as unknown as MarketplaceMetricsDto;
+  assert.equal(classifyCreatorMetrics(metrics, Date.parse("2026-08-11T11:00:00.000Z")).phase, "current");
+  assert.equal(classifyCreatorMetrics(metrics, Date.parse("2026-08-11T12:00:00.000Z")).phase, "expired");
   assert.equal(classifyCreatorMetrics(null, Date.now()).phase, "unavailable");
 });
 
-test("application UI labels estimates as guidance and reads only public creator metrics", async () => {
-  const [detailSource, metricsSource] = await Promise.all([
-    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/marketplace/use-creator-metrics.ts", import.meta.url), "utf8"),
-  ]);
-
-  assert.match(detailSource, /ESTIMATED RANGE, CREATOR SETS FINAL RATE/);
-  assert.match(detailSource, /NO CURRENT EVIDENCE-BACKED RANGE/);
-  assert.match(detailSource, /ESTIMATE EXPIRED/);
-  assert.match(metricsSource, /\/api\/marketplace\/creators\//);
-  assert.match(
-    detailSource,
-    /application\.genlayerSubmitterStatus === "FINALIZED"[\s\S]*application\.resolutionTxHash/,
-  );
-  assert.doesNotMatch(detailSource, /84\.2K|estimatedPayMinUsdc:\s*["']\d/);
+test("campaign actions preserve prepared intent through wallet finality and server confirmation", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /preparedId/);
+  assert.match(source, /saveRecovery\(input\.key/);
+  assert.match(source, /body: JSON\.stringify\(\{ preparedId: prepared\.preparedId, txHash \}\)/);
+  const broadcast = source.indexOf("await broadcastMarketplaceTransaction");
+  const confirmation = source.indexOf("await marketplaceRequest(confirmPath", broadcast);
+  const clear = source.indexOf("clearRecovery(input.key)", confirmation);
+  const productReload = source.indexOf("await loadDetail()", confirmation);
+  assert.ok(broadcast >= 0 && confirmation > broadcast, "server confirmation must follow wallet finality");
+  assert.ok(clear > confirmation && productReload > confirmation, "a failed server confirmation must retain recovery and not update product state");
 });
 
-test("creator profile exposes authenticated idempotent metrics refresh and polling", async () => {
-  const source = await readFile(
-    new URL(
-      "../app/marketplace/creators/[wallet]/CreatorProfile.tsx",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  assert.match(source, /useMarketplaceWallet/);
-  assert.match(source, /REFRESH METRICS/);
-  assert.match(source, /method: "POST", body: "\{\}"/);
-  assert.match(source, /pollMetrics/);
-  assert.match(source, /GENLAYER_SUBMISSION_OUTCOME_UNKNOWN/);
-  assert.doesNotMatch(source, /followers:\s*\d|engagementRateBps:\s*\d/);
+test("campaign funding persists both prepared ID and submitted hash without auto-rebroadcast", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8");
+  assert.match(source, /const recovery = \{ preparedId: prepared\.preparedId, txHash: hash \}/);
+  assert.match(source, /sessionStorage\.setItem\(recoveryKey, JSON\.stringify\(recovery\)\)/);
+  assert.match(source, /if \(submitted\)[\s\S]*confirm\(submitted\.preparedId, submitted\.txHash\)[\s\S]*return/);
+  assert.match(source, /RECONCILE SUBMITTED TRANSACTION/);
 });
 
-test("failed creator selection is recoverable without an automatic duplicate broadcast", async () => {
-  const [detailSource, transactionSource] = await Promise.all([
-    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/marketplace/marketplace-transaction.ts", import.meta.url), "utf8"),
-  ]);
-  assert.match(detailSource, /onSubmitted:\s*\(hash\)/);
-  assert.match(detailSource, /\/select\/confirm/);
-  assert.match(detailSource, /CONFIRM EXISTING TX/);
-  assert.match(detailSource, /PRIOR TX FAILED — BROADCAST NEW/);
-  assert.match(detailSource, /Reconcile before retrying/i);
-  assert.doesNotMatch(detailSource, /localStorage|sessionStorage/);
-  assert.match(transactionSource, /eth_accounts/);
-  assert.match(transactionSource, /active wallet account no longer matches/);
-  assert.ok(
-    transactionSource.indexOf("publicClient.call") < transactionSource.indexOf("sendTransaction"),
-    "the exact call must be simulated before wallet broadcast",
-  );
-  assert.ok(
-    transactionSource.indexOf("waitForTransactionReceipt") < transactionSource.indexOf("getTransaction"),
-    "receipt and mined transaction must both be bound before success",
-  );
-});
-
-test("marketplace submit handlers snapshot FormData before asynchronous wallet work", async () => {
+test("marketplace handlers snapshot FormData before asynchronous wallet work", async () => {
   const [createSource, detailSource] = await Promise.all([
     readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
   ]);
-  const createFormData = createSource.indexOf("const values = new FormData(event.currentTarget)");
-  const createAuthenticate = createSource.indexOf("await wallet.authenticate()", createFormData);
-  assert.ok(createFormData >= 0 && createAuthenticate > createFormData);
-
+  assert.ok(createSource.indexOf("new FormData(event.currentTarget)") < createSource.indexOf("await wallet.authenticate()"));
   const applyStart = detailSource.indexOf("async function apply(");
-  const applyFormData = detailSource.indexOf("const values = new FormData(event.currentTarget)", applyStart);
-  const applyAuthenticate = detailSource.indexOf("await wallet.authenticate()", applyStart);
-  assert.ok(applyStart >= 0 && applyFormData > applyStart && applyAuthenticate > applyFormData);
-
+  assert.ok(detailSource.indexOf("new FormData(event.currentTarget)", applyStart) < detailSource.indexOf("await executePrepared", applyStart));
   const submitStart = detailSource.indexOf("async function submitEvidence(");
-  const submitFormData = detailSource.indexOf("const values = new FormData(event.currentTarget)", submitStart);
-  const submitAuthenticate = detailSource.indexOf("await wallet.authenticate()", submitStart);
-  assert.ok(submitStart >= 0 && submitFormData > submitStart && submitAuthenticate > submitFormData);
+  assert.ok(detailSource.indexOf("new FormData(event.currentTarget)", submitStart) < detailSource.indexOf("await executePrepared", submitStart));
 });
 
-test("campaign funding preserves a mined hash and never rebroadcasts on receipt retry", async () => {
-  const source = await readFile(
-    new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.match(source, /sessionStorage\.setItem\(recoveryKey, fundingHash\)/);
-  assert.match(source, /searchParams\.get\("fundingTxHash"\)/);
-  assert.match(source, /if \(confirmedFundingHash\)[\s\S]*recordConfirmedFunding\(confirmedFundingHash\)[\s\S]*return/);
-  assert.match(source, /RECORD CONFIRMED FUNDING/);
-  assert.ok(
-    source.indexOf("sessionStorage.setItem(recoveryKey, fundingHash)") <
-      source.indexOf("recordConfirmedFunding(fundingHash)"),
-  );
-});
-
-test("a stale wallet session always exposes a sign-out recovery control", async () => {
-  const [walletSource, detailSource, createSource] = await Promise.all([
-    readFile(new URL("../app/marketplace/use-marketplace-wallet.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(walletSource, /hasSession: sessionWallet !== null/);
-  assert.match(walletSource, /setSessionWallet\(session\.authenticated \? session\.wallet : null\)/);
-  assert.match(detailSource, /wallet\.hasSession \? \(/);
-  assert.match(createSource, /wallet\.hasSession \? \(/);
-});
-
-test("escrow recovery UI waits for server receipt and post-state confirmation", async () => {
-  const source = await readFile(
-    new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.match(source, /BASE ESCROW RECOVERY/);
-  assert.match(source, /\$\{basePath\}\/\$\{kind\}/);
-  assert.match(source, /\$\{basePath\}\/\$\{kind\}\/confirm/);
-  assert.match(source, /if \(!confirmed\.confirmation\)/);
-  assert.match(source, /setSettlement\(confirmed\.settlement\)/);
-  assert.match(source, /CREDIT UNUSED BALANCE/);
-  assert.match(source, /WITHDRAW CLAIMABLE/);
+test("GenLayer settlement UI confirms contract state before displaying a claim or refund", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /GENLAYER BALANCES/);
+  assert.match(source, /preparedId: prepared\.preparedId, txHash/);
+  assert.match(source, /REFUND UNUSED GEN/);
+  assert.match(source, /REQUEST GEN WITHDRAWAL/);
+  assert.match(source, /EXECUTE GEN WITHDRAWAL/);
+  assert.match(source, /EMITTED_UNCONFIRMED/);
+  assert.match(source, /NOT YET PAID/);
+  assert.match(source, /studionet-settlement/);
   assert.doesNotMatch(source, /set(?:Campaign|Application).*paid|set(?:Campaign|Application).*refunded/i);
 });
 
-test("UNDETERMINED is retryable only after the server reopens the campaign", async () => {
-  const source = await readFile(
-    new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),
-    "utf8",
-  );
-  const requestBranch = source.indexOf("application.requestId && application.resolutionRequestTxHash");
-  const undeterminedBranch = source.indexOf('application.resolutionOutcome === "undetermined"');
-  const genericFinalBranch = source.indexOf("application.resolutionOutcome && application.resolutionTxHash", undeterminedBranch + 1);
-  assert.ok(requestBranch >= 0 && requestBranch < undeterminedBranch);
-  assert.ok(undeterminedBranch >= 0 && undeterminedBranch < genericFinalBranch);
-  assert.match(source, /const ready = campaign\.status === "submitted"/);
-  assert.match(source, /REQUEST NEXT ROUND/);
+test("UNDETERMINED exposes bounded retry and refund paths", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /application\.resolutionOutcome === "undetermined"/);
+  assert.match(source, /RETRY RESOLUTION/);
+  assert.match(source, /REFUND AFTER RETRY CEILING/);
   assert.match(source, /No payout or refund was assigned/);
+});
+
+test("resolution UI shows deterministic contract checks without a generated narrative", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /application\.resolutionChecks/);
+  assert.match(source, /AUTHOR MATCH/);
+  assert.match(source, /CONTENT ID MATCH/);
+  assert.match(source, /DISCLOSURE PRESENT/);
+  assert.match(source, /SEMANTIC PASS/);
+  assert.match(source, /no generated narrative is shown/i);
+  assert.doesNotMatch(source, /application\.(?:reasoning|narrative)/);
+});
+
+test("X and Farcaster verification use source-specific challenges and direct user-signed V2 activations", async () => {
+  const source = await readFile(new URL("../app/verify/VerifyFlow.tsx", import.meta.url), "utf8");
+  assert.match(source, /\/api\/verification\/x-challenge/);
+  assert.match(source, /\/api\/verification\/farcaster-challenge/);
+  assert.match(source, /\/api\/verification\/activation/);
+  assert.match(source, /source, castHash:/);
+  assert.match(source, /source, verificationPostUrl:/);
+  assert.match(source, /activate_farcaster_creator/);
+  assert.match(source, /activate_creator/);
+  assert.match(source, /genlayerOutcome === "UNDETERMINED"/);
+  assert.match(source, /RETRY .* ACTIVATION/);
+  assert.match(source, /Do not publish again/);
+  assert.match(source, /broadcastMarketplaceTransaction/);
+  assert.match(source, /preparedId: value\.preparedId, txHash: value\.txHash/);
+  assert.doesNotMatch(source, /\/api\/verification\/(intent|submit)/);
+  assert.doesNotMatch(source, /BASE RELAY|BASE SEPOLIA/);
+});
+
+test("V2 marketplace UI binds campaigns and content IDs to X or Farcaster", async () => {
+  const [createSource, detailSource, directorySource, profileSource] = await Promise.all([
+    readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/components/CampaignDirectory.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/creators/[wallet]/CreatorProfile.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(createSource, /contentSource/);
+  assert.match(createSource, /FARCASTER/);
+  assert.match(directorySource, /campaignContentSource/);
+  assert.match(detailSource, /0x\[0-9a-fA-F\]\{40\}/);
+  assert.match(detailSource, /\[0-9\]\{5,25\}/);
+  assert.match(detailSource, /contentId/);
+  assert.match(profileSource, /creator\.farcaster/);
+  assert.match(profileSource, /FARCASTER/);
+  assert.match(profileSource, /creator\.x/);
+  assert.match(profileSource, /activationTxHash/);
+  assert.doesNotMatch(profileSource, /baseProfileId|publicHandle|verificationPostHash|handleHash|xPostId/);
+  assert.doesNotMatch(profileSource, /useCreatorMetrics|marketplace-metrics|estimatedPay/);
+});
+
+test("active marketplace and verification UI is StudioNet-native with no Base transaction path", async () => {
+  const sources = await Promise.all([
+    "../app/page.tsx",
+    "../app/layout.tsx",
+    "../app/privacy/page.tsx",
+    "../app/terms/page.tsx",
+    "../app/verify/VerifyFlow.tsx",
+    "../app/marketplace/components/CampaignDirectory.tsx",
+    "../app/marketplace/components/MarketplaceHeader.tsx",
+    "../app/marketplace/create/CreateCampaignForm.tsx",
+    "../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx",
+    "../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx",
+    "../app/marketplace/creators/[wallet]/CreatorProfile.tsx",
+    "../app/marketplace/marketplace-types.ts",
+    "../app/marketplace/use-marketplace-wallet.ts",
+  ].map((path) => readFile(new URL(path, import.meta.url), "utf8")));
+  const combined = sources.join("\n");
+  assert.match(combined, /GENLAYER STUDIONET/);
+  assert.match(combined, /TEST GEN/);
+  assert.match(combined, /docs\.genlayer\.com\/developers\/networks#studionet/);
+  assert.match(combined, /built-in 💧 faucet/);
+  assert.doesNotMatch(combined, /\bBASE\b|\bUSDC\b|84532|basescan|\bescrow\b|\bwatcher\b|\brelay\b/i);
+  assert.doesNotMatch(combined, /eth_sendTransaction|wallet_sendCalls|createWalletClient|encodeFunctionData/);
+  assert.doesNotMatch(combined, /\/api\/verification\/(?:intent|submit)/);
+  assert.doesNotMatch(combined, />Thread<|>Video<|X thread/i);
 });

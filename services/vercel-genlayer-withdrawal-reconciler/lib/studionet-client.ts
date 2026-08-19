@@ -31,8 +31,8 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
     throw new Error("STUDIONET_CHAIN_MISMATCH");
   }
   const account = createAccount(config.privateKey);
-  if (account.address.toLowerCase() !== config.contractOwner) {
-    throw new Error("WITHDRAWAL_SIGNER_IS_NOT_PINNED_OWNER");
+  if (account.address.toLowerCase() !== config.contractWithdrawalConfirmer) {
+    throw new Error("WITHDRAWAL_SIGNER_IS_NOT_PINNED_WITHDRAWAL_CONFIRMER");
   }
   const client = createClient({ chain: studionet, endpoint: config.rpcUrl, account });
 
@@ -51,14 +51,12 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
     const chainId = await rawRpc(config.rpcUrl, "eth_chainId", []);
     if (chainId !== "0xf22f" && chainId !== STUDIONET_CHAIN_ID) throw new Error("STUDIONET_CHAIN_MISMATCH");
     const identity = requiredRecord(await read("get_config", []), "MARKETPLACE_CONFIG_INVALID");
-    if (
-      identity.protocol_version !== config.contractProtocol ||
-      Number(identity.storage_schema_version) !== config.contractSchemaVersion ||
-      text(identity.owner)?.toLowerCase() !== config.contractOwner ||
-      identity.native_token_symbol !== "GEN" ||
-      Number(identity.native_token_decimals) !== 18 ||
-      Number(identity.withdrawal_recovery_delay_seconds) !== WITHDRAWAL_RECOVERY_DELAY_SECONDS
-    ) throw new Error("MARKETPLACE_CONTRACT_IDENTITY_MISMATCH");
+    const boundaryError = marketplaceConfigBoundaryError(
+      identity,
+      config,
+      account.address.toLowerCase(),
+    );
+    if (boundaryError) throw new Error(boundaryError);
   }
 
   async function getTransaction(txHash: string): Promise<Receipt> {
@@ -158,6 +156,39 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
     },
     getTransaction,
   });
+}
+
+export function marketplaceConfigBoundaryError(
+  identity: Record<string, unknown>,
+  config: ReconcilerConfig,
+  signerAddress: string,
+): string | null {
+  if (
+    identity.protocol_version !== config.contractProtocol ||
+    Number(identity.storage_schema_version) !== config.contractSchemaVersion ||
+    identity.native_token_symbol !== "GEN" ||
+    Number(identity.native_token_decimals) !== 18 ||
+    Number(identity.withdrawal_recovery_delay_seconds) !== WITHDRAWAL_RECOVERY_DELAY_SECONDS ||
+    typeof identity.pending_owner_active !== "boolean"
+  ) return "MARKETPLACE_CONTRACT_IDENTITY_MISMATCH";
+
+  const confirmer = roleAddress(identity.withdrawal_confirmer);
+  const owner = roleAddress(identity.owner);
+  const upgradeAdmin = roleAddress(identity.upgrade_admin);
+  const pendingOwner = identity.pending_owner_active === true
+    ? roleAddress(identity.pending_owner)
+    : null;
+  if (!confirmer || !owner || !upgradeAdmin || (identity.pending_owner_active === true && !pendingOwner)) {
+    return "MARKETPLACE_CONTRACT_IDENTITY_MISMATCH";
+  }
+  if (
+    confirmer !== config.contractWithdrawalConfirmer ||
+    signerAddress.toLowerCase() !== config.contractWithdrawalConfirmer
+  ) return "WITHDRAWAL_CONFIRMER_MISMATCH";
+  if (confirmer === owner || confirmer === upgradeAdmin || confirmer === pendingOwner) {
+    return "WITHDRAWAL_CONFIRMER_GOVERNANCE_ROLE_OVERLAP";
+  }
+  return null;
 }
 
 export function externalTransferBindingError(
@@ -332,6 +363,13 @@ function canonicalQuantity(value: unknown): string {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function roleAddress(value: unknown): string | null {
+  const normalized = text(value)?.toLowerCase() ?? "";
+  return /^0x[0-9a-f]{40}$/.test(normalized) && !/^0x0{40}$/.test(normalized)
+    ? normalized
+    : null;
 }
 
 function requiredRecord(value: unknown, code: string): Record<string, unknown> {

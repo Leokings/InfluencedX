@@ -1,9 +1,9 @@
 import { handleCallback, type RetryDirective } from "@vercel/queue";
 import {
-  CampaignProgressionPoisonError,
-  campaignProgressionQueueRetryDelaySeconds,
-  processQueuedCampaignProgression,
-} from "../../../../lib/campaign-progression.ts";
+  GenLayerProgressionPoisonError,
+  genLayerProgressionRetryDelaySeconds,
+  reconcileQueuedGenLayerProgression,
+} from "../../../../lib/marketplace-genlayer-progression.ts";
 import {
   CampaignProgressionQueueMessageError,
   validateCampaignProgressionQueueMessage,
@@ -20,7 +20,7 @@ export const maxDuration = 300;
 export const POST = handleCallback(
   async (payload: unknown) => {
     const message = validateCampaignProgressionQueueMessage(payload);
-    await processQueuedCampaignProgression(message);
+    await reconcileQueuedGenLayerProgression(message);
   },
   {
     visibilityTimeoutSeconds: 10 * 60,
@@ -34,12 +34,12 @@ export function campaignProgressionQueueRetryDirective(
 ): RetryDirective {
   if (
     error instanceof CampaignProgressionQueueMessageError ||
-    error instanceof CampaignProgressionPoisonError
+    error instanceof GenLayerProgressionPoisonError
   ) {
     return { acknowledge: true };
   }
   return {
-    afterSeconds: campaignProgressionQueueRetryDelaySeconds(
+    afterSeconds: genLayerProgressionRetryDelaySeconds(
       metadata.deliveryCount,
     ),
   };

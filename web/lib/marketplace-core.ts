@@ -49,10 +49,14 @@ export function requireText(
   if (typeof value !== "string") {
     throw invalid(field, `${field} is required.`);
   }
-  const normalized = value.trim();
+  // GenLayer's contract-side `_clean_text` uses
+  // `" ".join(value.strip().split())`. Keep the server-side prepared hash and
+  // calldata byte-for-byte identical, including for tabs/newlines and Unicode.
+  const normalized = value.trim().split(/\s+/u).join(" ");
+  const codePointLength = [...normalized].length;
   if (
-    normalized.length < minLength ||
-    normalized.length > maxLength ||
+    codePointLength < minLength ||
+    codePointLength > maxLength ||
     [...normalized].some((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
       return (
@@ -94,6 +98,20 @@ export function requireStringList(
     throw invalid(field, `${field} cannot contain duplicate items.`);
   }
   return normalized;
+}
+
+export function buildCampaignContractBrief(
+  semanticBrief: unknown,
+  deliverables: readonly string[],
+): string {
+  const brief = requireText(semanticBrief, "semanticBrief", 10, 4_000);
+  if (deliverables.length === 0) {
+    throw invalid("deliverables", "At least one deliverable is required.");
+  }
+  const bound = `${brief} Deliverables: ${deliverables
+    .map((deliverable, index) => `${index + 1}. ${deliverable}`)
+    .join(" | ")}`;
+  return requireText(bound, "semanticBrief", 10, 4_000);
 }
 
 export function requireFutureDeadline(

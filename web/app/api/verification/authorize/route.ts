@@ -1,13 +1,14 @@
 import {
   ApiProblem,
+  assertExactJsonKeys,
   apiError,
   readSameOriginJson,
   requireString,
 } from "@/lib/verification-api";
 import {
-  authorizeWallet,
-  getVerificationStatus,
-} from "@/lib/verification-service";
+  authorizeNativeVerificationWallet,
+  getNativeVerificationStatus,
+} from "@/lib/verification-native-service";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 import {
   attachWalletSessionCookie,
@@ -22,6 +23,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
+    assertExactJsonKeys(body, ["requestId", "signature"]);
     const session = readWalletSession(request);
     await enforceVerificationRateLimit(request, "authorize", {
       subject: session?.subject,
@@ -35,7 +37,7 @@ export async function POST(request: Request) {
     }
     const requestId = requireString(body, "requestId", 128);
     if (isAuthenticatedWalletSession(session)) {
-      const current = await getVerificationStatus({
+      const current = await getNativeVerificationStatus({
         ownerUserId: session.subject,
         requestId,
       });
@@ -48,7 +50,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const verified = await authorizeWallet({
+    const verified = await authorizeNativeVerificationWallet({
       ownerUserId: session.subject,
       requestId,
       signature: requireString(body, "signature", 1_000),

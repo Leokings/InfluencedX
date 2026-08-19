@@ -6,8 +6,9 @@ import {
   createPinnedWithdrawalClient,
   externalTransferBindingError,
   finalizedSuccessful,
+  marketplaceConfigBoundaryError,
 } from "../lib/studionet-client";
-import { MARKETPLACE_ADDRESS, MARKETPLACE_OWNER } from "../lib/constants";
+import { MARKETPLACE_ADDRESS } from "../lib/constants";
 import {
   CHILD_TX,
   CONFIRM_TX,
@@ -15,7 +16,9 @@ import {
   emittedWithdrawal,
   PARENT_TX,
   RECIPIENT,
+  TEST_PRIVATE_KEY_SIGNER,
   transferProof,
+  WITHDRAWAL_CONFIRMER,
 } from "./helpers";
 import { configFixture } from "./helpers";
 
@@ -49,18 +52,48 @@ test("external transfer evidence binds the unique child to parent, contract, rec
   }
 });
 
-test("the signer adapter refuses any private key that does not derive to the live contract owner", () => {
+test("the signer adapter requires the key to derive to the configured withdrawal confirmer", () => {
+  assert.doesNotThrow(() => createPinnedWithdrawalClient({
+    ...configFixture(),
+    contractWithdrawalConfirmer: TEST_PRIVATE_KEY_SIGNER,
+  }));
   assert.throws(
     () => createPinnedWithdrawalClient(configFixture()),
-    /WITHDRAWAL_SIGNER_IS_NOT_PINNED_OWNER/,
+    /WITHDRAWAL_SIGNER_IS_NOT_PINNED_WITHDRAWAL_CONFIRMER/,
   );
 });
 
-test("confirmation receipt must bind the owner, contract, zero value, method, and both exact hashes", () => {
+test("live config binds the signer to a non-governance withdrawal confirmer", () => {
+  const config = configFixture();
+  const identity = {
+    protocol_version: config.contractProtocol,
+    storage_schema_version: config.contractSchemaVersion,
+    native_token_symbol: "GEN",
+    native_token_decimals: 18,
+    withdrawal_recovery_delay_seconds: 24 * 60 * 60,
+    withdrawal_confirmer: WITHDRAWAL_CONFIRMER,
+    owner: `0x${"21".repeat(20)}`,
+    upgrade_admin: `0x${"22".repeat(20)}`,
+    pending_owner: `0x${"00".repeat(20)}`,
+    pending_owner_active: false,
+  };
+  assert.equal(marketplaceConfigBoundaryError(identity, config, WITHDRAWAL_CONFIRMER), null);
+  for (const [patch, signer, code] of [
+    [{ withdrawal_confirmer: RECIPIENT }, WITHDRAWAL_CONFIRMER, "WITHDRAWAL_CONFIRMER_MISMATCH"],
+    [{}, RECIPIENT, "WITHDRAWAL_CONFIRMER_MISMATCH"],
+    [{ owner: WITHDRAWAL_CONFIRMER }, WITHDRAWAL_CONFIRMER, "WITHDRAWAL_CONFIRMER_GOVERNANCE_ROLE_OVERLAP"],
+    [{ upgrade_admin: WITHDRAWAL_CONFIRMER }, WITHDRAWAL_CONFIRMER, "WITHDRAWAL_CONFIRMER_GOVERNANCE_ROLE_OVERLAP"],
+    [{ pending_owner_active: true, pending_owner: WITHDRAWAL_CONFIRMER }, WITHDRAWAL_CONFIRMER, "WITHDRAWAL_CONFIRMER_GOVERNANCE_ROLE_OVERLAP"],
+  ] as Array<[Record<string, unknown>, string, string]>) {
+    assert.equal(marketplaceConfigBoundaryError({ ...identity, ...patch }, config, signer), code);
+  }
+});
+
+test("confirmation receipt must bind the confirmer, contract, zero value, method, and both exact hashes", () => {
   const proof = transferProof();
   const expected = {
     txHash: CONFIRM_TX,
-    signerAddress: MARKETPLACE_OWNER,
+    signerAddress: WITHDRAWAL_CONFIRMER,
     contractAddress: MARKETPLACE_ADDRESS,
     withdrawalId: proof.withdrawalId,
     evidenceHash: proof.evidenceHash,

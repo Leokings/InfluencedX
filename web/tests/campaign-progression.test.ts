@@ -19,6 +19,7 @@ import {
   validateCampaignProgressionQueueMessage,
 } from "../lib/campaign-progression-queue.ts";
 import { ApiProblem } from "../lib/verification-api.ts";
+import { MARKETPLACE_MAINTENANCE_QUEUE_TOPIC } from "../lib/marketplace-genlayer-maintenance-queue.ts";
 import type { MarketplaceProgressionClaim } from "../lib/marketplace-repository.ts";
 
 const NOW = 1_786_536_000_000;
@@ -178,8 +179,7 @@ test("queue publisher emits only immutable identifiers with bounded retention", 
   const result = await enqueueCampaignProgression(
     {
       requestId: REQUEST_ID,
-      campaignId: CAMPAIGN_ID,
-      applicationId: APPLICATION_ID,
+      assignmentId: `0x${"ab".repeat(32)}`,
     },
     (async (...args: unknown[]) => {
       calls.push(args);
@@ -191,13 +191,12 @@ test("queue publisher emits only immutable identifiers with bounded retention", 
   const [topic, payload, options] = calls[0] ?? [];
   assert.equal(topic, CAMPAIGN_PROGRESSION_QUEUE_TOPIC);
   assert.deepEqual(payload, {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    assignmentId: `0x${"ab".repeat(32)}`,
     requestId: REQUEST_ID,
-    campaignId: CAMPAIGN_ID,
-    applicationId: APPLICATION_ID,
   });
   assert.deepEqual(options, {
-    idempotencyKey: `influencedx-campaign-progression:${REQUEST_ID}`,
+    idempotencyKey: `influencedx-campaign-progression-v3:0x${"ab".repeat(32)}:${REQUEST_ID}`,
     retentionSeconds: CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS,
     delaySeconds: 0,
   });
@@ -207,20 +206,18 @@ test("queue publisher emits only immutable identifiers with bounded retention", 
 test("queue message validation rejects extra fields and malformed bindings", () => {
   assert.throws(
     () => validateCampaignProgressionQueueMessage({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      assignmentId: `0x${"ab".repeat(32)}`,
       requestId: REQUEST_ID,
-      campaignId: CAMPAIGN_ID,
-      applicationId: APPLICATION_ID,
       rawEvidence: "must-not-cross-the-queue",
     }),
     CampaignProgressionQueueMessageError,
   );
   assert.throws(
     () => validateCampaignProgressionQueueMessage({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      assignmentId: `0x${"ab".repeat(32)}`,
       requestId: "0x1234",
-      campaignId: CAMPAIGN_ID,
-      applicationId: APPLICATION_ID,
     }),
     CampaignProgressionQueueMessageError,
   );
@@ -230,8 +227,7 @@ test("an idempotency duplicate confirms the existing queue delivery", async () =
   const result = await enqueueCampaignProgression(
     {
       requestId: REQUEST_ID,
-      campaignId: CAMPAIGN_ID,
-      applicationId: APPLICATION_ID,
+      assignmentId: `0x${"ab".repeat(32)}`,
     },
     (async () => {
       throw new DuplicateMessageError(
@@ -355,7 +351,7 @@ test("queue consumer acknowledges completed work and poisons changed bindings", 
   );
 });
 
-test("queue retries are bounded and Vercel has no minute cron", async () => {
+test("queue retries are bounded and Hobby uses a queue heartbeat with a daily bootstrap", async () => {
   assert.equal(campaignProgressionQueueRetryDelaySeconds(1), 60);
   assert.equal(campaignProgressionQueueRetryDelaySeconds(2), 120);
   assert.equal(campaignProgressionQueueRetryDelaySeconds(99), 900);
@@ -375,10 +371,21 @@ test("queue retries are bounded and Vercel has no minute cron", async () => {
       initialDelaySeconds: 0,
     }],
   );
-  assert.equal(
-    config.crons?.some((cron) => cron.path?.includes("campaign-progression")),
-    false,
+  assert.deepEqual(
+    config.functions?.["app/api/queues/marketplace-maintenance/route.ts"]
+      ?.experimentalTriggers,
+    [{
+      type: "queue/v2beta",
+      topic: MARKETPLACE_MAINTENANCE_QUEUE_TOPIC,
+      retryAfterSeconds: 60,
+      initialDelaySeconds: 0,
+    }],
   );
+  assert.deepEqual(
+    config.crons?.filter((cron) => cron.path?.includes("campaign-progression")),
+    [{ path: "/api/internal/campaign-progression", schedule: "0 4 * * *" }],
+  );
+  assert.ok(config.crons?.every((cron) => !cron.schedule?.includes("*/5")));
 });
 
 function claim(index: number, attemptCount = 1): MarketplaceProgressionClaim {

@@ -1,9 +1,11 @@
+import { createAccount } from "genlayer-js";
+
 import {
   MARKETPLACE_ADDRESS,
-  MARKETPLACE_OWNER,
   MARKETPLACE_PROTOCOL,
   MARKETPLACE_RPC_ADDRESS,
   MARKETPLACE_SCHEMA_VERSION,
+  MARKETPLACE_WITHDRAWAL_CONFIRMER,
   RECONCILER_NETWORK,
   RECONCILER_STAGE,
   STUDIONET_CHAIN_ID,
@@ -19,7 +21,7 @@ export type ReconcilerConfig = Readonly<{
   rpcUrl: typeof STUDIONET_RPC_URL;
   contractAddress: typeof MARKETPLACE_ADDRESS;
   rpcContractAddress: typeof MARKETPLACE_RPC_ADDRESS;
-  contractOwner: typeof MARKETPLACE_OWNER;
+  contractWithdrawalConfirmer: string;
   contractProtocol: typeof MARKETPLACE_PROTOCOL;
   contractSchemaVersion: typeof MARKETPLACE_SCHEMA_VERSION;
   privateKey: `0x${string}`;
@@ -34,17 +36,23 @@ export type ReconcilerConfig = Readonly<{
   }>;
 }>;
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): ReconcilerConfig {
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  deriveSignerAddress: (privateKey: `0x${string}`) => string = (privateKey) => createAccount(privateKey).address,
+): ReconcilerConfig {
   const enabled = required(env, "INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED");
   const stage = required(env, "INFLUENCEDX_WITHDRAWAL_RECONCILER_STAGE");
   const network = required(env, "INFLUENCEDX_GENLAYER_NETWORK");
   const chainId = required(env, "INFLUENCEDX_GENLAYER_CHAIN_ID");
   const rpcUrl = required(env, "INFLUENCEDX_GENLAYER_RPC_URL");
   const contractAddress = required(env, "INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS").toLowerCase();
-  const contractOwner = required(env, "INFLUENCEDX_GENLAYER_MARKETPLACE_OWNER").toLowerCase();
+  const contractWithdrawalConfirmer = required(
+    env,
+    "INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER",
+  ).toLowerCase();
   const contractProtocol = required(env, "INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL");
   const contractSchemaVersion = required(env, "INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION");
-  const privateKey = required(env, "GENLAYER_WITHDRAWAL_OWNER_PRIVATE_KEY");
+  const privateKey = required(env, "GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY");
   const databaseUrl = required(env, "DATABASE_URL");
   const serviceToken = required(env, "INFLUENCEDX_WITHDRAWAL_RECONCILER_SERVICE_TOKEN");
   const teamSlug = required(env, "INFLUENCEDX_WITHDRAWAL_CALLER_TEAM_SLUG");
@@ -59,11 +67,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ReconcilerConf
   if (chainId !== String(STUDIONET_CHAIN_ID)) fail(`INFLUENCEDX_GENLAYER_CHAIN_ID must be ${STUDIONET_CHAIN_ID}.`);
   if (rpcUrl !== STUDIONET_RPC_URL) fail("INFLUENCEDX_GENLAYER_RPC_URL is not the pinned StudioNet endpoint.");
   if (contractAddress !== MARKETPLACE_ADDRESS) fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V2 deployment.");
-  if (contractOwner !== MARKETPLACE_OWNER) fail("INFLUENCEDX_GENLAYER_MARKETPLACE_OWNER is not the pinned V2 owner.");
+  if (!/^0x[0-9a-f]{40}$/.test(contractWithdrawalConfirmer) || /^0x0{40}$/.test(contractWithdrawalConfirmer)) {
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER must be a non-zero address.");
+  }
+  if (contractWithdrawalConfirmer !== MARKETPLACE_WITHDRAWAL_CONFIRMER) {
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER is not the pinned confirmer.");
+  }
   if (contractProtocol !== MARKETPLACE_PROTOCOL) fail("The marketplace protocol must be INFLUENCEDX_MARKETPLACE_V2.");
   if (contractSchemaVersion !== String(MARKETPLACE_SCHEMA_VERSION)) fail("The marketplace storage schema must be 2.");
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey) || /^0x0{64}$/i.test(privateKey)) {
-    fail("GENLAYER_WITHDRAWAL_OWNER_PRIVATE_KEY must be a non-zero 32-byte key.");
+    fail("GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY must be a non-zero 32-byte key.");
+  }
+  let signerAddress: string;
+  try {
+    signerAddress = deriveSignerAddress(privateKey as `0x${string}`).toLowerCase();
+  } catch {
+    fail("GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY is invalid.");
+  }
+  if (signerAddress !== contractWithdrawalConfirmer) {
+    fail("GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY does not derive to the configured withdrawal confirmer.");
   }
   if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) fail("DATABASE_URL must be a PostgreSQL connection URL.");
   if (!/^[0-9a-fA-F]{64}$/.test(serviceToken)) fail("The reconciler service token must be random 32-byte hex.");
@@ -82,7 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ReconcilerConf
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: MARKETPLACE_ADDRESS,
     rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
-    contractOwner: MARKETPLACE_OWNER,
+    contractWithdrawalConfirmer,
     contractProtocol: MARKETPLACE_PROTOCOL,
     contractSchemaVersion: MARKETPLACE_SCHEMA_VERSION,
     privateKey: privateKey as `0x${string}`,

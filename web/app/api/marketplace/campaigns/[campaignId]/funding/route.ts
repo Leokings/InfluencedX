@@ -2,7 +2,7 @@ import {
   readMarketplaceJson,
   requireMarketplaceSession,
 } from "@/lib/marketplace-api";
-import { confirmMarketplaceCampaignFunding } from "@/lib/marketplace-service";
+import { confirmGenLayerCampaignFunding } from "@/lib/marketplace-genlayer-service";
 import { apiError } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 
@@ -21,7 +21,7 @@ export async function POST(
       "marketplace-campaign-create",
       { subject: session.subject, wallet: session.wallet, requestId: campaignId },
     );
-    const result = await confirmMarketplaceCampaignFunding({
+    const result = await confirmGenLayerCampaignFunding({
       campaignId,
       session,
       body,

@@ -4,122 +4,155 @@ const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 
 const sql = neon(databaseUrl, { readOnly: true });
-const [tableState] = await sql.query(`
+const [state] = await sql.query(`
   select
-    to_regclass('public.verification_requests') is not null as table_ready,
-    to_regclass('public.verification_rate_limits') is not null as rate_limits_ready,
-    to_regclass('public.xproof_bradbury_submission_status') is not null as submitter_status_ready,
-    to_regclass('public.xproof_bradbury_submission_jobs') is not null as submitter_jobs_ready,
-    to_regclass('public.xproof_bradbury_signer_gate') is not null as signer_gate_ready,
-    to_regclass('public.ownership_authorization_grants') is not null as authorization_grants_ready,
-    to_regclass('public.marketplace_campaigns') is not null as marketplace_campaigns_ready,
-    to_regclass('public.marketplace_applications') is not null as marketplace_applications_ready,
-    to_regclass('public.marketplace_creator_profiles') is not null as marketplace_profiles_ready,
-    to_regclass('public.marketplace_creator_metrics_snapshots') is not null as marketplace_metrics_ready,
-    to_regclass('public.marketplace_campaign_resolution_relays') is not null as marketplace_relays_ready,
-    EXISTS (
-      SELECT 1
-      FROM pg_constraint c
-      JOIN pg_class t ON t.oid = c.conrelid
-      JOIN pg_namespace n ON n.oid = t.relnamespace
-      WHERE n.nspname = 'public'
-        AND t.relname = 'xproof_bradbury_submission_status'
-        AND c.conname = 'xproof_bradbury_submission_status_network_resolver_check'
-        AND pg_get_constraintdef(c.oid) LIKE '%studionet%'
-        AND pg_get_constraintdef(c.oid) LIKE '%testnet-bradbury%'
-    ) AS studionet_history_constraint_ready,
     (
-      SELECT column_default = '''studionet''::text'
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'xproof_bradbury_submission_status'
-        AND column_name = 'network'
-    ) AS studionet_default_ready,
+      to_regclass('public.verification_requests') is not null
+      and to_regclass('public.verification_rate_limits') is not null
+      and to_regclass('public.marketplace_genlayer_campaign_drafts') is not null
+      and to_regclass('public.marketplace_genlayer_profiles') is not null
+      and to_regclass('public.marketplace_genlayer_applications_private') is not null
+      and to_regclass('public.marketplace_genlayer_campaigns') is not null
+      and to_regclass('public.marketplace_genlayer_assignments') is not null
+      and to_regclass('public.marketplace_genlayer_transactions') is not null
+      and to_regclass('public.marketplace_genlayer_claimable_balances') is not null
+      and to_regclass('public.marketplace_genlayer_withdrawals') is not null
+      and to_regclass('public.marketplace_genlayer_projection_cursors') is not null
+    ) as native_tables_ready,
+    not exists (
+      select 1
+      from (values
+        ('verification_requests', 'identity_source'),
+        ('verification_requests', 'farcaster_username'),
+        ('verification_requests', 'farcaster_fid'),
+        ('verification_requests', 'farcaster_challenge'),
+        ('verification_requests', 'farcaster_cast_text'),
+        ('verification_requests', 'farcaster_challenge_issued_at'),
+        ('verification_requests', 'farcaster_challenge_expires_at'),
+        ('verification_requests', 'farcaster_cast_hash'),
+        ('verification_requests', 'activation_prepared_id'),
+        ('verification_requests', 'activation_tx_hash'),
+        ('verification_requests', 'activation_confirmed_at'),
+        ('marketplace_genlayer_profiles', 'projection_id'),
+        ('marketplace_genlayer_profiles', 'network'),
+        ('marketplace_genlayer_profiles', 'chain_id'),
+        ('marketplace_genlayer_profiles', 'contract_address'),
+        ('marketplace_genlayer_profiles', 'source'),
+        ('marketplace_genlayer_profiles', 'identity_hash'),
+        ('marketplace_genlayer_campaigns', 'projection_id'),
+        ('marketplace_genlayer_campaigns', 'campaign_id'),
+        ('marketplace_genlayer_campaigns', 'content_source'),
+        ('marketplace_genlayer_campaigns', 'budget_atto'),
+        ('marketplace_genlayer_campaigns', 'available_atto'),
+        ('marketplace_genlayer_campaigns', 'reserved_atto'),
+        ('marketplace_genlayer_campaigns', 'settled_atto'),
+        ('marketplace_genlayer_campaigns', 'creator_paid_atto'),
+        ('marketplace_genlayer_campaigns', 'brand_refunded_atto'),
+        ('marketplace_genlayer_campaigns', 'fee_atto'),
+        ('marketplace_genlayer_assignments', 'projection_id'),
+        ('marketplace_genlayer_assignments', 'network'),
+        ('marketplace_genlayer_assignments', 'chain_id'),
+        ('marketplace_genlayer_assignments', 'contract_address'),
+        ('marketplace_genlayer_assignments', 'assignment_id'),
+        ('marketplace_genlayer_assignments', 'content_source'),
+        ('marketplace_genlayer_assignments', 'resolution_checks'),
+        ('marketplace_genlayer_transactions', 'arg_types'),
+        ('marketplace_genlayer_transactions', 'value_atto'),
+        ('marketplace_genlayer_withdrawals', 'withdrawal_id'),
+        ('marketplace_genlayer_withdrawals', 'recapitalized_atto')
+      ) as required(table_name, column_name)
+      where not exists (
+        select 1 from information_schema.columns c
+        where c.table_schema = 'public'
+          and c.table_name = required.table_name
+          and c.column_name = required.column_name
+      )
+    ) as native_columns_ready,
     (
-      select count(*)::int
-      from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'verification_requests'
-    ) as column_count,
-    (
-      select count(*)::int
-      from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'verification_requests'
-        and column_name in (
-          'base_relay_status', 'base_relay_tx_hash', 'base_relay_updated_at',
-          'base_confirmed_at', 'base_relay_error_code', 'base_registry_address',
-          'base_profile_id', 'base_profile_identity_hash',
-          'base_profile_handle_hash', 'base_profile_verification_post_hash',
-          'base_profile_expires_at', 'base_profile_active',
-          'base_profile_verified'
+      select count(*)::int = 10
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      join pg_namespace n on n.oid = t.relnamespace
+      where n.nspname = 'public'
+        and c.conname in (
+          'verification_requests_identity_source',
+          'verification_requests_farcaster_fid',
+          'verification_requests_farcaster_cast_hash',
+          'verification_requests_activation_tx',
+          'verification_requests_expiry_state',
+          'marketplace_genlayer_profiles_namespace',
+          'marketplace_genlayer_profiles_source',
+          'marketplace_genlayer_campaigns_namespace',
+          'marketplace_genlayer_assignments_namespace',
+          'marketplace_genlayer_withdrawals_namespace'
         )
-    ) as base_relay_column_count,
+    ) as native_constraints_ready,
+    (
+      select count(*)::int = 8
+      from pg_indexes
+      where schemaname = 'public'
+        and indexname in (
+          'verification_requests_activation_prepared_idx',
+          'marketplace_genlayer_profiles_owner_contract_idx',
+          'marketplace_genlayer_profiles_identity_contract_idx',
+          'marketplace_genlayer_campaigns_entity_contract_idx',
+          'marketplace_genlayer_assignments_entity_contract_idx',
+          'marketplace_genlayer_transactions_hash_idx',
+          'marketplace_genlayer_withdrawals_entity_contract_idx',
+          'marketplace_genlayer_claimable_balances_pk'
+        )
+    ) as native_indexes_ready,
     (
       select count(*)::int
       from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'marketplace_applications'
-        and column_name in (
-          'genlayer_submitter_status', 'genlayer_tx_hash',
-          'genlayer_result_outcome', 'genlayer_lifecycle_status',
-          'genlayer_execution_result', 'genlayer_error_code',
-          'genlayer_submitted_at', 'genlayer_finalized_at'
-        )
-    ) as marketplace_genlayer_column_count
-    ,(
+      where table_schema = 'public' and table_name = 'verification_requests'
+    ) as verification_column_count,
+    (
       select count(*)::int
-      from information_schema.columns
+      from information_schema.tables
       where table_schema = 'public'
-        and table_name = 'marketplace_campaign_resolution_relays'
-    ) as marketplace_relay_column_count
+        and table_name in (
+          'marketplace_campaigns', 'marketplace_applications',
+          'marketplace_creator_profiles', 'xproof_bradbury_submission_status'
+        )
+    ) as historical_table_count
 `);
 
-if (
-  !tableState?.table_ready ||
-  !tableState.rate_limits_ready ||
-  !tableState.submitter_status_ready ||
-  !tableState.submitter_jobs_ready ||
-  !tableState.signer_gate_ready ||
-  !tableState.authorization_grants_ready ||
-  !tableState.marketplace_campaigns_ready ||
-  !tableState.marketplace_applications_ready ||
-  !tableState.marketplace_profiles_ready ||
-  !tableState.marketplace_metrics_ready ||
-  !tableState.marketplace_relays_ready ||
-  !tableState.studionet_history_constraint_ready ||
-  !tableState.studionet_default_ready ||
-  tableState.column_count !== 68 ||
-  tableState.base_relay_column_count !== 13 ||
-  tableState.marketplace_genlayer_column_count !== 8 ||
-  tableState.marketplace_relay_column_count !== 21
-) {
-  throw new Error("The InfluencedX verification schema is not fully migrated.");
+const nativeReadiness = {
+  tables: Boolean(state?.native_tables_ready),
+  columns: Boolean(state?.native_columns_ready),
+  constraints: Boolean(state?.native_constraints_ready),
+  indexes: Boolean(state?.native_indexes_ready),
+};
+if (Object.values(nativeReadiness).includes(false)) {
+  throw new Error(
+    `The InfluencedX GenLayer-native schema is not fully migrated: ${JSON.stringify(nativeReadiness)}`,
+  );
 }
 
-const [rowState] = await sql.query(
+const [requestState] = await sql.query(
   "select count(*)::int as request_count from public.verification_requests",
 );
-const [submissionState] = await sql.query(
-  "select count(*)::int as submission_count from public.xproof_bradbury_submission_status",
+const [campaignState] = await sql.query(
+  "select count(*)::int as campaign_count from public.marketplace_genlayer_campaigns",
 );
-const [authorizationState] = await sql.query(
-  "select count(*)::int as authorization_grant_count from public.ownership_authorization_grants",
+const [assignmentState] = await sql.query(
+  "select count(*)::int as assignment_count from public.marketplace_genlayer_assignments",
 );
-const [marketplaceRelayState] = await sql.query(
-  "select count(*)::int as relay_count from public.marketplace_campaign_resolution_relays",
+const [withdrawalState] = await sql.query(
+  "select count(*)::int as withdrawal_count from public.marketplace_genlayer_withdrawals",
 );
-process.stdout.write(
-  `${JSON.stringify({
-    ok: true,
-    table: "verification_requests",
-    columns: tableState.column_count,
-    rows: rowState.request_count,
-    submitterStatusRows: submissionState.submission_count,
-    authorizationGrantRows: authorizationState.authorization_grant_count,
-    marketplaceGenLayerColumns: tableState.marketplace_genlayer_column_count,
-    marketplaceRelayColumns: tableState.marketplace_relay_column_count,
-    marketplaceRelayRows: marketplaceRelayState.relay_count,
-    studioNetCutoverReady: true,
-  })}\n`,
-);
+
+process.stdout.write(JSON.stringify({
+  ok: true,
+  network: "studionet",
+  chainId: 61_999,
+  schemaVersion: 2,
+  verificationColumns: state.verification_column_count,
+  verificationRequests: requestState.request_count,
+  campaigns: campaignState.campaign_count,
+  assignments: assignmentState.assignment_count,
+  withdrawals: withdrawalState.withdrawal_count,
+  historicalTablesPresent: state.historical_table_count,
+  genLayerNativeReady: true,
+}) + "\n");

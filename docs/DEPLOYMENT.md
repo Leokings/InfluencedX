@@ -1,251 +1,315 @@
-# InfluencedX deployment and rollback runbook
+# InfluencedX GenLayer V2 deployment and cutover
 
-This runbook deploys the submission build against the recorded Base Sepolia
-contracts and the current GenLayer StudioNet resolver. It does not authorize a
-mainnet launch or a Base contract redeployment. StudioNet is temporary and may
-be reset; treat every StudioNet deployment and proof as replaceable demo state.
+This runbook deploys the GenLayer-only product. It does not deploy, configure,
+or depend on Base, USDC, watchers, the historical submitter, or a cross-network
+relay.
 
-The current hosted submission build is
-[influencedx-preview.vercel.app](https://influencedx-preview.vercel.app). Its
-six Preview deployments are enabled: web, StudioNet submitter, three isolated
-watchers, and the settlement coordinator/low-balance Base relayer. These hosted
-services do not depend on a developer laptop remaining online.
+## Current release boundary
 
-## 1. Pin the developer-network boundary
+The frozen StudioNet V2 contract exists at
+`0x58D598B8323E9C1d041989DccE80E737109DE347`. The native PostgreSQL migrations
+are applied and verified, and the web/API plus both hosted services are enabled
+in an isolated Preview release at
+`https://influencedx-native-preview.vercel.app`. The existing public alias has
+not moved. **Public cutover and complete user-driven V2 E2E evidence are still
+pending.**
 
-| Setting | Required value |
-| --- | --- |
-| Base chain ID | `84532` |
-| Base RPC | A dedicated Base Sepolia RPC (the public RPC is acceptable only for light test use) |
-| Base Sepolia test USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| Creator registry | `0x10079EF049D283BC3f212CCaC4291b3aC2719C48` |
-| Campaign escrow | `0x7e9B6B757d1Ef12509889826B2f2A42906661927` |
-| Attestation receiver | `0x15dDbCd98F97065746a1c35f88BB670a7A942264` |
-| GenLayer network | StudioNet (`61999`) |
-| GenLayer RPC | `https://studio.genlayer.com/api` |
-| StudioNet APV2 resolver | `0x0913b5593Ff16974E2fd616cA678A4986Cb48600` |
-| Receiver cutover transaction | [`0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839`](https://sepolia.basescan.org/tx/0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839) |
-| Receiver current state | StudioNet resolver pinned; unpaused |
-| Watcher policy | Three enabled addresses, threshold two |
+The release consists of three separately deployed projects:
 
-Before every release, compare those values with
-[`../deployments/base-sepolia.json`](../deployments/base-sepolia.json) and
-[`../deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json),
-then run the read-only verifier:
+1. `web/` — user interface, API, PostgreSQL projection, and progression queue;
+2. `services/vercel-genlayer-marketplace-operator/` — fixed permissionless
+   maintenance writes; and
+3. `services/vercel-genlayer-withdrawal-reconciler/` — exact native-transfer
+   proof and narrowly scoped withdrawal-confirmer authorization.
+
+Each project is disabled by default. Never place either service private key in
+the web project.
+
+## 1. Freeze and validate the release
+
+Use a clean release commit and record it before changing any hosted state.
 
 ```powershell
 cd C:\path\to\adproof
-npm ci
-npm run contracts:compile
-npm run verify:base-sepolia
-```
-
-Do not copy an address from a browser screenshot or a frontend label.
-
-## 2. Preserve the dedicated source boundary
-
-The project has a dedicated public repository at
-[github.com/Leokings/InfluencedX](https://github.com/Leokings/InfluencedX).
-The repository root is the InfluencedX source boundary and the `origin` remote
-must continue to point to `Leokings/InfluencedX`; do not publish it through an
-unrelated parent workspace or restore nested `web/.git` metadata into the
-source tree. The committed workflows are root-relative.
-
-The repository root `.gitignore` excludes:
-
-- every `.env` variant except committed `.env.example` templates;
-- `.secrets/`, keystores, password files, PEM/P12/PFX/key files;
-- `.vercel/`, `.wrangler/`, Next.js output, logs, reports, and deployment
-  journals.
-
-Confirm ignore behavior without opening the files:
-
-```powershell
-git check-ignore -v web/.env.local .secrets/example.keystore.json `
-  web/.vercel/project.json reports/example.json deployments/example.journal.json
-```
-
-Review filenames and staged paths before every commit. Never stage
-`web/.env.local`, a database URL, an auth secret, a private key, a keystore, a
-password file, an exported wallet, or Vercel project metadata. Public addresses
-and transaction hashes in `deployments/*.json` are intentional.
-
-Before publishing, confirm the remote and source boundary without printing any
-secret-bearing files:
-
-```powershell
-git remote -v
 git status --short
-git ls-files web
-```
+python -m pip install --requirement requirements-direct.txt
+genvm-lint check contracts/genlayer/InfluencedXMarketplace.py --json
+python -m pytest tests/direct -q
 
-## 3. Provision and migrate PostgreSQL
-
-Use a managed PostgreSQL/Neon database with TLS, restricted application and
-migration roles, backups, point-in-time recovery, and a tested deletion path.
-Inject `DATABASE_URL` into the migration shell; do not put it in a command line,
-commit, screenshot, or demo recording.
-
-```powershell
 cd web
 npm ci
-npm run db:migrate
-npm run db:verify
+npm run lint
+npm test
+
+cd ..\services\vercel-genlayer-marketplace-operator
+npm ci
+npm run lint
+npm test
+npm run build
+npm audit --omit=dev
+
+cd ..\vercel-genlayer-withdrawal-reconciler
+npm ci
+npm run lint
+npm test
+npm run build
+npm audit --omit=dev
 ```
 
-The migration history in `web/drizzle-postgres/` includes ownership state,
-rate-limit buckets, submitter state, one-time Base relay grants, marketplace
-campaigns/applications/profiles, GenLayer campaign-submission columns, and the
-durable fenced campaign-settlement relay and campaign-progression lease records.
-`db:verify` is the release gate; a partially migrated database must not receive
-traffic.
+Do not treat the root `test:base`, `test:relay`, `test:services`,
+`test:submitter`, `deploy:base-sepolia`, `cutover:base:studionet`,
+`settlement:*`, or `relay:*` scripts as V2 release commands. They preserve the
+former prototype for regression/audit only.
 
-Run a restore rehearsal and the X-derived-data deletion job before treating the
-database as production-ready.
+## 2. Verify the pinned StudioNet contract
 
-## 4. Configure the web deployment
+Read, do not mutate, the deployment before configuring hosted services:
 
-Create a Vercel project with `web/` as its root directory, Node.js 24, the Next.js
-framework preset, and `npm run build` as the build command. Use separate Preview
-and Production environment values.
+```powershell
+genlayer schema 0x58D598B8323E9C1d041989DccE80E737109DE347 --rpc https://studio.genlayer.com/api
+genlayer code 0x58D598B8323E9C1d041989DccE80E737109DE347 --rpc https://studio.genlayer.com/api
+genlayer call 0x58D598B8323E9C1d041989DccE80E737109DE347 get_config --rpc https://studio.genlayer.com/api
+genlayer receipt 0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a --rpc https://studio.genlayer.com/api
+```
 
-Server-only secret groups are documented in [`../web/.env.example`](../web/.env.example):
+Stop if any live value differs from
+[`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json),
+including network `studionet`, chain `61999`, protocol
+`INFLUENCEDX_MARKETPLACE_V2`, schema `2`, native symbol/decimals, owner,
+treasury, upgrade administrator, fee, pause state, or seven-day delay. Stop if
+the deployment receipt is not finalized with a successful leader return.
 
-- database/session/rate-limit/cron secrets;
-- the ownership evidence-sealing keyring;
-- submitter URL and OIDC bridge gates;
-- Base Sepolia RPC and deployed contract addresses;
-- exact public origin and independent verification/marketplace mutation gates.
+The manifest currently records `productionOwnerConfigured: false`. This is an
+intentional developer-network limitation, not a condition to waive for mainnet.
 
-None of these values may use the `NEXT_PUBLIC_` prefix. For a new environment,
-start with both mutation gates and every bridge disabled, deploy, and verify the
-read-only pages before enabling them. The current controlled Preview has these
-gates enabled after migration, binding, and simulation checks:
+## 3. Provision isolated data stores
 
-- `XPROOF_VERIFICATION_MUTATIONS_ENABLED=true`
-- `XPROOF_MARKETPLACE_MUTATIONS_ENABLED=true`
-- `XPROOF_PREVIEW_CAMPAIGN_RETENTION_SECONDS=300` only when a controlled,
-  same-day Base Sepolia rehearsal needs a five-minute resolution gate. This is
-  a server-only default: the request body cannot select a sub-day retention,
-  the exact effective value is committed into the campaign terms hash, and a
-  configured override fails closed unless the runtime is Vercel Preview.
-- `XPROOF_SUBMITTER_BRIDGE_ENABLED=true` after the isolated submitter is
-  healthy and its exact HTTPS origin is configured
-- `XPROOF_AUTHORIZATION_BROKER_ENABLED=true` for the scoped Preview ownership
-  relay authorization path
-- `XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED=true` after all three watcher services
-  and the coordinator simulation/broadcast gates pass
+Use a private PostgreSQL database for the web projection. Give the marketplace
+operator and withdrawal reconciler separate databases or strictly isolated
+schemas/roles so a service cannot read or mutate another service's private job
+envelopes or signer fence.
 
-These are Preview testnet settings, not authorization for a Production/mainnet
-release. Deploying `web/vercel.json` registers the air-gapped Vercel Queues
-consumer for `influencedx-studionet-campaign-progression-v2`. The confirmed
-Base request publishes only its request, campaign, and application IDs; the
-consumer reclaims the exact binding through a fenced Neon lease before
-contacting GenLayer or the Base relay. No browser, laptop process, signer key,
-or watcher key participates in that worker. Queue retries are bounded and the
-database remains the authoritative idempotency boundary.
+Back up the target database, verify the restore path, and apply migrations only
+to the isolated release:
 
-The daily cleanup cron and optional authenticated progression-recovery route
-additionally require an independent `CRON_SECRET`. The recovery route is not a
-minute cron and is not part of the normal queue path.
+```powershell
+cd C:\path\to\adproof\web
+npm run db:migrate
+npm run db:verify
 
-The old
-[`../deployments/genlayer-bradbury.json`](../deployments/genlayer-bradbury.json)
-record is historical evidence only. Never copy its resolver into current
-configuration.
+cd ..\services\vercel-genlayer-marketplace-operator
+npm run migrate
 
-## 5. Deploy the isolated StudioNet submitter
+cd ..\vercel-genlayer-withdrawal-reconciler
+npm run migrate
+```
 
-Deploy `services/vercel-bradbury-submitter/` as a separate Vercel project. It is
-the only hosted process that may hold the StudioNet signer. The directory name
-is retained as an internal compatibility path; it does not select the network.
-Follow
-its [service README](../services/vercel-bradbury-submitter/README.md) and use the
-safe names in its `.env.example`.
+The web migration includes
+[`0009_genlayer_native_marketplace.sql`](../web/drizzle-postgres/0009_genlayer_native_marketplace.sql).
+Confirm every projection and uniqueness boundary is scoped by network, chain,
+contract, protocol/schema version, and onchain ID. Never rewrite historical
+Base or V1 rows into V2 rows.
 
-Required controls:
+## 4. Configure the marketplace operator while disabled
 
-1. Keep the signer key server-only and scoped to StudioNet. StudioNet calls are
-   gasless, so do not fund this key with real assets.
-2. Validate the exact Vercel team, project, environment, issuer, audience, and
-   submitter stage claims from the short-lived OIDC token.
-3. Allow only the pinned resolver and fixed ownership/campaign methods.
-4. Keep the application database reader away from the private submission-job
-   table.
-5. Leave the service disabled until migrations and reconciliation checks pass.
+Create a separate Vercel project rooted at
+`services/vercel-genlayer-marketplace-operator/`. Configure every variable in
+its [`.env.example`](../services/vercel-genlayer-marketplace-operator/.env.example)
+for the exact isolated web project and deployment environment.
 
-Its Vercel Queues consumer is pinned to
-`influencedx-studionet-submissions-v1`; do not reuse the historical queue topic
-or point the consumer at another GenLayer network.
+Critical pins are:
 
-Do not replace Vercel OIDC with a long-lived shared bearer token.
+```text
+INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false
+INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE=studionet
+INFLUENCEDX_GENLAYER_NETWORK=studionet
+INFLUENCEDX_GENLAYER_CHAIN_ID=61999
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
+INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
+INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
+```
 
-## 6. Preview release sequence
+Generate a dedicated StudioNet operator key. It must not be the owner, upgrade
+administrator, treasury, a user wallet, or the withdrawal signer. Store the key
+and independent 32-byte service token only in encrypted server-side settings.
 
-1. Run all commands in [the verification report](TEST-REPORT.md).
-2. Migrate and verify the Preview database.
-3. Deploy the isolated submitter with its enable gate still false.
-4. Deploy the web project with all mutation gates false.
-5. Confirm the landing page, campaign directory empty/loading/error states,
-   public creator profile, contract links, and Base Sepolia chain prompt.
-6. Enable the three watchers, coordinator simulation, coordinator broadcast,
-   submitter, web bridges, and finally Preview verification/marketplace
-   mutations in that order.
-7. Complete one fresh-wallet ownership proof and confirm both StudioNet finality
-   and the Base registry receipt.
-8. Complete one full campaign rehearsal: create, approve/fund, apply, select,
-   accept, submit a canonical X URL, request resolution, and reach StudioNet
-   finality.
-9. Allow the hosted coordinator to collect at least two matching watcher
-   signatures and relay the result automatically. Confirm the final Base
-   settlement receipt before calling the rehearsal paid or refunded.
-10. Run the [three-minute demo checklist](DEMO-SCRIPT.md) without showing any
-    secret-bearing terminal, hosting settings page, or wallet recovery material.
+Deploy disabled. Verify health/configuration fails closed and that the
+air-gapped queue consumer is bound only to
+`influencedx-genlayer-marketplace-ops-v1`. Confirm wrong OIDC claims, service
+token, route body, method, target, arguments, and native value are rejected.
 
-Every displayed state must come from the API or chain receipt. Do not use a demo
-fixture to label a campaign funded, verified, paid, or refunded.
+## 5. Configure the withdrawal reconciler while disabled
 
-The infrastructure portion of this sequence is live on Preview. Steps 7-10
-remain the submission-evidence gap: record a fresh StudioNet ownership flow, a
-complete campaign through the final Base receipt, and the three-minute demo
-video.
+Create another Vercel project rooted at
+`services/vercel-genlayer-withdrawal-reconciler/`. Configure every variable in
+its [`.env.example`](../services/vercel-genlayer-withdrawal-reconciler/.env.example).
+The fresh contract authorizes only its distinct `withdrawal_confirmer` to call
+`confirm_withdrawal`. Keep the service disabled until its role migration is
+applied and the configured address, private-key-derived signer, and live
+`get_config().withdrawal_confirmer` all match exactly.
 
-## 7. Rollback and reconciliation
+```text
+INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false
+INFLUENCEDX_WITHDRAWAL_RECONCILER_STAGE=studionet
+INFLUENCEDX_GENLAYER_NETWORK=studionet
+INFLUENCEDX_GENLAYER_CHAIN_ID=61999
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
+INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER=0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8
+INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
+INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
+```
 
-If a release fails:
+Reject any other protocol value. The dedicated withdrawal-confirmer signer is
+a StudioNet-only test boundary and must never be copied into a mainnet project.
 
-1. Disable marketplace, verification, submitter, and authorization-broker gates.
-2. Stop new jobs, but do not delete database rows or rebroadcast transactions.
-3. Restore the previous known-good Vercel deployment.
-4. Reconcile every prepared or submitted transaction by hash against Base or
-   StudioNet before retrying it.
-5. Resume an idempotent request only after the database state matches the chain.
-6. Rotate a secret only if exposure is suspected; keep retiring evidence keys
-   available until every ciphertext sealed under them has expired or completed.
+Deploy disabled. Confirm the queue consumer is bound only to
+`influencedx-genlayer-withdrawal-reconciliation-v1` and that no route permits
+`restore_failed_withdrawal`, recapitalization, arbitrary target/method/value, or
+caller-supplied transfer evidence.
 
-Base and GenLayer transactions are immutable. A web rollback never rolls back a
-campaign, ownership proof, or escrow event.
+## 6. Configure and deploy the isolated web release
 
-## 8. Contract redeployment and mainnet gates
+Create the web deployment from `web/` and copy
+[`web/.env.example`](../web/.env.example) into encrypted environment settings.
+Use the exact Preview/isolated environment scope first.
 
-The current testnet deployment deliberately uses the same EOA as deployer,
-owner, and treasury, and the watcher threshold is 2-of-3. If contracts must be
-redeployed, use the guarded scripts and journal described by their `--help`
-output, write a new immutable manifest, and never overwrite the existing
-addresses. Use a distinct low-balance relayer and the encrypted watcher setup in
-[WATCHER-KEYS.md](WATCHER-KEYS.md).
+Keep all three gates false:
 
-A mainnet launch additionally requires, at minimum:
+```text
+XPROOF_VERIFICATION_MUTATIONS_ENABLED=false
+XPROOF_MARKETPLACE_MUTATIONS_ENABLED=false
+INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false
+INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false
+```
 
-- fresh deployments with a multisignature owner and distinct treasury;
-- independently operated watcher hosts, alerting, failover, and a reviewed
-  GenLayer-to-Base transport decision;
-- independent Solidity/GenLayer review, invariant/fuzz testing, incident drills,
-  and escrow accounting review;
-- dedicated RPC providers, observability, database backup/restore and deletion
-  drills, legal/privacy review, and a controlled production cutover.
+Pin the StudioNet RPC, V2 address, public address, and version. Configure the
+operator/reconciler origins and distinct service tokens, but do not enable
+either caller until their disabled deployments and OIDC bindings are verified.
 
-Base Sepolia ETH, Base Sepolia test USDC, and StudioNet state have no monetary
-value. StudioNet state is also resettable and must not be treated as durable.
-Passing this runbook makes the submission reproducible; it does not turn the
-developer-network deployment into a production mainnet system.
+Verify the web queue consumer is bound only to
+`influencedx-studionet-campaign-progression-v3`. The former submitter, watcher,
+Base relay, and `campaign-progression-v2` topics must not be configured for V2.
+
+Run read-only smoke checks:
+
+- landing, campaign directory, creator profile, dashboard, verify flow, terms,
+  and privacy pages render without fixtures claiming success;
+- the UI says StudioNet/native GEN and never asks for Base Sepolia or USDC;
+- X and Farcaster choices render independently;
+- explorer links point to `explorer-studio.genlayer.com`;
+- no server secret or private projection appears in browser bundles/responses;
+- the V2 contract/config read matches the manifest; and
+- every mutation endpoint returns its disabled response.
+
+## 7. Enable in a controlled order
+
+Use a new immutable deployment for every gate change:
+
+1. enable the marketplace operator service;
+2. enable the withdrawal reconciler service;
+3. enable the two server-to-server callers in the isolated web project;
+4. run operator/reconciler authenticated smoke requests that do not broadcast
+   an ineligible write;
+5. enable verification mutations; and
+6. enable marketplace mutations.
+
+Do not enable the public alias yet.
+
+## 8. Required isolated E2E rehearsal
+
+Use disposable StudioNet wallets and developer-network GEN. Record every wallet,
+call, hash, finalized receipt, and post-state without recording private keys.
+
+1. Activate an X identity with a genuine public challenge post.
+2. Activate a Farcaster identity with a genuine public challenge cast.
+3. Create a campaign with exact native GEN value and confirm V2 custody.
+4. Apply with a verified source-matching creator.
+5. Select, accept, publish, and submit the canonical source content ID.
+6. Wait the frozen retention period and let the hosted operator resolve it.
+7. Confirm the exact PASS/FAIL/UNDETERMINED state and accounting.
+8. Complete a claimable-credit path, then request and execute withdrawal.
+9. Prove the child transfer and let the reconciler finalize
+   `confirm_withdrawal`.
+10. Verify contract withdrawal status `CONFIRMED`, matching recipient/amount,
+    accounting invariants, database projection, and explorer/API trail.
+
+Also exercise wrong wallet, extra body field, wrong method, wrong value,
+terminated receipt, replay, stale deadline, source unavailability, and queue
+redelivery. Never label `EMITTED_UNCONFIRMED` as paid.
+
+The live native-value canary and complete public E2E are pending until their
+actual hashes are added to [the test report](TEST-REPORT.md). Do not invent or
+reuse historical Base receipts.
+
+## 9. Public cutover
+
+Only after the isolated rehearsal passes:
+
+1. record all results in `docs/TEST-REPORT.md` and a new immutable release
+   record;
+2. take a fresh database backup and verify service alerts;
+3. move the public alias to the exact tested web deployment;
+4. repeat read-only and one low-value mutation smoke check through the public
+   origin;
+5. remove active hosted environment bindings for Base, USDC, historical
+   submitter, watchers, relay, and old queue topics; and
+6. retain historical projects disabled for audit until their evidence-retention
+   policy permits archival.
+
+The public URL must never be moved merely because a build succeeds.
+
+## 10. Rollback and reconciliation
+
+If the hosted release fails:
+
+1. disable web mutations and both hosted service gates;
+2. stop new jobs without deleting rows, queue evidence, or hashes;
+3. restore the previous known-good web deployment/alias;
+4. reconcile every submitted hash against StudioNet and V2 post-state;
+5. clear a signer fence only after its exact transaction history is understood;
+6. resume only idempotent operations whose database and contract states agree;
+   and
+7. rotate a secret only if exposure is suspected, preserving required audit
+   evidence.
+
+A web rollback cannot roll back GenLayer state. Never replace an unknown
+broadcast with a new transaction simply to make the UI progress.
+
+## 11. StudioNet reset
+
+StudioNet is resettable. If the contract or transaction history disappears:
+
+1. disable all mutation and automation gates;
+2. treat every old address, prepared call, projection, queue job, and identity
+   as network-retired;
+3. validate and deploy the exact approved source to the reset network;
+4. write a new immutable manifest and deployment-scoped database projection;
+5. configure all three hosted projects with the new address/protocol/schema;
+6. run the complete isolated E2E again; and
+7. cut over only after new evidence is recorded.
+
+Never overwrite the current V2 manifest or relabel a pre-reset receipt as live.
+
+## 12. Upgrades and mainnet
+
+For an in-place V2 upgrade, pause the marketplace, publish the exact candidate
+source/hash and storage-layout review, schedule the hash, wait seven full days,
+then execute only the exact reviewed bytes. Monitor the entire delay and verify
+post-upgrade schema/config/state. See
+[the protocol operations reference](GENLAYER-MARKETPLACE.md).
+
+A mainnet deployment is a fresh release, not an environment-variable flip. It
+requires a current GenLayer mainnet chain/RPC adapter and new manifest, reviewed
+multisignature owner and upgrade governance, distinct treasury and operational
+keys, external contract/security review, invariant/fuzz and live value-transfer
+testing, service SLOs and alerts, incident drills, database point-in-time
+recovery/deletion drills, and applicable legal/privacy controls. StudioNet keys,
+addresses, GEN, and receipts have no production authority.
+
+## Historical archive
+
+The former Base Sepolia/USDC/watcher/relay deployment is documented only in
+[the historical relay record](preview-base-sepolia-relay.md),
+[historical settlement services](campaign-settlement-services.md), and
+[`deployments/base-sepolia.json`](../deployments/base-sepolia.json). Do not use
+those runbooks, secrets, addresses, or queues during a V2 release.

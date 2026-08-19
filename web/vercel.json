@@ -6,7 +6,18 @@
       "experimentalTriggers": [
         {
           "type": "queue/v2beta",
-          "topic": "influencedx-studionet-campaign-progression-v2",
+          "topic": "influencedx-studionet-campaign-progression-v3",
+          "retryAfterSeconds": 60,
+          "initialDelaySeconds": 0
+        }
+      ]
+    },
+    "app/api/queues/marketplace-maintenance/route.ts": {
+      "maxDuration": 300,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "influencedx-studionet-maintenance-v1",
           "retryAfterSeconds": 60,
           "initialDelaySeconds": 0
         }
@@ -14,6 +25,10 @@
     }
   },
   "crons": [
+    {
+      "path": "/api/internal/campaign-progression",
+      "schedule": "0 4 * * *"
+    },
     {
       "path": "/api/internal/rate-limits/cleanup",
       "schedule": "0 3 * * *"

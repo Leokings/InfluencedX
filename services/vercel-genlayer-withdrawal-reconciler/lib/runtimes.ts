@@ -7,20 +7,29 @@ import { createPinnedWithdrawalClient } from "./studionet-client";
 
 export function createIngressRuntime() {
   const config = loadConfig();
-  const repository = repositoryFor(config.databaseUrl);
+  const repository = repositoryFor(
+    config.databaseUrl,
+    config.contractWithdrawalConfirmer,
+  );
   const ingress = new ReconciliationIngressService(repository, vercelQueuePublisher, config);
   return Object.freeze({ config, repository, ingress });
 }
 
 export function createStatusRuntime() {
   const config = loadConfig();
-  const repository = repositoryFor(config.databaseUrl);
+  const repository = repositoryFor(
+    config.databaseUrl,
+    config.contractWithdrawalConfirmer,
+  );
   return Object.freeze({ config, repository });
 }
 
 export function createConsumerRuntime() {
   const config = loadConfig();
-  const repository = repositoryFor(config.databaseUrl);
+  const repository = repositoryFor(
+    config.databaseUrl,
+    config.contractWithdrawalConfirmer,
+  );
   const service = new ReconciliationService(
     repository,
     createPinnedWithdrawalClient(config),

@@ -1,4 +1,4 @@
-import { getPublicMarketplaceCreatorProfile } from "@/lib/marketplace-service";
+import { getPublicGenLayerCreatorProfile } from "@/lib/marketplace-genlayer-profile-service";
 import { apiError } from "@/lib/verification-api";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +9,7 @@ export async function GET(
 ) {
   try {
     const { wallet } = await params;
-    const creator = await getPublicMarketplaceCreatorProfile({ wallet });
+    const creator = await getPublicGenLayerCreatorProfile({ wallet });
     return Response.json(
       { creator },
       { headers: { "Cache-Control": "private, no-store" } },

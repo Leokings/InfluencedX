@@ -5,15 +5,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { marketplaceErrorMessage, marketplaceRequest } from "../marketplace-api";
 import {
   campaignStatusLabel,
+  campaignBudgetAtoms,
+  campaignContentSource,
+  contentSourceLabel,
   deadlineLabel,
   fundingStatusLabel,
+  genAtomsToDisplay,
   type CampaignListResponse,
   type MarketplaceCampaign,
-  usdcAtomsToDisplay,
 } from "../marketplace-types";
 import { MarketplaceState } from "./MarketplaceState";
 
-const FILTERS = ["All", "Thread", "Video", "Post", "Crypto", "Dev tools"];
+const FILTERS = ["All", "X", "Farcaster", "Crypto", "Dev tools", "Consumer", "AI"];
 const EMPTY_CAMPAIGNS: MarketplaceCampaign[] = [];
 
 type LoadState =
@@ -32,7 +35,7 @@ export function CampaignDirectory() {
         phase: "ready",
         data: {
           campaigns: Array.isArray(data.campaigns) ? data.campaigns : [],
-          summary: data.summary ?? { openCampaigns: 0, lockedUsdc: "0" },
+          summary: data.summary ?? { openCampaigns: 0, lockedGen: "0" },
         },
         loadedAt: Date.now(),
         error: null,
@@ -53,16 +56,21 @@ export function CampaignDirectory() {
   }, [loadCampaigns]);
 
   const campaigns = loadState.data?.campaigns ?? EMPTY_CAMPAIGNS;
+  const supportedCampaigns = useMemo(
+    () => campaigns.filter((campaign) => campaign.format.toLowerCase() === "post"),
+    [campaigns],
+  );
   const visibleCampaigns = useMemo(
-    () => campaigns.filter((campaign) => (
+    () => supportedCampaigns.filter((campaign) => (
       filter === "All"
       || campaign.format.toLowerCase() === filter.toLowerCase()
       || campaign.category.toLowerCase() === filter.toLowerCase()
+      || campaignContentSource(campaign).toLowerCase() === filter.toLowerCase()
     )),
-    [campaigns, filter],
+    [supportedCampaigns, filter],
   );
-  const featured = campaigns.find((campaign) => campaign.status === "open")
-    ?? campaigns[0]
+  const featured = supportedCampaigns.find((campaign) => campaign.status === "open")
+    ?? supportedCampaigns[0]
     ?? null;
   const summary = loadState.data?.summary ?? null;
 
@@ -70,11 +78,11 @@ export function CampaignDirectory() {
     <>
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow"><span /> X CREATOR MARKETPLACE / PROOF-SETTLED</p>
+          <p className="eyebrow"><span /> CREATOR MARKETPLACE / PROOF-SETTLED</p>
           <h1>DEALS.<br /><em>PROVED.</em><br />PAID.</h1>
           <p className="hero-description">
             Brands publish a funded brief. Verified creators apply with their rate.
-            GenLayer resolves public delivery and Base Sepolia handles test payments.
+            Campaign funding, public-work resolution, payouts, and refunds all run on GenLayer.
           </p>
           <div className="hero-actions">
             <a className="button" href="#campaigns">EXPLORE CAMPAIGNS →</a>
@@ -83,9 +91,9 @@ export function CampaignDirectory() {
 
           <div className="hero-stats" aria-label="Live InfluencedX marketplace statistics">
             <div><strong>{summary ? summary.openCampaigns : "—"}</strong><span>OPEN CAMPAIGNS</span></div>
-            <div><strong>{summary ? usdcAtomsToDisplay(summary.lockedUsdc) : "—"}</strong><span>FUNDED TEST USDC</span></div>
-            <div><strong>84532</strong><span>BASE SEPOLIA CHAIN</span></div>
-            <div className="live-stat"><strong>STUDIO</strong><span>GENLAYER STUDIONET</span></div>
+            <div><strong>{summary ? genAtomsToDisplay(summaryLockedAtoms(summary)) : "—"}</strong><span>LOCKED TEST GEN</span></div>
+            <div><strong>61999</strong><span>STUDIONET CHAIN</span></div>
+            <div className="live-stat"><strong>GEN</strong><span>NATIVE CAMPAIGN ASSET</span></div>
           </div>
         </div>
 
@@ -97,10 +105,10 @@ export function CampaignDirectory() {
       <section className="campaign-section" id="campaigns">
         <div className="section-heading">
           <div>
-            <p className="eyebrow"><span /> LIVE API / BASE SEPOLIA</p>
+            <p className="eyebrow"><span /> LIVE API / GENLAYER STUDIONET</p>
             <h2>ACTIVE CAMPAIGNS</h2>
           </div>
-          <p>Browse public briefs. Apply with the same wallet used for your InfluencedX X verification.</p>
+          <p>Browse public briefs. Apply with a wallet that has an active InfluencedX identity for the campaign&apos;s source.</p>
         </div>
 
         <div className="filter-bar" role="group" aria-label="Filter campaigns">
@@ -135,11 +143,11 @@ export function CampaignDirectory() {
         {loadState.phase === "ready" && visibleCampaigns.length === 0 ? (
           <MarketplaceState
             kind="empty"
-            title={campaigns.length === 0 ? "NO CAMPAIGNS YET" : "NO MATCHING CAMPAIGNS"}
-            message={campaigns.length === 0
+            title={supportedCampaigns.length === 0 ? "NO TEXT-POST CAMPAIGNS YET" : "NO MATCHING CAMPAIGNS"}
+            message={supportedCampaigns.length === 0
               ? "Be the first brand to publish a testnet campaign. It will appear here after the API accepts it."
               : "Choose another filter to see the campaigns currently available."}
-            action={campaigns.length === 0 ? { href: "/marketplace/create", label: "CREATE CAMPAIGN" } : undefined}
+            action={supportedCampaigns.length === 0 ? { href: "/marketplace/create", label: "CREATE CAMPAIGN" } : undefined}
           />
         ) : null}
         {loadState.phase === "ready" && visibleCampaigns.length > 0 ? (
@@ -167,7 +175,7 @@ function CampaignSpotlight({ campaign, phase, loadedAt }: { campaign: Marketplac
       <aside className="spotlight spotlight-state" aria-label="No featured campaign">
         <span>OPEN MARKET</span>
         <h2>YOUR BRIEF<br />GOES HERE</h2>
-        <p>Create the first live campaign. Unfunded drafts remain clearly marked until Base confirms funding.</p>
+        <p>Create the first live campaign. Drafts stay marked unfunded until StudioNet finalizes the matching GEN deposit.</p>
         <Link className="button campaign-cta" href="/marketplace/create">CREATE CAMPAIGN →</Link>
       </aside>
     );
@@ -183,14 +191,14 @@ function CampaignSpotlight({ campaign, phase, loadedAt }: { campaign: Marketplac
         <p className="mono-label">{(campaign.brandName ?? "WALLET BRAND").toUpperCase()} · {campaign.category.toUpperCase()}</p>
         <h2>{campaign.title}</h2>
         <div className="tag-row">
-          <span>{campaign.format.toUpperCase()}</span>
+          <span>{contentSourceLabel(campaignContentSource(campaign))} POST</span>
           <span>{fundingStatusLabel(campaign.fundingStatus)}</span>
           <span>{campaign.category.toUpperCase()}</span>
         </div>
         <p className="spotlight-copy">{campaign.description}</p>
       </div>
       <div className="campaign-numbers">
-        <div><span>BUDGET</span><strong>{usdcAtomsToDisplay(campaign.budgetUsdc)} <small>TEST USDC</small></strong></div>
+        <div><span>BUDGET</span><strong>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} <small>TEST GEN</small></strong></div>
         <div><span>DEADLINE</span><strong>{deadlineLabel(campaign.deadline, loadedAt)}</strong></div>
         <div><span>APPLICANTS</span><strong>{campaign.applicationCount}</strong></div>
       </div>
@@ -221,12 +229,12 @@ function CampaignCard({ campaign, loadedAt }: { campaign: MarketplaceCampaign; l
       <div className="campaign-brand">{(campaign.brandName ?? "WALLET BRAND").toUpperCase()}</div>
       <h3>{campaign.title}</h3>
       <div className="tag-row compact">
-        <span>{campaign.format.toUpperCase()}</span>
+        <span>{contentSourceLabel(campaignContentSource(campaign))} POST</span>
         <span>{campaign.category.toUpperCase()}</span>
         <span>{fundingStatusLabel(campaign.fundingStatus)}</span>
       </div>
       <dl>
-        <div><dt>BUDGET</dt><dd>{usdcAtomsToDisplay(campaign.budgetUsdc)} <small>USDC</small></dd></div>
+        <div><dt>BUDGET</dt><dd>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} <small>GEN</small></dd></div>
         <div><dt>CLOSES</dt><dd>{deadlineLabel(campaign.deadline, loadedAt)}</dd></div>
         <div><dt>APPLIED</dt><dd>{String(campaign.applicationCount).padStart(2, "0")}</dd></div>
       </dl>
@@ -243,4 +251,8 @@ function categoryClass(value: string): string {
   if (normalized === "dev tools") return "dev-tools";
   if (normalized === "consumer") return "consumer";
   return "other";
+}
+
+function summaryLockedAtoms(summary: CampaignListResponse["summary"]): string {
+  return summary.lockedGen;
 }

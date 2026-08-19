@@ -1,0 +1,21 @@
+BEGIN;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM influencedx_withdrawal_reconciliations
+    WHERE contract_address <> '0x58d598b8323e9c1d041989dcce80e737109de347'
+  ) THEN
+    RAISE EXCEPTION
+      'Legacy marketplace reconciliation rows require a fresh database or explicit manual archival';
+  END IF;
+END $$;
+
+ALTER TABLE influencedx_withdrawal_reconciliations
+  DROP CONSTRAINT IF EXISTS influencedx_withdrawal_reconciliations_contract_address_check;
+ALTER TABLE influencedx_withdrawal_reconciliations
+  ADD CONSTRAINT influencedx_withdrawal_reconciliations_contract_address_check
+  CHECK (contract_address = '0x58d598b8323e9c1d041989dcce80e737109de347');
+
+COMMIT;

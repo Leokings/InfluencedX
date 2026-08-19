@@ -1,171 +1,197 @@
-# InfluencedX verification report
+# InfluencedX GenLayer V2 verification report
 
-Protocol checks began on 2026-08-08 against Base Sepolia (`84532`) and GenLayer
-Bradbury; deployment state was verified on 2026-08-09. The submission package
-and application test status were refreshed on 2026-08-11. Those Bradbury
-records are retained below as historical evidence. The active GenLayer target
-was migrated to StudioNet on 2026-08-19.
+This report separates recorded evidence from work that is still pending. It
+must not be used to claim that the public site is already running the V2
+GenLayer-only product.
 
-## StudioNet migration evidence (2026-08-19)
+Report date: **2026-08-19**
 
-- The current APV2 resolver is deployed on GenLayer StudioNet (`61999`) at
-  `0x0913b5593Ff16974E2fd616cA678A4986Cb48600`.
-- Deployment transaction
-  `0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591`
-  reached `FINALIZED`; the consensus result was `MAJORITY_AGREE`, with the
-  successful leader result and validator agreement recorded by the CLI.
-- The deployed schema exposes `verify_ownership` with eight arguments,
-  `snapshot_metrics` with five, `resolve_submission` with eleven, and
-  `get_result` with one.
-- `python -m pytest tests/direct -v` passes all 13 direct resolver tests against
-  the contract source used for this deployment.
-- The pinned RPC is `https://studio.genlayer.com/api`. StudioNet is gasless,
-  temporary, and resettable; its receipts are developer-network evidence, not
-  durable production history.
-- Base Sepolia transaction
-  [`0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839`](https://sepolia.basescan.org/tx/0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839)
-  changed the receiver from the historical Bradbury resolver to the current
-  StudioNet resolver. The read-only verifier confirms the receiver is unpaused.
-- [The stable Preview](https://influencedx-preview.vercel.app) has all six
-  hosted deployments enabled: web, StudioNet submitter, three independent
-  watchers, and the Base settlement coordinator/relayer. The active queue
-  topics are `influencedx-studionet-submissions-v1` and
-  `influencedx-studionet-campaign-progression-v2`.
-- Hosted environment pins and database defaults agree with the StudioNet
-  manifest. Historical Bradbury rows and manifests remain only for
-  auditability. One fresh complete StudioNet ownership proof and full
-  campaign-to-final-Base receipt are still required as submission evidence.
+Target: **GenLayer StudioNet (`61999`)**
 
-## Passing checks
+## Recorded V2 contract evidence
 
-### Current web application validation (2026-08-19)
+| Check | Recorded result |
+| --- | --- |
+| Contract source | [`InfluencedXMarketplace.py`](../contracts/genlayer/InfluencedXMarketplace.py) |
+| Source SHA-256 | `0xf6dbcfaf11456096c11bf8dbcc729238d3b31156e842c5ba01f694915c4d3323` |
+| Frozen source commit | `77e6109ca60d2b444f168d0a6b8de5df92cf902e` |
+| GenVM lint | PASS; public ABI contains 50 methods (21 view, 29 write) |
+| Direct suite | PASS; 50 tests |
+| Deployment | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
+| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Deployment receipt | `FINALIZED`, `MAJORITY_AGREE`, successful leader return |
+| Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
+| Native asset / fee | GEN (18 decimals) / 250 bps |
+| Upgrade control | Dedicated upgrade administrator; `604800` second minimum delay |
 
-- `cd web && npm test` passes 134 unit tests, the optimized Next.js 16.3.0
-  production build and TypeScript check, and 5 rendered-page/static-asset smoke
-  tests. The temporary smoke-test server exits at completion.
-- `cd web && npm run lint` passes with no ESLint errors or warnings.
-- The application-rate UI tests prove that creator metric wallets are
-  normalized and deduplicated, public-profile reads are capped at four in
-  parallel, only current sanitized snapshots produce a pay range, and missing
-  or expired snapshots never produce placeholder pay/risk figures.
-- All repository Markdown files have resolving local links, and the Base,
-  historical Bradbury, and current StudioNet deployment manifests parse as
-  JSON.
+The canonical record is
+[`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json).
+Live read-only checks verified owner, treasury, upgrade administrator, fee,
+protocol/schema, native unit, pause state, and upgrade-delay configuration
+against that manifest.
 
-- Solidity compilation succeeds with Solidity `0.8.36` and pinned OpenZeppelin `5.4.0`.
-- Local EVM tests pass: 2 tests. The main flow verifies a 2-of-3 creator
-  attestation, metrics expiry isolation, test-USDC escrow, pull withdrawals,
-  replay/source rejection, onchain 2-of-3 minimum policy, and four assignments.
-  Three requests are outstanding at once and resolve independently as PASS,
-  FAIL, and UNDETERMINED.
-- Relay tests pass: 16 tests, including source method/request binding and 25
-  concurrently prepared/signed campaign resolutions with unique request IDs
-  and nested canonical evidence hashing.
-- Service tests pass: 22 tests, covering APV2 marketplace behavior, encrypted
-  deployer loading, guarded watcher parsing, crash-safe deployment resumption,
-  Windows journal replacement, and positive/negative deployment verification.
-- GenLayer direct tests pass: 13 tests covering APV2 ownership, request-envelope
-  mismatch rejection, exact wallet/timestamp markers, validator-derived X
-  identity, metrics, disclosure, retention, protected accounts, rate limiting,
-  deleted posts, renamed accounts, and current edited text.
-- `genvm-lint` accepts the resolver with its exact pinned GenVM dependency.
-- Base Sepolia preflight returned chain ID `84532`; Circle test USDC at
-  `0x036CbD53842c5426634e7929541eC2318f3dCF7e` has bytecode and reports `USDC`
-  with 6 decimals.
-- A pre-APV2 resolver is deployed on Bradbury at
-  `0x1dA39c42a76fbF902d1BA20131DdE72d91888Acd`. Five validators agreed on a live,
-  unauthenticated public X metrics result. The deployment and validation
-  transactions are FINALIZED with `FINISHED_WITH_RETURN`.
-- The production relay source reader successfully consumed that finalized live
-  transaction and confirmed the resolver address, `snapshot_metrics` method,
-  exact request ID, METRICS result kind, and VERIFIED outcome.
-- The historical Bradbury APV2 resolver deployment transaction
-  `0xcbad3920c328c5fd88e38a306683a90e23264d20f851944ef8a4ba19eb2b504b`
-  is FINALIZED on Bradbury at
-  `0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2`. Its deployed ABI exposes the
-  expected eight-argument `verify_ownership` interface.
-- The Base Sepolia creator registry, escrow, and attestation receiver are
-  deployed at `0x10079EF049D283BC3f212CCaC4291b3aC2719C48`,
-  `0x7e9B6B757d1Ef12509889826B2f2A42906661927`, and
-  `0x15dDbCd98F97065746a1c35f88BB670a7A942264` respectively.
-- The read-only live verifier returned `ok: true`. It confirmed all deployment
-  and wiring receipts, exact creation inputs, registry runtime bytecode,
-  immutable escrow/receiver configuration, owners, Base USDC, treasury, 250
-  bps fee, APV2 resolver commitment, three enabled watchers, threshold two, and
-  unpaused contracts.
-- The historical APV2 ownership request finalized on Bradbury with
-  `FINISHED_WITH_RETURN`, outcome `VERIFIED`, and every request, author,
-  identity, post, protocol, wallet, challenge, timestamp, and publication-window
-  check set to true.
-- The 2-of-3 watcher relay was simulated and broadcast to Base Sepolia in
-  transaction
-  `0x0b26bffd19643ea816b740432c0293eee26bccbf6b0b7cb0407cb1c3063c6406`.
-  The receiver consumed the exact attestation and ownership intent, and the
-  registry created active creator profile `1` for wallet
-  `0x63038a310a46AC61A59c1bC5eAD5fe41040eF38e`.
+The contract was paused and unpaused through a developer-network governance
+canary. The final recorded state is unpaused with no pending upgrade and no
+campaign value in that canary. A CLI attempt to pass a code hash was rejected
+before scheduling because that CLI path coerced the hash incorrectly; it is not
+evidence of a scheduled upgrade. A future governance E2E must use typed bytes
+through the reviewed write adapter and then cancel the canary commitment.
 
-## Public X stress run
+## Direct-mode coverage
 
-Report generated at `2026-08-08T19:24:54.268Z`:
+The 43 direct tests cover the contract's deterministic and adversarial
+boundaries, including:
 
-- 25 configured public accounts over 2 passes.
-- 50 profile requests and 50 current-post direct/oEmbed pairs.
-- 24 edge-case observations.
-- 20 maximum simultaneous HTTP requests.
-- 50 public profiles, 50 public posts, 2 protected observations, and 6
-  unavailable observations.
-- 0 rate-limit and 0 transient responses during this run.
-- 25 profiles were stable between the two same-day passes.
-- Renamed-handle, deleted/nonexistent, suspended, protected, old-post,
-  image/video, and explicit self-thread fixtures were exercised.
+- X ownership challenge binding and stable X user identity;
+- Farcaster challenge, username proof, FID, and cast-hash binding;
+- source-keyed profiles and cross-source campaign rejection;
+- payable campaign creation with exact native GEN value;
+- deterministic campaign, application, assignment, resolution, and withdrawal
+  identifiers;
+- creator application, brand selection, creator acceptance/decline, deadlines,
+  and evidence submission;
+- PASS, FAIL, retryable UNDETERMINED, refunds, fees, and conservation checks;
+- external-source transient/malformed/inconsistent fail-safe behavior;
+- pull credits and PENDING/EMITTED_UNCONFIRMED/CONFIRMED/RESTORED_FAILED
+  withdrawal states;
+- pause and exceptional recovery requirements; and
+- exact-hash, paused, seven-day, dedicated-admin Root upgrade controls.
 
-The `text`/`mixed`/`video` counters are page-level signals, not authoritative
-target-post media classifications: public X pages can embed conversation data.
-Likewise, a conversation page is not sufficient by itself to classify a post
-as a thread. The explicit thread fixture verifies root/reply IDs and author.
+Direct mode proves contract logic under the test harness. It does **not** prove
+StudioNet consensus provider availability, a browser wallet flow, a hosted
+queue, or delivery of a native external value-transfer child transaction.
 
-## Open submission and production gates
+## Hosted service validation
 
-- The project now has a dedicated public repository at
-  [github.com/Leokings/InfluencedX](https://github.com/Leokings/InfluencedX) and
-  a stable public Preview at
-  [influencedx-preview.vercel.app](https://influencedx-preview.vercel.app).
-  The remaining submission artifacts are the three-minute demo video and a
-  fresh explorer/API trail covering StudioNet ownership plus
-  create/fund/apply/select/accept/submit/resolve/final-Base-settlement.
-- The multi-day observation is scheduled in `.github/workflows/x-stress.yml`,
-  with previous-report cache restoration, but the current comparison is
-  same-day. The workflow must be committed/pushed and run on different UTC
-  dates before that row can pass.
-- The Base contracts use the same EOA as deployer, owner, and treasury for this
-  testnet integration. A production deployment still requires a fresh deployer,
-  multisignature owner, distinct treasury, independently hosted watcher keys,
-  and a separate low-balance relayer.
-- The StudioNet migrations and defaults are applied to the hosted Preview
-  database. No production/mainnet database is claimed; backup/restore and
-  deletion-function drills remain required before a production launch.
-- The historical Bradbury APV2 resolver **was** exercised through a live ownership
-  consensus transaction and its result created Base registry profile `1` in
-  transaction
-  `0x0b26bffd19643ea816b740432c0293eee26bccbf6b0b7cb0407cb1c3063c6406`.
-  The earlier XDevelopers `snapshot_metrics` call remains historical evidence
-  only; the pre-APV2 address must never receive APV2 ownership calls.
-- Campaign GenLayer submission and final watcher-quorum settlement are hosted,
-  idempotent, and enabled. The submitter consumes
-  `influencedx-studionet-submissions-v1`; the web progression worker consumes
-  `influencedx-studionet-campaign-progression-v2`; and the coordinator obtains
-  signatures from the three isolated watchers before the low-balance relayer
-  submits Base. This is automatic infrastructure, not a laptop/operator-only
-  step, but a fresh terminal StudioNet result and final Base receipt must still
-  be demonstrated before claiming a completed automatic payment.
-- No independent Solidity audit, invariant fuzzing campaign, watcher host
-  failover exercise, incident runbook drill, or production/mainnet
-  submitter/relay deployment has been completed.
-- `npm audit --omit=dev` reports 0 runtime vulnerabilities. The complete
-  development/test tree reports 9 findings under Ganache and Solidity compiler
-  tooling; those packages must not be shipped in the production runtime image.
+### Marketplace operator
 
-Public X access used no OAuth token, API token, login cookie, or creator account
-secret. That removes an authentication dependency, not the X dependency itself:
-X still controls public-page availability and markup. Transient or ambiguous
-retrieval must remain UNDETERMINED rather than FAIL.
+The isolated service at
+[`services/vercel-genlayer-marketplace-operator/`](../services/vercel-genlayer-marketplace-operator/)
+has passed its local TypeScript check, production build, production dependency
+audit, and 30 tests. Coverage includes:
+
+- exact Vercel OIDC and independent service-token authentication;
+- fixed contract/protocol/schema/action/value pins;
+- strict request bodies with no arbitrary method, target, arguments, or value;
+- durable idempotency and singleton fenced signer behavior;
+- at-least-once queue redelivery;
+- exact nested StudioNet finality/receipt binding; and
+- authoritative pre-state and post-state reconciliation.
+
+It has **not yet been deployed and enabled for the V2 public release**.
+
+### Withdrawal reconciler
+
+The isolated service at
+[`services/vercel-genlayer-withdrawal-reconciler/`](../services/vercel-genlayer-withdrawal-reconciler/)
+has passed its local TypeScript check, production build, production dependency
+audit, and 24 adversarial tests. Coverage includes:
+
+- exact V2 owner/contract/protocol/schema pins;
+- caller-supplied withdrawal ID only;
+- derivation of recipient, amount, parent, child, and evidence from finalized
+  chain state;
+- unique child transfer and credited-value proof;
+- repeated proof discovery under a signer fence;
+- exact `confirm_withdrawal` call and post-state/accounting binding; and
+- quarantine rather than automatic restoration on ambiguity.
+
+It has **not yet been deployed and enabled for the V2 public release**.
+
+## Web/API integration status
+
+The active migration replaces the former Base marketplace paths with native
+GenLayer preparation, direct user-signed writes, finalized receipt binding,
+source-aware X/Farcaster identity and campaign flows, deployment-scoped
+PostgreSQL projections, operator progression, and withdrawal reconciliation.
+The web environment template and active documentation now contain no Base,
+USDC, watcher, relay, or historical submitter secrets.
+
+The exact integrated release tree passed 175 web unit tests, the optimized
+Next.js build, 7 rendered-page tests, TypeScript, ESLint, and clean-install
+reproducibility. The isolated Preview database is migrated through `0009` and
+its verifier reports the native StudioNet schema ready. The operator passed
+30 tests plus build/typecheck; the withdrawal reconciler passed 24 tests plus
+build/typecheck. All three enabled Preview deployments fail closed on
+unauthenticated service calls, and the web maintenance queue accepted a
+deployment-local heartbeat.
+
+## Required live E2E evidence — pending
+
+The following are release blockers, not completed claims:
+
+- [x] Deploy the marketplace operator disabled, verify auth/queue pins, then
+  enable it in an isolated environment.
+- [x] Deploy the withdrawal reconciler disabled, verify auth/queue pins, then
+  enable it in an isolated environment.
+- [x] Apply and verify the native V2 PostgreSQL migration.
+- [x] Deploy the native web build on an isolated URL with gates disabled, then
+  enable in the documented order.
+- [ ] Complete one genuine X ownership challenge and finalized V2 activation.
+- [ ] Complete one genuine Farcaster ownership challenge and finalized V2
+  activation.
+- [ ] Complete one native-GEN campaign through create, apply, select, accept,
+  submit, retention, and hosted resolution.
+- [ ] Record a PASS or FAIL settlement and verify every accounting field.
+- [ ] Complete request/execute withdrawal, prove the exact StudioNet native
+  child transfer, and reach contract status `CONFIRMED`.
+- [ ] Record actual transaction hashes, explorer/API links, contract post-state,
+  queue operation IDs, and sanitized hosted logs.
+- [ ] Run wrong-wallet, wrong-value, replay, source-outage, queue-redelivery, and
+  unknown-broadcast recovery checks against the isolated deployment.
+- [ ] Move the public alias only after all checks above pass.
+- [ ] Record the three-minute demo without exposing secrets.
+
+There is currently no recorded V2 native withdrawal child-transfer receipt in
+this document. `EMITTED_UNCONFIRMED` must never be described as delivered. The
+existing public site must not be described as V2 until the cutover evidence is
+added here.
+
+## StudioNet limitations
+
+- StudioNet is temporary and may reset. Addresses, identities, state, and
+  receipts are developer-network evidence rather than durable production data.
+- StudioNet GEN is a developer token with no claimed monetary value.
+- X and Farcaster are external availability dependencies. Transient or
+  ambiguous retrieval remains UNDETERMINED.
+- The deployed owner and upgrade administrator are EOAs suitable only for this
+  developer-network rehearsal. `productionOwnerConfigured` is false.
+- Hosted Vercel Queues are at-least-once; correctness depends on durable
+  idempotency, exact receipt binding, and signer fencing.
+- A seven-day delay gives reviewers time to inspect an upgrade but does not
+  replace an independent audit.
+
+## Mainnet gates
+
+Before an immediately deployable mainnet release can be called production
+ready, the team still must complete:
+
+- a fresh target-network deployment manifest and network adapter;
+- reviewed multisignature/governance owner and upgrade administrator,
+  operational role separation, and a distinct treasury;
+- an independent GenLayer contract review plus invariant/fuzz, integration,
+  browser, load, and failure-injection testing;
+- real target-network value-transfer and withdrawal reconciliation rehearsals;
+- monitored operator/reconciler SLOs, alerts, DLQ/replay procedures, incident
+  drills, and signer-fence recovery procedures;
+- PostgreSQL point-in-time recovery, restore, deletion, and disaster-recovery
+  drills; and
+- applicable legal, privacy, support, and security response processes.
+
+## Historical archive — not active V2 evidence
+
+The repository preserves the former Base Sepolia + test USDC + APV2 resolver +
+watcher relay prototype, including a historical ownership receipt. It is useful
+only as an audit/regression archive and does not prove V2 identity, native GEN
+custody, Farcaster support, resolution, or withdrawal delivery.
+
+Historical sources are:
+
+- [Base relay record](preview-base-sepolia-relay.md);
+- [settlement service design](campaign-settlement-services.md);
+- [watcher-key model](WATCHER-KEYS.md);
+- [`deployments/base-sepolia.json`](../deployments/base-sepolia.json); and
+- [`deployments/genlayer-bradbury.json`](../deployments/genlayer-bradbury.json).
+
+Do not reuse their addresses, secrets, queues, transaction hashes, or success
+claims in the V2 release checklist.

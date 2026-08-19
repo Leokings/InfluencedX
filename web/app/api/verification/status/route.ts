@@ -1,5 +1,5 @@
 import { ApiProblem, apiError } from "@/lib/verification-api";
-import { getVerificationStatus } from "@/lib/verification-service";
+import { getGenLayerVerificationStatus } from "@/lib/marketplace-genlayer-activation";
 import {
   isAuthenticatedWalletSession,
   readWalletSession,
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     if (requestId && requestId.length > 128) {
       throw new ApiProblem(400, "INVALID_REQUEST", "requestId is invalid.");
     }
-    const current = await getVerificationStatus({
+    const current = await getGenLayerVerificationStatus({
       ownerUserId: session.subject,
       requestId,
     });
