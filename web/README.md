@@ -112,7 +112,7 @@ into a failed identity or campaign.
 ## Native marketplace projection
 
 Apply all migrations through
-[`0009_genlayer_native_marketplace.sql`](drizzle-postgres/0009_genlayer_native_marketplace.sql)
+[`0010_maintenance_generation_fence.sql`](drizzle-postgres/0010_maintenance_generation_fence.sql)
 before enabling V2 mutations. `npm run db:verify` must pass afterward.
 
 Native projection records are scoped by network, chain ID, contract address,
@@ -141,6 +141,32 @@ The operator is permitted to call only:
 It cannot accept arbitrary target, method, arguments, or value. The web caller
 is fail-closed unless all operator configuration is valid and
 `INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=true`.
+
+The five-minute maintenance heartbeat uses
+`influencedx-studionet-maintenance-v2`. Each message is bound to the runtime's
+`VERCEL_DEPLOYMENT_ID` and to a monotonic generation held in Neon. Preview and
+Production are separate generation scopes. Consumers prove the active database
+row before claiming maintenance work and again before rescheduling; stale
+deployments acknowledge their messages without extending their loop.
+
+Migration `0010` intentionally creates no active generation. After deploying,
+an operator must call the authenticated `POST /api/internal/campaign-progression`
+route with `x-influencedx-maintenance-generation` set to the last observed
+generation (`0` on first boot). An authenticated `GET` to an inactive
+deployment returns that observed value as `error.currentGeneration`. Routine
+authenticated `GET`/Cron calls only reseed an already-active deployment and
+never promote one implicitly. Vercel
+system variables must expose the deployment ID, project ID, environment, and
+target environment or the loop fails closed.
+
+Activation revokes the prior generation's scheduling authority atomically. A
+bounded batch that already passed its first check may finish concurrently; its
+per-row journal/progression leases and immutable operation IDs remain the
+idempotency boundary, and its second generation check prevents rescheduling.
+Every legacy v1 deployment whose loop was seeded must be identified through
+Queue Observability/runtime logs and retired during the first cutover; changing
+an alias alone is insufficient because already-built code cannot adopt a new
+database check.
 
 ## Native withdrawal reconciliation
 

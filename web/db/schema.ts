@@ -20,6 +20,7 @@ export {
   marketplaceGenLayerCampaignDrafts,
   marketplaceGenLayerCampaigns,
   marketplaceGenLayerClaimableBalances,
+  marketplaceGenLayerMaintenanceGenerations,
   marketplaceGenLayerOperations,
   marketplaceGenLayerProfiles,
   marketplaceGenLayerProjectionCursors,

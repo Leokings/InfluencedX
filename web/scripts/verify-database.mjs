@@ -18,6 +18,7 @@ const [state] = await sql.query(`
       and to_regclass('public.marketplace_genlayer_claimable_balances') is not null
       and to_regclass('public.marketplace_genlayer_withdrawals') is not null
       and to_regclass('public.marketplace_genlayer_projection_cursors') is not null
+      and to_regclass('public.marketplace_genlayer_maintenance_generations') is not null
     ) as native_tables_ready,
     not exists (
       select 1
@@ -59,7 +60,11 @@ const [state] = await sql.query(`
         ('marketplace_genlayer_transactions', 'arg_types'),
         ('marketplace_genlayer_transactions', 'value_atto'),
         ('marketplace_genlayer_withdrawals', 'withdrawal_id'),
-        ('marketplace_genlayer_withdrawals', 'recapitalized_atto')
+        ('marketplace_genlayer_withdrawals', 'recapitalized_atto'),
+        ('marketplace_genlayer_maintenance_generations', 'active_deployment_id'),
+        ('marketplace_genlayer_maintenance_generations', 'generation'),
+        ('marketplace_genlayer_maintenance_generations', 'vercel_project_id'),
+        ('marketplace_genlayer_maintenance_generations', 'vercel_environment')
       ) as required(table_name, column_name)
       where not exists (
         select 1 from information_schema.columns c
@@ -69,7 +74,7 @@ const [state] = await sql.query(`
       )
     ) as native_columns_ready,
     (
-      select count(*)::int = 10
+      select count(*)::int = 13
       from pg_constraint c
       join pg_class t on t.oid = c.conrelid
       join pg_namespace n on n.oid = t.relnamespace
@@ -84,11 +89,14 @@ const [state] = await sql.query(`
           'marketplace_genlayer_profiles_source',
           'marketplace_genlayer_campaigns_namespace',
           'marketplace_genlayer_assignments_namespace',
-          'marketplace_genlayer_withdrawals_namespace'
+          'marketplace_genlayer_withdrawals_namespace',
+          'marketplace_genlayer_maintenance_generations_namespace',
+          'marketplace_genlayer_maintenance_generations_vercel',
+          'marketplace_genlayer_maintenance_generations_monotonic'
         )
     ) as native_constraints_ready,
     (
-      select count(*)::int = 8
+      select count(*)::int = 9
       from pg_indexes
       where schemaname = 'public'
         and indexname in (
@@ -99,7 +107,8 @@ const [state] = await sql.query(`
           'marketplace_genlayer_assignments_entity_contract_idx',
           'marketplace_genlayer_transactions_hash_idx',
           'marketplace_genlayer_withdrawals_entity_contract_idx',
-          'marketplace_genlayer_claimable_balances_pk'
+          'marketplace_genlayer_claimable_balances_pk',
+          'marketplace_genlayer_maintenance_generations_pk'
         )
     ) as native_indexes_ready,
     (
@@ -147,7 +156,7 @@ process.stdout.write(JSON.stringify({
   ok: true,
   network: "studionet",
   chainId: 61_999,
-  schemaVersion: 2,
+  schemaVersion: 3,
   verificationColumns: state.verification_column_count,
   verificationRequests: requestState.request_count,
   campaigns: campaignState.campaign_count,

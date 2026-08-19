@@ -43,6 +43,15 @@ import {
   runGenLayerJournalReconciliationBatch,
 } from "../lib/marketplace-genlayer-journal.ts";
 import {
+  MarketplaceMaintenanceDeploymentConfigurationError,
+  MarketplaceMaintenanceGenerationConflictError,
+  marketplaceMaintenanceDeploymentContext,
+  promoteMarketplaceMaintenanceGeneration,
+  type MarketplaceMaintenanceDeploymentContext,
+  type MarketplaceMaintenanceGeneration,
+  type MarketplaceMaintenanceGenerationStore,
+} from "../lib/marketplace-genlayer-maintenance-generation.ts";
+import {
   MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
   MARKETPLACE_MAINTENANCE_QUEUE_TOPIC,
   MARKETPLACE_MAINTENANCE_RETENTION_SECONDS,
@@ -50,6 +59,9 @@ import {
   enqueueMarketplaceMaintenanceHeartbeat,
   validateMarketplaceMaintenanceMessage,
 } from "../lib/marketplace-genlayer-maintenance-queue.ts";
+import {
+  processMarketplaceMaintenanceHeartbeat,
+} from "../lib/marketplace-genlayer-maintenance-worker.ts";
 import type {
   GenLayerOperatorAction,
   GenLayerOperatorProjection,
@@ -78,6 +90,14 @@ const assignmentId = `0x${"45".repeat(32)}`;
 const requestId = `0x${"46".repeat(32)}`;
 const marketplaceAddress = "0x58d598b8323e9c1d041989dcce80e737109de347";
 const creator = "0x5555555555555555555555555555555555555555";
+const maintenanceDeploymentId = "dpl_7Gw5ZMBpQA8h9GF832KGp7nwbuh3";
+const nextMaintenanceDeploymentId = "dpl_8Hx6ANCqRB9i0HG943LHq8oxcvi4";
+const maintenanceProjectId = "prj_Rej9WaMNRbffVm34MfDqa4daCEvZzzE";
+const maintenanceContext: MarketplaceMaintenanceDeploymentContext = {
+  deploymentId: maintenanceDeploymentId,
+  projectId: maintenanceProjectId,
+  environment: "preview",
+};
 
 test("StudioNet RPC calls preserve the deployed checksum address", () => {
   assert.equal(
@@ -669,25 +689,39 @@ test("journal retry writes retain the exact claim fence", async () => {
   }]);
 });
 
-test("maintenance heartbeat carries no operation authority and self-schedules by slot", async () => {
+test("maintenance heartbeat binds the DB-authorized deployment generation without operation authority", async () => {
   const calls: unknown[][] = [];
+  const generation = maintenanceGeneration();
   const result = await enqueueMarketplaceMaintenanceHeartbeat(
     { nowMs: 1_800_000_000_000, delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS },
-    (async (...args: unknown[]) => {
-      calls.push(args);
-      return { messageId: "msg_maintenance_1" };
-    }) as never,
+    {
+      readGeneration: async () => generation,
+      send: (async (...args: unknown[]) => {
+        calls.push(args);
+        return { messageId: "msg_maintenance_1" };
+      }) as never,
+    },
   );
   const expectedSlot = Math.floor(
     (1_800_000_000_000 + MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS * 1_000) /
       (MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS * 1_000),
   );
-  assert.deepEqual(result, { messageId: "msg_maintenance_1", slot: expectedSlot });
+  assert.deepEqual(result, {
+    messageId: "msg_maintenance_1",
+    deploymentId: maintenanceDeploymentId,
+    generation: 7,
+    slot: expectedSlot,
+  });
   assert.deepEqual(calls[0], [
     MARKETPLACE_MAINTENANCE_QUEUE_TOPIC,
-    { schemaVersion: 1, slot: expectedSlot },
     {
-      idempotencyKey: `influencedx-studionet-maintenance-v1:${expectedSlot}`,
+      schemaVersion: 2,
+      deploymentId: maintenanceDeploymentId,
+      generation: 7,
+      slot: expectedSlot,
+    },
+    {
+      idempotencyKey: `influencedx-studionet-maintenance-v2:${maintenanceDeploymentId}:7:${expectedSlot}`,
       retentionSeconds: MARKETPLACE_MAINTENANCE_RETENTION_SECONDS,
       delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
     },
@@ -695,12 +729,151 @@ test("maintenance heartbeat carries no operation authority and self-schedules by
   assert.doesNotMatch(JSON.stringify(calls[0]?.[1]), /operation|method|args|value|wallet|transaction/i);
   assert.throws(
     () => validateMarketplaceMaintenanceMessage({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      deploymentId: maintenanceDeploymentId,
+      generation: 7,
       slot: expectedSlot,
       functionName: "cancel_campaign",
     }),
     MarketplaceMaintenanceMessageError,
   );
+});
+
+test("maintenance deployment identity fails closed when Vercel system scope is absent or ambiguous", () => {
+  assert.deepEqual(
+    marketplaceMaintenanceDeploymentContext({
+      VERCEL: "1",
+      VERCEL_DEPLOYMENT_ID: maintenanceDeploymentId,
+      VERCEL_PROJECT_ID: maintenanceProjectId,
+      VERCEL_ENV: "preview",
+      VERCEL_TARGET_ENV: "preview",
+    }),
+    maintenanceContext,
+  );
+  for (const environment of [
+    {},
+    {
+      VERCEL: "1",
+      VERCEL_DEPLOYMENT_ID: "not-a-deployment",
+      VERCEL_PROJECT_ID: maintenanceProjectId,
+      VERCEL_ENV: "preview",
+      VERCEL_TARGET_ENV: "preview",
+    },
+    {
+      VERCEL: "1",
+      VERCEL_DEPLOYMENT_ID: maintenanceDeploymentId,
+      VERCEL_PROJECT_ID: maintenanceProjectId,
+      VERCEL_ENV: "preview",
+      VERCEL_TARGET_ENV: "production",
+    },
+  ]) {
+    assert.throws(
+      () => marketplaceMaintenanceDeploymentContext(environment),
+      MarketplaceMaintenanceDeploymentConfigurationError,
+    );
+  }
+});
+
+test("maintenance generation activation is explicit, monotonic, and compare-and-swap fenced", async () => {
+  let state: MarketplaceMaintenanceGeneration | null = null;
+  const store = inMemoryMaintenanceGenerationStore(() => state, (next) => {
+    state = next;
+  });
+  const first = await promoteMarketplaceMaintenanceGeneration(
+    { expectedGeneration: 0, nowMs: 1_800_000_000_000 },
+    { context: maintenanceContext, store },
+  );
+  assert.equal(first.promoted, true);
+  assert.deepEqual(first.generation, maintenanceGeneration({ generation: 1 }));
+
+  const idempotent = await promoteMarketplaceMaintenanceGeneration(
+    { expectedGeneration: 1, nowMs: 1_800_000_001_000 },
+    { context: maintenanceContext, store },
+  );
+  assert.equal(idempotent.promoted, false);
+  assert.equal(idempotent.generation.generation, 1);
+
+  const nextContext = {
+    ...maintenanceContext,
+    deploymentId: nextMaintenanceDeploymentId,
+  };
+  const next = await promoteMarketplaceMaintenanceGeneration(
+    { expectedGeneration: 1, nowMs: 1_800_000_002_000 },
+    { context: nextContext, store },
+  );
+  assert.equal(next.promoted, true);
+  assert.equal(next.generation.deploymentId, nextMaintenanceDeploymentId);
+  assert.equal(next.generation.generation, 2);
+
+  await assert.rejects(
+    promoteMarketplaceMaintenanceGeneration(
+      { expectedGeneration: 1, nowMs: 1_800_000_003_000 },
+      { context: maintenanceContext, store },
+    ),
+    MarketplaceMaintenanceGenerationConflictError,
+  );
+});
+
+test("stale maintenance generations acknowledge without work or re-enqueue", async () => {
+  let maintenanceCalls = 0;
+  let enqueueCalls = 0;
+  const result = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    {
+      isActive: async () => false,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+      enqueue: async () => {
+        enqueueCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(result, { kind: "STALE" });
+  assert.equal(maintenanceCalls, 0);
+  assert.equal(enqueueCalls, 0);
+});
+
+test("active maintenance rechecks its generation before extending the heartbeat", async () => {
+  const checks = [true, false];
+  let maintenanceCalls = 0;
+  let enqueueCalls = 0;
+  const superseded = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    {
+      isActive: async () => checks.shift() ?? false,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+      enqueue: async () => {
+        enqueueCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(superseded, { kind: "SUPERSEDED" });
+  assert.equal(maintenanceCalls, 1);
+  assert.equal(enqueueCalls, 0);
+
+  const processed = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    {
+      isActive: async () => true,
+      runMaintenance: async () => ({} as never),
+      enqueue: async (input) => {
+        assert.deepEqual(input, {
+          delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+        });
+        enqueueCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(processed, { kind: "PROCESSED" });
+  assert.equal(enqueueCalls, 1);
 });
 
 test("journal terminal and projection ordering guards are enforced in SQL", async () => {
@@ -965,6 +1138,42 @@ test("0009 is additive, Base-independent for creators, and deployment scoped", a
   assert.doesNotMatch(migration, /ALTER TABLE "marketplace_campaigns"|UPDATE "marketplace_campaigns"/i);
 });
 
+test("0010 adds an empty, environment-scoped maintenance generation fence", async () => {
+  const [migration, seedRoute] = await Promise.all([
+    readFile(
+      new URL(
+        "../drizzle-postgres/0010_maintenance_generation_fence.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../app/api/internal/campaign-progression/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+  assert.match(
+    migration,
+    /CREATE TABLE "marketplace_genlayer_maintenance_generations"/,
+  );
+  assert.match(
+    migration,
+    /PRIMARY KEY \([\s\S]*"network"[\s\S]*"chain_id"[\s\S]*"contract_address"[\s\S]*"vercel_project_id"[\s\S]*"vercel_environment"/,
+  );
+  assert.match(migration, /"generation" bigint NOT NULL/);
+  assert.match(migration, /"active_deployment_id" text NOT NULL/);
+  assert.match(migration, /"vercel_environment" IN \('preview', 'production'\)/);
+  assert.match(migration, /"generation" > 0/);
+  assert.doesNotMatch(migration, /\b(?:INSERT|UPDATE|DELETE)\b/i);
+  assert.match(seedRoute, /export async function POST/);
+  assert.match(seedRoute, /x-influencedx-maintenance-generation/);
+  assert.match(seedRoute, /promoteMarketplaceMaintenanceGeneration/);
+  assert.doesNotMatch(seedRoute, /runGenLayerMaintenanceBatch/);
+});
+
 test("database verifier requires the complete native projection and activation schema", async () => {
   const verifier = await readFile(
     new URL("../scripts/verify-database.mjs", import.meta.url),
@@ -978,6 +1187,7 @@ test("database verifier requires the complete native projection and activation s
     "marketplace_genlayer_claimable_balances",
     "marketplace_genlayer_withdrawals",
     "marketplace_genlayer_projection_cursors",
+    "marketplace_genlayer_maintenance_generations",
     "activation_prepared_id",
     "activation_tx_hash",
     "activation_confirmed_at",
@@ -1094,6 +1304,67 @@ function progressionAssignment(
     acceptanceDeadlineEpoch: 1_800_000_000,
     ...overrides,
   } as GenLayerAssignmentState;
+}
+
+function maintenanceGeneration(
+  overrides: Partial<MarketplaceMaintenanceGeneration> = {},
+): MarketplaceMaintenanceGeneration {
+  return Object.freeze({
+    deploymentId: maintenanceDeploymentId,
+    generation: 7,
+    activatedAt: 1_800_000_000_000,
+    updatedAt: 1_800_000_000_000,
+    ...overrides,
+  });
+}
+
+function maintenanceMessage() {
+  return Object.freeze({
+    schemaVersion: 2 as const,
+    deploymentId: maintenanceDeploymentId,
+    generation: 7,
+    slot: 6_000_001,
+  });
+}
+
+function inMemoryMaintenanceGenerationStore(
+  readState: () => MarketplaceMaintenanceGeneration | null,
+  writeState: (state: MarketplaceMaintenanceGeneration) => void,
+): MarketplaceMaintenanceGenerationStore {
+  return Object.freeze({
+    async read() {
+      return readState();
+    },
+    async insertFirst(context, nowMs) {
+      if (readState()) return null;
+      const next = maintenanceGeneration({
+        deploymentId: context.deploymentId,
+        generation: 1,
+        activatedAt: nowMs,
+        updatedAt: nowMs,
+      });
+      writeState(next);
+      return next;
+    },
+    async compareAndSwap(context, current, nowMs) {
+      const observed = readState();
+      if (
+        !observed ||
+        observed.deploymentId !== current.deploymentId ||
+        observed.generation !== current.generation
+      ) {
+        return null;
+      }
+      const next = maintenanceGeneration({
+        deploymentId: context.deploymentId,
+        generation: current.generation + 1,
+        activatedAt: nowMs,
+        updatedAt: nowMs,
+      });
+      writeState(next);
+      return next;
+    },
+  });
 }
 
 function progressionCampaign(

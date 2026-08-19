@@ -1624,6 +1624,52 @@ export const marketplaceGenLayerWithdrawals = pgTable(
   ],
 );
 
+/**
+ * One authoritative maintenance-loop generation per hosted deployment scope.
+ *
+ * Preview and Production are deliberately separate scopes, as are different
+ * Vercel projects and GenLayer contract deployments. A queue message carries
+ * only the opaque deployment/generation pair; this row remains the authority.
+ */
+export const marketplaceGenLayerMaintenanceGenerations = pgTable(
+  "marketplace_genlayer_maintenance_generations",
+  {
+    network: text("network").notNull(),
+    chainId: integer("chain_id").notNull(),
+    contractAddress: text("contract_address").notNull(),
+    vercelProjectId: text("vercel_project_id").notNull(),
+    vercelEnvironment: text("vercel_environment").notNull(),
+    activeDeploymentId: text("active_deployment_id").notNull(),
+    generation: epochMs("generation").notNull(),
+    activatedAt: epochMs("activated_at").notNull(),
+    updatedAt: epochMs("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "marketplace_genlayer_maintenance_generations_pk",
+      columns: [
+        table.network,
+        table.chainId,
+        table.contractAddress,
+        table.vercelProjectId,
+        table.vercelEnvironment,
+      ],
+    }),
+    check(
+      "marketplace_genlayer_maintenance_generations_namespace",
+      sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0 and ${table.contractAddress} ~ '^0x[0-9a-f]{40}$'`,
+    ),
+    check(
+      "marketplace_genlayer_maintenance_generations_vercel",
+      sql`${table.vercelProjectId} ~ '^prj_[A-Za-z0-9]{16,96}$' and ${table.vercelEnvironment} in ('preview', 'production') and ${table.activeDeploymentId} ~ '^dpl_[A-Za-z0-9]{16,96}$'`,
+    ),
+    check(
+      "marketplace_genlayer_maintenance_generations_monotonic",
+      sql`${table.generation} > 0 and ${table.activatedAt} > 0 and ${table.updatedAt} >= ${table.activatedAt}`,
+    ),
+  ],
+);
+
 export const marketplaceGenLayerProjectionCursors = pgTable(
   "marketplace_genlayer_projection_cursors",
   {

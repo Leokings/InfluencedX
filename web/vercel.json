@@ -17,7 +17,7 @@
       "experimentalTriggers": [
         {
           "type": "queue/v2beta",
-          "topic": "influencedx-studionet-maintenance-v1",
+          "topic": "influencedx-studionet-maintenance-v2",
           "retryAfterSeconds": 60,
           "initialDelaySeconds": 0
         }

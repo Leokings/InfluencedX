@@ -1,22 +1,15 @@
 import { handleCallback, type RetryDirective } from "@vercel/queue";
 import {
-  MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
   MarketplaceMaintenanceMessageError,
-  enqueueMarketplaceMaintenanceHeartbeat,
-  validateMarketplaceMaintenanceMessage,
 } from "@/lib/marketplace-genlayer-maintenance-queue";
-import { runGenLayerMaintenanceBatch } from "@/lib/marketplace-genlayer-maintenance";
+import { processMarketplaceMaintenanceHeartbeat } from "@/lib/marketplace-genlayer-maintenance-worker";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export const POST = handleCallback(
   async (payload: unknown) => {
-    validateMarketplaceMaintenanceMessage(payload);
-    await runGenLayerMaintenanceBatch();
-    await enqueueMarketplaceMaintenanceHeartbeat({
-      delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
-    });
+    await processMarketplaceMaintenanceHeartbeat(payload);
   },
   {
     visibilityTimeoutSeconds: 10 * 60,
