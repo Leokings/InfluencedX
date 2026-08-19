@@ -16,6 +16,11 @@ HANDLE = "xdevelopers"
 BUDGET = 10 * 10**18
 RATE = 4 * 10**18
 FEE_BPS = 250
+FARCASTER_EPOCH_SECONDS = 1_609_459_200
+FARCASTER_USERNAME = "creator-one"
+FARCASTER_FID = 12345
+FARCASTER_OWNERSHIP_CAST = "0x" + "12" * 20
+FARCASTER_SUBMISSION_CAST = "0x" + "34" * 20
 APPLICATION_DEADLINE = NOW + 3_600
 SELECTION_DEADLINE = NOW + 7_200
 SUBMISSION_DEADLINE = NOW + 10_800
@@ -43,13 +48,18 @@ EXPIRES_AT = NOW + 600
 PROFILE_EXPIRES_AT = NOW + 30 * 24 * 60 * 60
 
 
-def deploy_marketplace(direct_vm, direct_deploy, owner, treasury, fee_bps=FEE_BPS):
+def deploy_marketplace(direct_vm, direct_deploy, owner, treasury, fee_bps=FEE_BPS, upgrade_admin=None):
     setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
     direct_vm.sender = as_address(owner)
     direct_vm.value = 0
     direct_vm.warp(NOW_ISO)
     direct_vm.check_pickling = True
-    return direct_deploy(str(CONTRACT_PATH), as_address(treasury), fee_bps)
+    return direct_deploy(
+        str(CONTRACT_PATH),
+        as_address(treasury),
+        fee_bps,
+        as_address(owner if upgrade_admin is None else upgrade_admin),
+    )
 
 
 def address_text(value) -> str:
@@ -63,10 +73,10 @@ def ownership_text(creator) -> str:
     )
 
 
-def mock_profile(direct_vm, handle=HANDLE, protected=False):
+def mock_profile(direct_vm, handle=HANDLE, protected=False, user_id=X_USER_ID):
     privacy = "0" if protected else "1"
     body = (
-        f'rest_id:"{X_USER_ID}",__typename:"User",privacy:{{}},core:{{}}'
+        f'rest_id:"{user_id}",__typename:"User",privacy:{{}},core:{{}}'
         f'__typename:"UserPrivacy",protected:!{privacy},'
         f'__typename:"UserCore",name:"Developers",screen_name:"{handle}"'
     )
@@ -98,6 +108,53 @@ def mock_post(direct_vm, post_id, text, handle=HANDLE, status=200):
     )
 
 
+def mock_farcaster_cast(
+    direct_vm,
+    cast_hash,
+    text,
+    published_at,
+    *,
+    username=FARCASTER_USERNAME,
+    fid=FARCASTER_FID,
+    proof_status=200,
+    cast_status=200,
+):
+    direct_vm.mock_web(
+        rf".*hub\.pinata\.cloud/v1/userNameProofByName\?name={username}.*",
+        {
+            "status": proof_status,
+            "body": json.dumps({
+                "timestamp": published_at,
+                "name": username,
+                "owner": "0x" + "56" * 20,
+                "signature": "test-signature",
+                "fid": fid,
+                "type": "USERNAME_TYPE_FNAME",
+            }) if proof_status == 200 else "",
+        },
+    )
+    direct_vm.mock_web(
+        rf".*hub\.pinata\.cloud/v1/castById\?fid={fid}&hash={cast_hash}.*",
+        {
+            "status": cast_status,
+            "body": json.dumps({
+                "data": {
+                    "type": "MESSAGE_TYPE_CAST_ADD",
+                    "fid": fid,
+                    "timestamp": published_at - FARCASTER_EPOCH_SECONDS,
+                    "network": "FARCASTER_NETWORK_MAINNET",
+                    "castAddBody": {"text": text},
+                },
+                "hash": cast_hash,
+            }) if cast_status == 200 else "",
+        },
+    )
+    direct_vm.mock_web(
+        rf".*api\.farcaster\.xyz/v2/casts\?fid={fid}&limit=100.*",
+        {"status": 404, "body": ""},
+    )
+
+
 def activate_creator(direct_vm, contract, creator):
     direct_vm.sender = as_address(creator)
     direct_vm.value = 0
@@ -124,9 +181,46 @@ def activate_creator(direct_vm, contract, creator):
     return request_id
 
 
-def campaign_args(max_retries=2, budget=BUDGET, nonce="campaign-nonce-0001"):
+def activate_farcaster_creator(direct_vm, contract, creator):
+    wallet = address_text(creator)
+    text = (
+        f"InfluencedX identity w={wallet} n={CHALLENGE} "
+        f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
+    )
+    mock_farcaster_cast(
+        direct_vm,
+        FARCASTER_OWNERSHIP_CAST,
+        text,
+        NOW - 60,
+    )
+    request_id = contract.compute_farcaster_ownership_request_id(
+        as_address(creator),
+        FARCASTER_USERNAME,
+        FARCASTER_FID,
+        FARCASTER_OWNERSHIP_CAST,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    direct_vm.sender = as_address(creator)
+    contract.activate_farcaster_creator(
+        request_id,
+        FARCASTER_USERNAME,
+        FARCASTER_FID,
+        FARCASTER_OWNERSHIP_CAST,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    return request_id
+
+
+def campaign_args(max_retries=2, budget=BUDGET, nonce="campaign-nonce-0001", source="X"):
     return {
         "client_nonce": nonce,
+        "content_source": source,
         "title": "Launch the InfluencedX creator campaign",
         "brief": "Explain why InfluencedX makes creator collaborations verifiable.",
         "required_phrases_json": json.dumps(["InfluencedX", "creator collaborations"]),
@@ -200,6 +294,7 @@ def submit(direct_vm, contract, assignment_id, creator):
         AGREEMENT_HASH,
         SUBMISSION_HASH,
         SUBMISSION_POST_ID,
+        "X",
         0,
     )
     direct_vm.sender = as_address(creator)
@@ -212,11 +307,19 @@ def submit(direct_vm, contract, assignment_id, creator):
     return request_id
 
 
-def mock_resolution(direct_vm, *, semantic_pass=True, text=None, status=200):
+def mock_resolution(
+    direct_vm,
+    *,
+    semantic_pass=True,
+    text=None,
+    status=200,
+    profile_user_id=X_USER_ID,
+):
     direct_vm.clear_mocks()
     if text is None:
         text = "#ad InfluencedX makes creator collaborations verifiable."
     mock_post(direct_vm, SUBMISSION_POST_ID, text, status=status)
+    mock_profile(direct_vm, user_id=profile_user_id)
     direct_vm.mock_llm(
         r".*Evaluate only whether the text materially satisfies the campaign brief.*",
         json.dumps({
@@ -261,11 +364,16 @@ def assert_campaign_invariant(contract, campaign_id):
 
 def test_contract_has_pinned_runner_and_gen_native_config(direct_vm, direct_deploy, direct_owner, direct_bob):
     first_line = CONTRACT_PATH.read_text(encoding="utf-8").splitlines()[0]
+    source = CONTRACT_PATH.read_text(encoding="utf-8")
     assert first_line.startswith('# { "Depends": "py-genlayer:')
     assert "latest" not in first_line and "test" not in first_line
+    assert 'gl.message_raw["datetime"]' in source
+    assert "datetime.datetime.now" not in source
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
     config = contract.get_config()
-    assert config["protocol_version"] == "INFLUENCEDX_MARKETPLACE_V1"
+    assert config["protocol_version"] == "INFLUENCEDX_MARKETPLACE_V2"
+    assert config["storage_schema_version"] == 2
+    assert config["upgrade_delay_seconds"] == 7 * 24 * 60 * 60
     assert config["native_token_symbol"] == "GEN"
     assert config["native_token_decimals"] == 18
     assert config["protocol_fee_bps"] == FEE_BPS
@@ -296,6 +404,131 @@ def test_creator_activation_is_caller_bound_and_expires(direct_vm, direct_deploy
 
     direct_vm.warp("2027-02-01T00:00:00Z")
     assert contract.get_profile(as_address(direct_alice))["active"] is False
+
+
+def test_farcaster_identity_and_campaign_freeze_stable_fid(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_farcaster_creator(direct_vm, contract, direct_alice)
+    identity = contract.get_identity(as_address(direct_alice), "FARCASTER")
+    assert identity["active"] is True
+    assert identity["external_user_id"] == str(FARCASTER_FID)
+    assert contract.get_profile(as_address(direct_alice))["active_sources"] == ["FARCASTER"]
+
+    campaign_id = create_campaign(
+        direct_vm,
+        contract,
+        direct_bob,
+        source="FARCASTER",
+    )
+    application_id = apply(direct_vm, contract, campaign_id, direct_alice)
+    application = contract.get_application(campaign_id, as_address(direct_alice))
+    assert application["application_id"] == application_id
+    assert application["content_source"] == "FARCASTER"
+    assert application["creator_external_user_id"] == str(FARCASTER_FID)
+    assignment_id = select(direct_vm, contract, campaign_id, direct_bob, direct_alice)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["content_source"] == "FARCASTER"
+    assert assignment["creator_identity_hash"] == identity["identity_hash"]
+
+
+def test_farcaster_campaign_resolves_exact_fid_and_cast(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_farcaster_creator(direct_vm, contract, direct_alice)
+    campaign_id = create_campaign(
+        direct_vm,
+        contract,
+        direct_bob,
+        source="FARCASTER",
+    )
+    apply(direct_vm, contract, campaign_id, direct_alice)
+    assignment_id = select(direct_vm, contract, campaign_id, direct_bob, direct_alice)
+    direct_vm.sender = as_address(direct_alice)
+    contract.accept_assignment(assignment_id)
+    direct_vm.warp("2027-01-01T00:00:02Z")
+    request_id = contract.compute_submission_request_id(
+        assignment_id,
+        AGREEMENT_HASH,
+        SUBMISSION_HASH,
+        FARCASTER_SUBMISSION_CAST,
+        "FARCASTER",
+        0,
+    )
+    contract.submit_evidence(
+        assignment_id,
+        request_id,
+        FARCASTER_SUBMISSION_CAST,
+        SUBMISSION_HASH,
+    )
+    direct_vm.clear_mocks()
+    mock_farcaster_cast(
+        direct_vm,
+        FARCASTER_SUBMISSION_CAST,
+        "#ad InfluencedX makes creator collaborations verifiable.",
+        NOW + 1,
+    )
+    direct_vm.mock_llm(
+        r".*Evaluate only whether the text materially satisfies the campaign brief.*",
+        json.dumps({"semantic_pass": True, "reasoning": "matches"}),
+    )
+    resolve_at(direct_vm, contract, assignment_id, request_id)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "SETTLED_PASS"
+    assert assignment["content_source"] == "FARCASTER"
+    assert assignment["resolution_checks"]["publication_in_window"] is True
+    assert assignment["resolution_checks"]["author_match"] is True
+    assert assignment["resolution_checks"]["stable_identity_match"] is True
+
+
+def test_seven_day_upgrade_delay_is_hash_bound_and_pause_gated(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(
+        direct_vm,
+        direct_deploy,
+        direct_owner,
+        direct_bob,
+        upgrade_admin=direct_alice,
+    )
+    new_code = CONTRACT_PATH.read_bytes()
+    code_hash = "0x" + hashlib.sha256(new_code).hexdigest()
+    direct_vm.sender = as_address(direct_alice)
+    with direct_vm.expect_revert("must be paused"):
+        contract.schedule_upgrade(code_hash)
+    direct_vm.sender = as_address(direct_owner)
+    contract.set_paused(True)
+    with direct_vm.expect_revert("Only the upgrade administrator"):
+        contract.schedule_upgrade(code_hash)
+    direct_vm.sender = as_address(direct_alice)
+    contract.schedule_upgrade(code_hash)
+    config = contract.get_config()
+    assert config["upgrade_pending"] is True
+    assert config["pending_upgrade_ready_at_epoch"] == NOW + 7 * 24 * 60 * 60
+    with direct_vm.expect_revert("seven-day upgrade delay"):
+        contract.execute_upgrade(new_code)
+    direct_vm.warp("2027-01-08T00:00:00Z")
+    with direct_vm.expect_revert("does not match"):
+        contract.execute_upgrade(b"not-the-scheduled-code")
+    contract.execute_upgrade(new_code)
+    config = contract.get_config()
+    assert config["upgrade_pending"] is False
+    assert config["last_upgrade_hash"] == code_hash
+    assert config["upgrade_nonce"] == 1
 
 
 def test_undetermined_ownership_request_can_retry_but_terminal_result_cannot(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
@@ -402,19 +635,23 @@ def test_pass_settlement_credits_creator_and_fee_without_losing_liability(direct
     assert assignment["resolution_checks"] == {
         "author_match": True,
         "post_id_match": True,
+        "stable_identity_match": True,
+        "publication_in_window": True,
         "required_checks": [True, True],
         "forbidden_checks": [False],
         "disclosure_present": True,
         "semantic_pass": True,
     }
     expected_evidence = {
-        "protocol": "influencedx-resolution-result-v1",
+            "protocol": "influencedx-resolution-result-v2",
         "request_id": request_id,
         "assignment_id": assignment_id,
         "campaign_id": campaign_id,
         "terms_hash": contract.get_campaign(campaign_id)["terms_hash"],
         "agreement_hash": AGREEMENT_HASH,
-        "submission_hash": SUBMISSION_HASH,
+            "submission_hash": SUBMISSION_HASH,
+            "content_source": "X",
+            "creator_identity_hash": assignment["creator_identity_hash"],
         "post_id": SUBMISSION_POST_ID,
         "creator_handle": HANDLE,
         "resolution_round": 0,
@@ -441,6 +678,40 @@ def test_pass_settlement_credits_creator_and_fee_without_losing_liability(direct
     assert counts["total_liability_atto"] == BUDGET
     assert_campaign_invariant(contract, campaign_id)
     assert_global_invariant(contract)
+
+
+def test_resolution_rejects_non_boolean_semantic_output(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    mock_resolution(direct_vm, semantic_pass="false")
+    with direct_vm.expect_revert("must be a JSON boolean"):
+        resolve_at(direct_vm, contract, assignment_id, request_id)
+    assert contract.get_assignment(assignment_id)["status"] == "SUBMITTED"
+
+
+def test_x_resolution_cannot_pay_a_recycled_handle(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    mock_resolution(direct_vm, profile_user_id="999999999")
+    resolve_at(direct_vm, contract, assignment_id, request_id)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "SETTLED_FAIL"
+    assert assignment["resolution_checks"]["stable_identity_match"] is False
+    assert contract.get_claimable(as_address(direct_bob))["claimable_atto"] == 0
 
 
 def test_fail_settlement_refunds_brand_without_fee(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob, direct_charlie):
@@ -522,6 +793,90 @@ def test_two_definitive_missing_sources_fail_submission(direct_vm, direct_deploy
     assert contract.get_assignment(assignment_id)["reasoning"] == (
         "The post did not satisfy one or more frozen campaign requirements"
     )
+
+
+def test_two_x_access_denials_are_undetermined_not_creator_loss(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob, direct_charlie):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_charlie)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    mock_resolution(direct_vm, status=403)
+    resolve_at(direct_vm, contract, assignment_id, request_id)
+    assert contract.get_assignment(assignment_id)["status"] == "UNDETERMINED"
+
+
+def test_farcaster_access_denials_and_changed_json_are_undetermined(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_farcaster_creator(direct_vm, contract, direct_alice)
+    campaign_id = create_campaign(
+        direct_vm,
+        contract,
+        direct_bob,
+        source="FARCASTER",
+        max_retries=4,
+    )
+    apply(direct_vm, contract, campaign_id, direct_alice)
+    assignment_id = select(direct_vm, contract, campaign_id, direct_bob, direct_alice)
+    direct_vm.sender = as_address(direct_alice)
+    contract.accept_assignment(assignment_id)
+    direct_vm.warp("2027-01-01T00:00:02Z")
+    request_id = contract.compute_submission_request_id(
+        assignment_id,
+        AGREEMENT_HASH,
+        SUBMISSION_HASH,
+        FARCASTER_SUBMISSION_CAST,
+        "FARCASTER",
+        0,
+    )
+    contract.submit_evidence(
+        assignment_id,
+        request_id,
+        FARCASTER_SUBMISSION_CAST,
+        SUBMISSION_HASH,
+    )
+
+    exact_without_timestamp = json.dumps({
+        "data": {
+            "type": "MESSAGE_TYPE_CAST_ADD",
+            "fid": FARCASTER_FID,
+            "castAddBody": {"text": "#ad InfluencedX makes creator collaborations verifiable."},
+        },
+        "hash": FARCASTER_SUBMISSION_CAST,
+    })
+    recent_without_timestamp = json.dumps({
+        "result": {
+            "casts": [{
+                "hash": FARCASTER_SUBMISSION_CAST,
+                "text": "#ad InfluencedX makes creator collaborations verifiable.",
+                "author": {"fid": FARCASTER_FID},
+            }],
+        },
+    })
+    cases = (
+        (403, "", 403, "", "2027-01-01T00:01:03Z"),
+        (
+            200,
+            json.dumps({"changed": "schema"}),
+            200,
+            json.dumps({"changed": "schema"}),
+            "2027-01-01T00:06:04Z",
+        ),
+        (200, exact_without_timestamp, 404, "", "2027-01-01T00:11:05Z"),
+        (404, "", 200, recent_without_timestamp, "2027-01-01T00:16:06Z"),
+    )
+    for exact_status, exact_body, recent_status, recent_body, resolution_time in cases:
+        direct_vm.clear_mocks()
+        direct_vm.mock_web(
+            rf".*hub\.pinata\.cloud/v1/castById\?fid={FARCASTER_FID}&hash={FARCASTER_SUBMISSION_CAST}.*",
+            {"status": exact_status, "body": exact_body},
+        )
+        direct_vm.mock_web(
+            rf".*api\.farcaster\.xyz/v2/casts\?fid={FARCASTER_FID}&limit=100.*",
+            {"status": recent_status, "body": recent_body},
+        )
+        resolve_at(direct_vm, contract, assignment_id, request_id, resolution_time)
+        assignment = contract.get_assignment(assignment_id)
+        assert assignment["status"] == "UNDETERMINED"
+        request_id = assignment["resolution_request_id"]
 
 
 def test_expired_selected_assignment_releases_budget(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob, direct_charlie):
@@ -693,3 +1048,17 @@ def test_admin_addresses_cannot_be_zero(direct_vm, direct_deploy, direct_owner, 
         contract.set_treasury(zero)
     with direct_vm.expect_revert("cannot be the zero address"):
         contract.propose_owner(zero)
+
+
+def test_upgrade_admin_cannot_be_zero(direct_vm, direct_deploy, direct_owner, direct_bob):
+    setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
+    direct_vm.sender = as_address(direct_owner)
+    direct_vm.warp(NOW_ISO)
+    zero = as_address(bytes(20))
+    with direct_vm.expect_revert("upgrade_admin cannot be the zero address"):
+        direct_deploy(
+            str(CONTRACT_PATH),
+            as_address(direct_bob),
+            FEE_BPS,
+            zero,
+        )

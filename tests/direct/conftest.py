@@ -43,6 +43,7 @@ def _windows_safe_inject_message_to_fd0(vm):
 
 
 _original_cleanup = VMContext._cleanup_after_deactivate
+_original_refresh_gl_message = VMContext._refresh_gl_message
 
 
 def _cleanup_windows_message_files(self):
@@ -57,3 +58,17 @@ def _cleanup_windows_message_files(self):
 
 loader._inject_message_to_fd0 = _windows_safe_inject_message_to_fd0
 VMContext._cleanup_after_deactivate = _cleanup_windows_message_files
+
+
+def _refresh_gl_message_with_datetime(self):
+    _original_refresh_gl_message(self)
+    try:
+        from genlayer import gl
+
+        if gl.message_raw is not None:
+            gl.message_raw["datetime"] = self._datetime
+    except Exception:
+        pass
+
+
+VMContext._refresh_gl_message = _refresh_gl_message_with_datetime
