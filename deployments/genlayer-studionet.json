@@ -23,8 +23,30 @@
       "get_result": 1
     }
   },
+  "marketplace": {
+    "address": "0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11",
+    "deploymentTransaction": "0xd21bb805678c7cb93be39b73f8af2955627ce87dd536004a9e144aa145f36aa2",
+    "deployedAt": "2026-08-19T12:02:54.276347Z",
+    "status": "FINALIZED",
+    "executionResult": "SUCCESS",
+    "consensusResult": "MAJORITY_AGREE",
+    "protocolVersion": "INFLUENCEDX_MARKETPLACE_V1",
+    "storageSchemaVersion": 1,
+    "owner": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
+    "treasury": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
+    "protocolFeeBps": 250,
+    "nativeAsset": {
+      "symbol": "GEN",
+      "decimals": 18
+    },
+    "abiVerified": true,
+    "stateVerified": true,
+    "methodCount": 42,
+    "directTestsPassed": 22,
+    "productionOwnerConfigured": false
+  },
   "limitations": {
-    "durability": "StudioNet persistence is temporary. A network reset requires a fresh resolver deployment and a new Base receiver resolver-update ceremony.",
+    "durability": "StudioNet persistence is temporary. A network reset requires fresh resolver and marketplace deployments, new network-scoped projections, and fresh creator verification.",
     "mainnet": false
   }
 }
