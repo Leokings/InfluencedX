@@ -39,7 +39,7 @@ through the reviewed write adapter and then cancel the canary commitment.
 
 ## Direct-mode coverage
 
-The 43 direct tests cover the contract's deterministic and adversarial
+The 50 direct tests cover the contract's deterministic and adversarial
 boundaries, including:
 
 - X ownership challenge binding and stable X user identity;
@@ -78,7 +78,8 @@ audit, and 30 tests. Coverage includes:
 - exact nested StudioNet finality/receipt binding; and
 - authoritative pre-state and post-state reconciliation.
 
-It has **not yet been deployed and enabled for the V2 public release**.
+It is deployed and enabled at the isolated Preview service alias, but is not
+yet part of the unchanged public release alias.
 
 ### Withdrawal reconciler
 
@@ -87,7 +88,7 @@ The isolated service at
 has passed its local TypeScript check, production build, production dependency
 audit, and 24 adversarial tests. Coverage includes:
 
-- exact V2 owner/contract/protocol/schema pins;
+- exact V2 withdrawal-confirmer/contract/protocol/schema pins;
 - caller-supplied withdrawal ID only;
 - derivation of recipient, amount, parent, child, and evidence from finalized
   chain state;
@@ -96,7 +97,8 @@ audit, and 24 adversarial tests. Coverage includes:
 - exact `confirm_withdrawal` call and post-state/accounting binding; and
 - quarantine rather than automatic restoration on ambiguity.
 
-It has **not yet been deployed and enabled for the V2 public release**.
+It is deployed and enabled at the isolated Preview service alias, but is not
+yet part of the unchanged public release alias.
 
 ## Web/API integration status
 
