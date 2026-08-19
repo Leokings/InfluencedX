@@ -10,9 +10,9 @@ receipt, or describe `EMITTED_UNCONFIRMED` as paid.
 
 - [ ] The public URL resolves to the exact tested V2 release commit.
 - [ ] The live app pins StudioNet `61999`, marketplace
-      `0x58D598B8323E9C1d041989DccE80E737109DE347`, protocol
+      `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`, protocol
       `INFLUENCEDX_MARKETPLACE_V2`, and schema `2`.
-- [ ] Web migrations through `0010_maintenance_generation_fence.sql` and
+- [ ] Web migrations through `0011_identity_bundle_activation.sql` and
       `npm run db:verify` pass.
 - [ ] The tested deployment owns the active maintenance generation and has two
       consecutive successful `maintenance-v2` callbacks with no legacy loop.
@@ -51,7 +51,7 @@ Show the InfluencedX landing/marketplace page and say:
 Briefly show the deployment banner/address and state that this demo uses
 StudioNet developer tokens and temporary, resettable state—not mainnet value.
 
-### 0:20–0:45 — Two identity sources
+### 0:20–0:45 — Two identities, one transaction
 
 Show a creator profile with its source-keyed X and Farcaster records. Open one
 actual finalized activation receipt for each source, or show the live contract
@@ -146,7 +146,7 @@ End on the public URL and repository README.
 - Public V2 URL and exact source commit used for the recording.
 - Public repository URL and three-minute captioned video.
 - Marketplace V2 address, deployment transaction, source hash, and manifest.
-- One finalized X activation and one finalized Farcaster activation.
+- One finalized atomic X + Farcaster bundle activation.
 - One native-GEN campaign trail: create, apply, select, accept, submit, and
   terminal resolution.
 - One credit/withdrawal trail with parent, child, confirmation, and final

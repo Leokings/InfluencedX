@@ -13,12 +13,12 @@ Target: **GenLayer StudioNet (`61999`)**
 | Check | Recorded result |
 | --- | --- |
 | Contract source | [`InfluencedXMarketplace.py`](../contracts/genlayer/InfluencedXMarketplace.py) |
-| Source SHA-256 | `0xf6dbcfaf11456096c11bf8dbcc729238d3b31156e842c5ba01f694915c4d3323` |
-| Frozen source commit | `77e6109ca60d2b444f168d0a6b8de5df92cf902e` |
-| GenVM lint | PASS; public ABI contains 50 methods (21 view, 29 write) |
-| Direct suite | PASS; 50 tests |
-| Deployment | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
-| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Source SHA-256 | `0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be` |
+| Frozen source commit | `11bb155d1dd192efd87d8bcab4962f3233cf4735` |
+| GenVM lint | PASS; public ABI contains 50 methods (22 view, 28 write) |
+| Direct suite | PASS; 57 tests |
+| Deployment | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
+| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
 | Deployment receipt | `FINALIZED`, `MAJORITY_AGREE`, successful leader return |
 | Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native asset / fee | GEN (18 decimals) / 250 bps |
@@ -30,20 +30,20 @@ Live read-only checks verified owner, treasury, upgrade administrator, fee,
 protocol/schema, native unit, pause state, and upgrade-delay configuration
 against that manifest.
 
-The contract was paused and unpaused through a developer-network governance
-canary. The final recorded state is unpaused with no pending upgrade and no
-campaign value in that canary. A CLI attempt to pass a code hash was rejected
-before scheduling because that CLI path coerced the hash incorrectly; it is not
-evidence of a scheduled upgrade. A future governance E2E must use typed bytes
-through the reviewed write adapter and then cancel the canary commitment.
+The fresh bundle-only deployment was read back as unpaused with no identities,
+campaigns, withdrawals, pending upgrade, balance, or liability. Seven-day
+upgrade behavior is covered in direct tests; a future governance E2E must use
+typed bytes through the reviewed write adapter and cancel the canary
+commitment afterward.
 
 ## Direct-mode coverage
 
-The 50 direct tests cover the contract's deterministic and adversarial
+The 57 direct tests cover the contract's deterministic and adversarial
 boundaries, including:
 
-- X ownership challenge binding and stable X user identity;
-- Farcaster challenge, username proof, FID, and cast-hash binding;
+- atomic X + Farcaster ownership, stable IDs, and all-or-nothing activation;
+- exact 65-byte Farcaster username-proof encodings (hex 132 including `0x`,
+  and padded base64 88);
 - source-keyed profiles and cross-source campaign rejection;
 - payable campaign creation with exact native GEN value;
 - deterministic campaign, application, assignment, resolution, and withdrawal
@@ -109,9 +109,11 @@ PostgreSQL projections, operator progression, and withdrawal reconciliation.
 The web environment template and active documentation now contain no Base,
 USDC, watcher, relay, or historical submitter secrets.
 
-The exact integrated release tree passed 180 web unit tests, the optimized
+The exact integrated release tree passed 188 web unit tests, the optimized
 Next.js build, 7 rendered-page tests, TypeScript, ESLint, and clean-install
-reproducibility. The isolated Preview database is migrated through `0010` and
+reproducibility. The isolated Preview database must be migrated through `0011`
+before the bundled identity build is enabled; the previous hosted proof was
+through `0010`. After cutover,
 its verifier reports schema version 3 and the native StudioNet schema ready.
 The operator passed
 30 tests plus build/typecheck; the withdrawal reconciler passed 24 tests plus
@@ -135,15 +137,14 @@ The following are release blockers, not completed claims:
   enable it in an isolated environment.
 - [x] Deploy the withdrawal reconciler disabled, verify auth/queue pins, then
   enable it in an isolated environment.
-- [x] Apply and verify native V2 migrations through the deployment-generation
-  fence in `0010`.
+- [ ] Apply and verify native V2 migrations through bundled identity migration
+  `0011`.
 - [x] Promote and prove fenced maintenance generation 1, then retire every
   seeded pre-fence deployment.
 - [x] Deploy the native web build on an isolated URL with gates disabled, then
   enable in the documented order.
-- [ ] Complete one genuine X ownership challenge and finalized V2 activation.
-- [ ] Complete one genuine Farcaster ownership challenge and finalized V2
-  activation.
+- [ ] Complete one genuine X challenge and Farcaster challenge in a single
+  finalized V2 bundle activation.
 - [ ] Complete one native-GEN campaign through create, apply, select, accept,
   submit, retention, and hosted resolution.
 - [ ] Record a PASS or FAIL settlement and verify every accounting field.

@@ -35,7 +35,7 @@ from genlayer_py.contracts.utils import make_calldata_object
 import requests
 
 
-MARKETPLACE = "0x58D598B8323E9C1d041989DccE80E737109DE347"
+MARKETPLACE = "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4"
 STUDIONET_CHAIN_ID = 61_999
 CANARY_AMOUNT_ATTO = 1
 

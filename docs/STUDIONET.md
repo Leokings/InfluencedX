@@ -12,8 +12,8 @@ temporary, and the network may reset.
 | Chain ID | `61999` |
 | RPC | `https://studio.genlayer.com/api` |
 | Explorer | `https://explorer-studio.genlayer.com` |
-| Marketplace | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
-| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Marketplace | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
+| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
 | Protocol | `INFLUENCEDX_MARKETPLACE_V2` |
 | Storage schema | `2` |
 | Native asset | `GEN`, 18 decimals |

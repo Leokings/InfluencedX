@@ -156,13 +156,13 @@ sequenceDiagram
     participant Operator as Hosted operator
     participant Reconciler as Withdrawal reconciler
 
-    Creator->>App: Request source-specific challenge
-    Creator->>Source: Publish exact challenge post/cast
-    App-->>Wallet: Prepare activation call
-    Wallet->>IC: activate_creator / activate_farcaster_creator
-    IC->>Source: Validators retrieve identity evidence
-    IC-->>App: Finalized identity result
-    App->>DB: Store verified projection
+    Creator->>App: Request bundled X + Farcaster challenges
+    Creator->>Source: Publish exact challenge post and cast
+    App-->>Wallet: Prepare one bundle activation
+    Wallet->>IC: activate_identity_bundle
+    IC->>Source: Validators retrieve both identity proofs
+    IC-->>App: Finalized atomic bundle result
+    App->>DB: Store both verified projections
 
     Brand->>App: Freeze campaign terms and budget
     App-->>Wallet: Prepare create_campaign + exact GEN value

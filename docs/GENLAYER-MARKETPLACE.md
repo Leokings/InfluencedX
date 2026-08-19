@@ -11,11 +11,11 @@ the source-level design record is
 | Field | Frozen StudioNet value |
 | --- | --- |
 | Network / chain | `studionet` / `61999` |
-| Contract | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
-| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Contract | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
+| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
 | Protocol | `INFLUENCEDX_MARKETPLACE_V2` |
 | Storage schema | `2` |
-| Source SHA-256 | `0xf6dbcfaf11456096c11bf8dbcc729238d3b31156e842c5ba01f694915c4d3323` |
+| Source SHA-256 | `0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be` |
 | Native unit | GEN / 18 decimals |
 | Upgrade delay | `604800` seconds |
 
@@ -37,8 +37,7 @@ new product calls.
 
 | Operation | Expected caller | Native value | Hosted automation |
 | --- | --- | ---: | --- |
-| `activate_creator` | creator wallet | `0` | Never |
-| `activate_farcaster_creator` | creator wallet | `0` | Never |
+| `activate_identity_bundle` | creator wallet | `0` | Never |
 | `create_campaign` | brand wallet | exact `budget_atto` | Never |
 | `apply_to_campaign`, `withdraw_application` | creator wallet | `0` | Never |
 | `select_creator`, `cancel_campaign`, `refund_unallocated` | campaign brand | `0` | Never |
@@ -57,24 +56,22 @@ tokens, Vercel workload identities, and queue topics.
 
 ## Identity sources
 
-### X
+`activate_identity_bundle` binds one wallet to an X challenge and a Farcaster
+challenge in a single zero-value transaction. Validators derive the immutable
+numeric X user ID and verify the Farcaster username proof, FID, and exact cast.
+Both sources must return VERIFIED before either identity is stored. An
+UNDETERMINED result stores no partial identity and may be retried with the same
+proofs; rejection consumes both child requests without activating either.
 
-`activate_creator` binds a wallet, normalized handle, public challenge post,
-challenge timestamps, and profile expiry. Validators fetch the public post and
-profile and derive the immutable numeric X user ID. The handle is display data;
-the stable ID and identity hash prevent a renamed or transferred handle from
-silently replacing the verified identity.
+The X handle and Farcaster username are display data. The stable IDs and
+identity hashes prevent renamed or transferred names from silently replacing
+the verified identities. Farcaster username proof signatures accept exact
+65-byte hex (`0x` plus 130 hex characters, 132 total) and padded base64 (88
+characters), matching supported Hub responses.
 
-### Farcaster
-
-`activate_farcaster_creator` binds a wallet, normalized username, positive FID,
-public challenge cast hash, challenge timestamps, and profile expiry. Validators
-check the username proof and cast evidence. The FID is the stable identity; the
-username is display data.
-
-A creator may activate both sources. A campaign chooses exactly one source and
-only an active identity for that source can apply. X content IDs are numeric
-post IDs; Farcaster content IDs are 20-byte cast hashes.
+Both identities must remain active for marketplace participation. A campaign
+still chooses exactly one content source. X content IDs are numeric post IDs;
+Farcaster content IDs are 20-byte cast hashes.
 
 Renewal may update a mutable handle or username only when the source's stable X
 user ID or Farcaster FID remains unchanged. A wallet cannot replace its stable

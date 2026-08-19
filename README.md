@@ -13,7 +13,7 @@ retryable UNDETERMINED outcomes settle inside the same Intelligent Contract.
 The active contract is
 [`InfluencedXMarketplace.py`](contracts/genlayer/InfluencedXMarketplace.py),
 deployed at
-[`0x58D598B8323E9C1d041989DccE80E737109DE347`](https://explorer-studio.genlayer.com/address/0x58D598B8323E9C1d041989DccE80E737109DE347).
+[`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`](https://explorer-studio.genlayer.com/address/0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4).
 The immutable deployment record is
 [`deployments/genlayer-studionet.json`](deployments/genlayer-studionet.json).
 
@@ -26,7 +26,7 @@ are deployed and enabled in an isolated Preview release at
 **The existing public URL has not yet been cut over to this GenLayer-only
 build.** A public V2 claim still requires the following user-driven evidence:
 
-1. one fresh X identity and one fresh Farcaster identity finalize against V2;
+1. one fresh X + Farcaster identity bundle finalizes in a single V2 transaction;
 2. one native-GEN campaign completes create, apply, select, accept, submit,
    resolve, credit, request withdrawal, execute withdrawal, and confirmed
    delivery; and
@@ -44,8 +44,8 @@ campaign is funded, settled, or paid.
 | Chain ID | `61999` |
 | RPC | `https://studio.genlayer.com/api` |
 | Explorer | `https://explorer-studio.genlayer.com` |
-| Marketplace V2 | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
-| Deployment transaction | `0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a` |
+| Marketplace V2 | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
+| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
 | Protocol / storage | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native asset | `GEN`, 18 decimals |
 | Protocol fee | `250` bps, snapshotted per campaign |
@@ -100,12 +100,12 @@ See [the detailed architecture](docs/ARCHITECTURE.md),
 
 1. A user connects a GenLayer-compatible wallet and signs a short-lived login
    challenge. The server binds the HttpOnly session to that address.
-2. A creator chooses X or Farcaster, publishes the exact one-time challenge,
-   and signs `activate_creator` or `activate_farcaster_creator` directly on V2.
-   Validators derive and bind the stable X user ID or Farcaster FID.
+2. A creator publishes one X challenge post and one Farcaster challenge cast,
+   then signs `activate_identity_bundle` once. Validators verify both sources
+   and atomically bind the stable X user ID and Farcaster FID.
 3. A brand defines a source-specific campaign. `create_campaign` receives the
    exact budget as native call value, freezes the terms, and holds GEN in V2.
-4. A verified creator for the campaign's source applies. The brand selects a
+4. A creator with both identities active applies. The brand selects a
    creator, who accepts and later commits the X post ID or Farcaster cast hash.
 5. After retention, the hosted operator calls the fixed permissionless
    resolution method. Validators retrieve the frozen source and evaluate exact

@@ -24,9 +24,9 @@
     }
   },
   "marketplace": {
-    "address": "0x58D598B8323E9C1d041989DccE80E737109DE347",
-    "deploymentTransaction": "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a",
-    "deployedAt": "2026-08-19T14:30:13.215777Z",
+    "address": "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
+    "deploymentTransaction": "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2",
+    "deployedAt": "2026-08-19T17:32:09.897573Z",
     "status": "FINALIZED",
     "executionResult": "SUCCESS",
     "consensusResult": "MAJORITY_AGREE",
@@ -45,12 +45,21 @@
     "abiVerified": true,
     "stateVerified": true,
     "methodCount": 50,
-    "directTestsPassed": 50,
-    "sourceSha256": "0xf6dbcfaf11456096c11bf8dbcc729238d3b31156e842c5ba01f694915c4d3323",
-    "sourceCommit": "77e6109ca60d2b444f168d0a6b8de5df92cf902e",
+    "directTestsPassed": 57,
+    "sourceSha256": "0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be",
+    "sourceCommit": "11bb155d1dd192efd87d8bcab4962f3233cf4735",
+    "identityActivation": "ATOMIC_X_AND_FARCASTER_V1",
     "productionOwnerConfigured": false
   },
   "historicalMarketplaces": [
+    {
+      "address": "0x58D598B8323E9C1d041989DccE80E737109DE347",
+      "deploymentTransaction": "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a",
+      "protocolVersion": "INFLUENCEDX_MARKETPLACE_V2",
+      "storageSchemaVersion": 2,
+      "status": "FINALIZED",
+      "reasonRetired": "Replaced before public identity cutover by a fresh zero-state deployment that requires atomic X and Farcaster activation in one transaction."
+    },
     {
       "address": "0x17eB37A3578E21662F4D654b245238dF520663Fa",
       "deploymentTransaction": "0xa3257e846cfcb581bc473bb32f4e47563a72b7bb1ff0215d0fe1de5aa637a99c",

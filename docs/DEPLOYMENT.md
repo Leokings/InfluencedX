@@ -7,7 +7,7 @@ relay.
 ## Current release boundary
 
 The frozen StudioNet V2 contract exists at
-`0x58D598B8323E9C1d041989DccE80E737109DE347`. The native PostgreSQL migrations
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`. The native PostgreSQL migrations
 are applied and verified, and the web/API plus both hosted services are enabled
 in an isolated Preview release at
 `https://influencedx-native-preview.vercel.app`. The existing public alias has
@@ -66,10 +66,11 @@ former prototype for regression/audit only.
 Read, do not mutate, the deployment before configuring hosted services:
 
 ```powershell
-genlayer schema 0x58D598B8323E9C1d041989DccE80E737109DE347 --rpc https://studio.genlayer.com/api
-genlayer code 0x58D598B8323E9C1d041989DccE80E737109DE347 --rpc https://studio.genlayer.com/api
-genlayer call 0x58D598B8323E9C1d041989DccE80E737109DE347 get_config --rpc https://studio.genlayer.com/api
-genlayer receipt 0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a --rpc https://studio.genlayer.com/api
+genlayer network set studionet
+genlayer schema 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+genlayer code 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+genlayer call 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4 get_config
+genlayer receipt 0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2
 ```
 
 Stop if any live value differs from
@@ -107,7 +108,9 @@ npm run migrate
 The web migrations include
 [`0009_genlayer_native_marketplace.sql`](../web/drizzle-postgres/0009_genlayer_native_marketplace.sql)
 and the additive
-[`0010_maintenance_generation_fence.sql`](../web/drizzle-postgres/0010_maintenance_generation_fence.sql).
+[`0010_maintenance_generation_fence.sql`](../web/drizzle-postgres/0010_maintenance_generation_fence.sql)
+and
+[`0011_identity_bundle_activation.sql`](../web/drizzle-postgres/0011_identity_bundle_activation.sql).
 Confirm every projection and uniqueness boundary is scoped by network, chain,
 contract, protocol/schema version, and onchain ID. Never rewrite historical
 Base or V1 rows into V2 rows.
@@ -126,7 +129,7 @@ INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false
 INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE=studionet
 INFLUENCEDX_GENLAYER_NETWORK=studionet
 INFLUENCEDX_GENLAYER_CHAIN_ID=61999
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
 INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
 INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
 ```
@@ -155,7 +158,7 @@ INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false
 INFLUENCEDX_WITHDRAWAL_RECONCILER_STAGE=studionet
 INFLUENCEDX_GENLAYER_NETWORK=studionet
 INFLUENCEDX_GENLAYER_CHAIN_ID=61999
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
 INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER=0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8
 INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
 INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
@@ -245,17 +248,17 @@ currently observed generation; never decrement or reuse a generation.
 Use disposable StudioNet wallets and developer-network GEN. Record every wallet,
 call, hash, finalized receipt, and post-state without recording private keys.
 
-1. Activate an X identity with a genuine public challenge post.
-2. Activate a Farcaster identity with a genuine public challenge cast.
-3. Create a campaign with exact native GEN value and confirm V2 custody.
-4. Apply with a verified source-matching creator.
-5. Select, accept, publish, and submit the canonical source content ID.
-6. Wait the frozen retention period and let the hosted operator resolve it.
-7. Confirm the exact PASS/FAIL/UNDETERMINED state and accounting.
-8. Complete a claimable-credit path, then request and execute withdrawal.
-9. Prove the child transfer and let the reconciler finalize
+1. Publish one genuine X challenge post and Farcaster challenge cast, then
+   finalize both identities in one `activate_identity_bundle` transaction.
+2. Create a campaign with exact native GEN value and confirm V2 custody.
+3. Apply with the dual-verified creator.
+4. Select, accept, publish, and submit the canonical source content ID.
+5. Wait the frozen retention period and let the hosted operator resolve it.
+6. Confirm the exact PASS/FAIL/UNDETERMINED state and accounting.
+7. Complete a claimable-credit path, then request and execute withdrawal.
+8. Prove the child transfer and let the reconciler finalize
    `confirm_withdrawal`.
-10. Verify contract withdrawal status `CONFIRMED`, matching recipient/amount,
+9. Verify contract withdrawal status `CONFIRMED`, matching recipient/amount,
     accounting invariants, database projection, and explorer/API trail.
 
 Also exercise wrong wallet, extra body field, wrong method, wrong value,

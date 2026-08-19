@@ -15,7 +15,7 @@ Do not present a public URL as the V2 product until the E2E and cutover gates in
 | --- | --- |
 | Network | GenLayer StudioNet |
 | Chain ID | `61999` |
-| Contract | `0x58D598B8323E9C1d041989DccE80E737109DE347` |
+| Contract | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
 | Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native unit | GEN / 18 decimals |
 | Deployment record | [`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json) |
@@ -51,8 +51,8 @@ The active chain pins are:
 
 ```text
 GENLAYER_STUDIONET_RPC_URL=https://studio.genlayer.com/api
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
-NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x58D598B8323E9C1d041989DccE80E737109DE347
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
 INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION=2
 ```
 
@@ -94,16 +94,16 @@ the database.
 
 ## X and Farcaster verification
 
-The verify flow creates a source-specific, one-time challenge:
+The verify flow creates one X challenge and one Farcaster challenge. After the
+creator publishes both, the wallet signs exactly one zero-value
+`activate_identity_bundle` call. GenLayer validators derive and bind both the
+stable X user ID and Farcaster FID atomically; no single-source activation path
+is exposed. Marketplace participation requires both credentials to remain
+active, while each campaign still freezes the source used for its deliverable.
 
-- X uses a public challenge post and `activate_creator`;
-- Farcaster uses a public challenge cast, stable FID, cast hash, and
-  `activate_farcaster_creator`.
-
-The backend does not assert the stable identity. GenLayer validators retrieve
-the public evidence and derive/bind the stable X user ID or Farcaster FID. A
-wallet may hold both identities, but a campaign freezes one source and only an
-active identity for that source can participate.
+Farcaster username proofs accept the two canonical 65-byte representations
+returned by supported Hubs: 132-character hex including `0x`, or 88-character
+padded base64.
 
 Public-source rate limits, authentication blocks, malformed responses, or
 provider disagreement remain UNDETERMINED. The UI must not turn those states
@@ -112,7 +112,7 @@ into a failed identity or campaign.
 ## Native marketplace projection
 
 Apply all migrations through
-[`0010_maintenance_generation_fence.sql`](drizzle-postgres/0010_maintenance_generation_fence.sql)
+[`0011_identity_bundle_activation.sql`](drizzle-postgres/0011_identity_bundle_activation.sql)
 before enabling V2 mutations. `npm run db:verify` must pass afterward.
 
 Native projection records are scoped by network, chain ID, contract address,
