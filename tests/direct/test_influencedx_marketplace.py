@@ -48,7 +48,15 @@ EXPIRES_AT = NOW + 600
 PROFILE_EXPIRES_AT = NOW + 30 * 24 * 60 * 60
 
 
-def deploy_marketplace(direct_vm, direct_deploy, owner, treasury, fee_bps=FEE_BPS, upgrade_admin=None):
+def deploy_marketplace(
+    direct_vm,
+    direct_deploy,
+    owner,
+    treasury,
+    fee_bps=FEE_BPS,
+    upgrade_admin=None,
+    withdrawal_confirmer=None,
+):
     setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
     direct_vm.sender = as_address(owner)
     direct_vm.value = 0
@@ -59,6 +67,7 @@ def deploy_marketplace(direct_vm, direct_deploy, owner, treasury, fee_bps=FEE_BP
         as_address(treasury),
         fee_bps,
         as_address(owner if upgrade_admin is None else upgrade_admin),
+        as_address(treasury if withdrawal_confirmer is None else withdrawal_confirmer),
     )
 
 
@@ -377,6 +386,7 @@ def test_contract_has_pinned_runner_and_gen_native_config(direct_vm, direct_depl
     assert config["native_token_symbol"] == "GEN"
     assert config["native_token_decimals"] == 18
     assert config["protocol_fee_bps"] == FEE_BPS
+    assert config["withdrawal_confirmer"] == as_address(direct_bob)
 
 
 def test_creator_activation_is_caller_bound_and_expires(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
@@ -404,6 +414,84 @@ def test_creator_activation_is_caller_bound_and_expires(direct_vm, direct_deploy
 
     direct_vm.warp("2027-02-01T00:00:00Z")
     assert contract.get_profile(as_address(direct_alice))["active"] is False
+
+
+def test_identity_renewal_allows_handle_change_but_rejects_stable_id_change(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_creator(direct_vm, contract, direct_alice)
+    original = contract.get_identity(as_address(direct_alice), "X")
+
+    renamed_handle = "xdevrenamed"
+    renewal_post = snowflake_at(NOW - 30)
+    direct_vm.clear_mocks()
+    mock_profile(direct_vm, handle=renamed_handle, user_id=X_USER_ID)
+    mock_post(
+        direct_vm,
+        renewal_post,
+        ownership_text(direct_alice),
+        handle=renamed_handle,
+    )
+    renewal_request = contract.compute_ownership_request_id(
+        as_address(direct_alice),
+        renamed_handle,
+        renewal_post,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    direct_vm.sender = as_address(direct_alice)
+    contract.activate_creator(
+        renewal_request,
+        renamed_handle,
+        renewal_post,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    renewed = contract.get_identity(as_address(direct_alice), "X")
+    assert renewed["handle"] == renamed_handle
+    assert renewed["external_user_id"] == X_USER_ID
+    assert renewed["identity_hash"] == original["identity_hash"]
+
+    replacement_post = snowflake_at(NOW - 15)
+    direct_vm.clear_mocks()
+    mock_profile(direct_vm, handle=renamed_handle, user_id="9999999999")
+    mock_post(
+        direct_vm,
+        replacement_post,
+        ownership_text(direct_alice),
+        handle=renamed_handle,
+    )
+    replacement_request = contract.compute_ownership_request_id(
+        as_address(direct_alice),
+        renamed_handle,
+        replacement_post,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    with direct_vm.expect_revert("stable identity cannot change"):
+        contract.activate_creator(
+            replacement_request,
+            renamed_handle,
+            replacement_post,
+            CHALLENGE,
+            ISSUED_AT,
+            EXPIRES_AT,
+            PROFILE_EXPIRES_AT,
+        )
+    unchanged = contract.get_identity(as_address(direct_alice), "X")
+    assert unchanged["external_user_id"] == X_USER_ID
+    assert unchanged["identity_hash"] == original["identity_hash"]
 
 
 def test_farcaster_identity_and_campaign_freeze_stable_fid(
@@ -435,6 +523,96 @@ def test_farcaster_identity_and_campaign_freeze_stable_fid(
     assignment = contract.get_assignment(assignment_id)
     assert assignment["content_source"] == "FARCASTER"
     assert assignment["creator_identity_hash"] == identity["identity_hash"]
+
+
+def test_farcaster_renewal_allows_username_change_but_rejects_stable_fid_change(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_farcaster_creator(direct_vm, contract, direct_alice)
+    original = contract.get_identity(as_address(direct_alice), "FARCASTER")
+    wallet = address_text(direct_alice)
+    text = (
+        f"InfluencedX identity w={wallet} n={CHALLENGE} "
+        f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
+    )
+
+    renamed_username = "creator-renamed"
+    renewal_cast = "0x" + "13" * 20
+    direct_vm.clear_mocks()
+    mock_farcaster_cast(
+        direct_vm,
+        renewal_cast,
+        text,
+        NOW - 30,
+        username=renamed_username,
+        fid=FARCASTER_FID,
+    )
+    renewal_request = contract.compute_farcaster_ownership_request_id(
+        as_address(direct_alice),
+        renamed_username,
+        FARCASTER_FID,
+        renewal_cast,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    direct_vm.sender = as_address(direct_alice)
+    contract.activate_farcaster_creator(
+        renewal_request,
+        renamed_username,
+        FARCASTER_FID,
+        renewal_cast,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    renewed = contract.get_identity(as_address(direct_alice), "FARCASTER")
+    assert renewed["handle"] == renamed_username
+    assert renewed["external_user_id"] == str(FARCASTER_FID)
+    assert renewed["identity_hash"] == original["identity_hash"]
+
+    replacement_fid = FARCASTER_FID + 1
+    replacement_cast = "0x" + "14" * 20
+    direct_vm.clear_mocks()
+    mock_farcaster_cast(
+        direct_vm,
+        replacement_cast,
+        text,
+        NOW - 15,
+        username=renamed_username,
+        fid=replacement_fid,
+    )
+    replacement_request = contract.compute_farcaster_ownership_request_id(
+        as_address(direct_alice),
+        renamed_username,
+        replacement_fid,
+        replacement_cast,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+    )
+    with direct_vm.expect_revert("stable identity cannot change"):
+        contract.activate_farcaster_creator(
+            replacement_request,
+            renamed_username,
+            replacement_fid,
+            replacement_cast,
+            CHALLENGE,
+            ISSUED_AT,
+            EXPIRES_AT,
+            PROFILE_EXPIRES_AT,
+        )
+    unchanged = contract.get_identity(as_address(direct_alice), "FARCASTER")
+    assert unchanged["external_user_id"] == str(FARCASTER_FID)
+    assert unchanged["identity_hash"] == original["identity_hash"]
 
 
 def test_farcaster_campaign_resolves_exact_fid_and_cast(
@@ -519,6 +697,22 @@ def test_seven_day_upgrade_delay_is_hash_bound_and_pause_gated(
     config = contract.get_config()
     assert config["upgrade_pending"] is True
     assert config["pending_upgrade_ready_at_epoch"] == NOW + 7 * 24 * 60 * 60
+
+    # Cancellation is intentionally immediate: it is the safety exit for a bad
+    # scheduled hash and must not require waiting through the upgrade delay.
+    direct_vm.sender = as_address(direct_bob)
+    with direct_vm.expect_revert("Only the owner or upgrade administrator"):
+        contract.cancel_upgrade()
+    direct_vm.sender = as_address(direct_owner)
+    contract.cancel_upgrade()
+    config = contract.get_config()
+    assert config["upgrade_pending"] is False
+    assert config["pending_upgrade_hash"] == "0x" + "0" * 64
+    assert config["pending_upgrade_scheduled_at_epoch"] == 0
+    assert config["pending_upgrade_ready_at_epoch"] == 0
+
+    direct_vm.sender = as_address(direct_alice)
+    contract.schedule_upgrade(code_hash)
     with direct_vm.expect_revert("seven-day upgrade delay"):
         contract.execute_upgrade(new_code)
     direct_vm.warp("2027-01-08T00:00:00Z")
@@ -980,8 +1174,21 @@ def test_withdrawal_is_two_phase_and_failed_emit_can_be_restored(direct_vm, dire
     assert_global_invariant(contract)
 
 
-def test_withdrawal_confirmation_is_owner_reconciled(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
-    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+def test_withdrawal_confirmation_is_confirmer_reconciled(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+    direct_charlie,
+):
+    contract = deploy_marketplace(
+        direct_vm,
+        direct_deploy,
+        direct_owner,
+        direct_charlie,
+        withdrawal_confirmer=direct_bob,
+    )
     campaign_id = create_campaign(direct_vm, contract, direct_alice)
     direct_vm.sender = as_address(direct_alice)
     contract.cancel_campaign(campaign_id)
@@ -1004,9 +1211,22 @@ def test_withdrawal_confirmation_is_owner_reconciled(direct_vm, direct_deploy, d
     # Mirror the chain-layer balance deduction that direct mode records only
     # as an EthSend envelope.
     direct_vm.deal(direct_vm._contract_address, 0)
-    with direct_vm.expect_revert("Only the contract owner"):
+    with direct_vm.expect_revert("Only the withdrawal confirmer"):
         contract.confirm_withdrawal(withdrawal_id, EVIDENCE_HASH)
     direct_vm.sender = as_address(direct_owner)
+    with direct_vm.expect_revert("Only the withdrawal confirmer"):
+        contract.confirm_withdrawal(withdrawal_id, EVIDENCE_HASH)
+    direct_vm.sender = as_address(direct_bob)
+    with direct_vm.expect_revert("Only the contract owner"):
+        contract.set_paused(True)
+    with direct_vm.expect_revert("Only the contract owner"):
+        contract.set_protocol_fee_bps(100)
+    with direct_vm.expect_revert("Only the contract owner"):
+        contract.set_treasury(as_address(direct_alice))
+    with direct_vm.expect_revert("Only the contract owner"):
+        contract.propose_owner(as_address(direct_bob))
+    with direct_vm.expect_revert("Only the upgrade administrator"):
+        contract.schedule_upgrade(EVIDENCE_HASH)
     contract.confirm_withdrawal(withdrawal_id, EVIDENCE_HASH)
     assert contract.get_withdrawal(withdrawal_id)["status"] == "CONFIRMED"
     assert contract.get_counts()["total_liability_atto"] == 0
@@ -1048,6 +1268,59 @@ def test_admin_addresses_cannot_be_zero(direct_vm, direct_deploy, direct_owner, 
         contract.set_treasury(zero)
     with direct_vm.expect_revert("cannot be the zero address"):
         contract.propose_owner(zero)
+    with direct_vm.expect_revert("withdrawal_confirmer cannot be the zero address"):
+        contract.set_withdrawal_confirmer(zero)
+
+
+def test_owner_can_rotate_withdrawal_confirmer_but_confirmer_cannot_rotate_it(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(
+        direct_vm,
+        direct_deploy,
+        direct_owner,
+        direct_bob,
+        withdrawal_confirmer=direct_alice,
+    )
+    direct_vm.sender = as_address(direct_alice)
+    with direct_vm.expect_revert("Only the contract owner"):
+        contract.set_withdrawal_confirmer(as_address(direct_bob))
+    direct_vm.sender = as_address(direct_owner)
+    contract.set_withdrawal_confirmer(as_address(direct_bob))
+    assert contract.get_config()["withdrawal_confirmer"] == as_address(direct_bob)
+    with direct_vm.expect_revert("separate from governance roles"):
+        contract.set_withdrawal_confirmer(as_address(direct_owner))
+    direct_vm.sender = as_address(direct_owner)
+    with direct_vm.expect_revert("separate from withdrawal confirmer"):
+        contract.propose_owner(as_address(direct_bob))
+
+
+def test_withdrawal_confirmer_cannot_overlap_upgrade_or_pending_owner(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+    direct_charlie,
+):
+    contract = deploy_marketplace(
+        direct_vm,
+        direct_deploy,
+        direct_owner,
+        direct_charlie,
+        upgrade_admin=direct_alice,
+        withdrawal_confirmer=direct_bob,
+    )
+    direct_vm.sender = as_address(direct_owner)
+    with direct_vm.expect_revert("separate from governance roles"):
+        contract.set_withdrawal_confirmer(as_address(direct_alice))
+    contract.propose_owner(as_address(direct_charlie))
+    with direct_vm.expect_revert("separate from governance roles"):
+        contract.set_withdrawal_confirmer(as_address(direct_charlie))
 
 
 def test_upgrade_admin_cannot_be_zero(direct_vm, direct_deploy, direct_owner, direct_bob):
@@ -1061,4 +1334,65 @@ def test_upgrade_admin_cannot_be_zero(direct_vm, direct_deploy, direct_owner, di
             as_address(direct_bob),
             FEE_BPS,
             zero,
+            as_address(direct_owner),
+        )
+
+
+def test_withdrawal_confirmer_cannot_be_zero(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_bob,
+):
+    setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
+    direct_vm.sender = as_address(direct_owner)
+    direct_vm.warp(NOW_ISO)
+    zero = as_address(bytes(20))
+    with direct_vm.expect_revert("withdrawal_confirmer cannot be the zero address"):
+        direct_deploy(
+            str(CONTRACT_PATH),
+            as_address(direct_bob),
+            FEE_BPS,
+            as_address(direct_owner),
+            zero,
+        )
+
+
+def test_withdrawal_confirmer_constructor_owner_overlap_is_rejected(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
+    direct_vm.sender = as_address(direct_owner)
+    direct_vm.warp(NOW_ISO)
+    with direct_vm.expect_revert("separate from owner and upgrade administrator"):
+        direct_deploy(
+            str(CONTRACT_PATH),
+            as_address(direct_bob),
+            FEE_BPS,
+            as_address(direct_alice),
+            as_address(direct_owner),
+        )
+
+
+def test_withdrawal_confirmer_constructor_upgrade_overlap_is_rejected(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    setup_sdk_paths(CONTRACT_PATH, "v0.2.16")
+    direct_vm.sender = as_address(direct_owner)
+    direct_vm.warp(NOW_ISO)
+    with direct_vm.expect_revert("separate from owner and upgrade administrator"):
+        direct_deploy(
+            str(CONTRACT_PATH),
+            as_address(direct_bob),
+            FEE_BPS,
+            as_address(direct_alice),
+            as_address(direct_alice),
         )

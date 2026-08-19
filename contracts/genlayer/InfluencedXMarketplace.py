@@ -722,8 +722,17 @@ class InfluencedXMarketplace(gl.Contract):
     last_upgrade_hash: str
     last_upgrade_at_epoch: u256
     upgrade_nonce: u256
+    # Appended after every schema-v2 slot so an in-place upgrade can initialize
+    # the role through set_withdrawal_confirmer without shifting prior storage.
+    withdrawal_confirmer: Address
 
-    def __init__(self, treasury: Address, protocol_fee_bps: u256, upgrade_admin: Address):
+    def __init__(
+        self,
+        treasury: Address,
+        protocol_fee_bps: u256,
+        upgrade_admin: Address,
+        withdrawal_confirmer: Address,
+    ):
         if int(gl.message.value) != 0:
             _expected("DEPLOYMENT_VALUE", "Deployment does not accept native value")
         fee = int(protocol_fee_bps)
@@ -734,6 +743,15 @@ class InfluencedXMarketplace(gl.Contract):
         self.pending_owner_active = False
         self.treasury = _nonzero_address(treasury, "treasury")
         self.upgrade_admin = _nonzero_address(upgrade_admin, "upgrade_admin")
+        candidate_confirmer = _nonzero_address(
+            withdrawal_confirmer, "withdrawal_confirmer"
+        )
+        if candidate_confirmer in (self.owner, self.upgrade_admin):
+            _expected(
+                "ROLE_OVERLAP",
+                "Withdrawal confirmer must be separate from owner and upgrade administrator",
+            )
+        self.withdrawal_confirmer = candidate_confirmer
         self.paused = False
         self.protocol_fee_bps = u256(fee)
         self.campaign_count = u256(0)
@@ -771,6 +789,13 @@ class InfluencedXMarketplace(gl.Contract):
         if gl.message.sender_address != self.upgrade_admin:
             _expected("ONLY_UPGRADE_ADMIN", "Only the upgrade administrator can perform this action")
 
+    def _require_withdrawal_confirmer(self) -> None:
+        if gl.message.sender_address != self.withdrawal_confirmer:
+            _expected(
+                "ONLY_WITHDRAWAL_CONFIRMER",
+                "Only the withdrawal confirmer can perform this action",
+            )
+
     def _require_not_paused(self) -> None:
         if self.paused:
             _expected("PAUSED", "Marketplace mutations are paused")
@@ -790,6 +815,16 @@ class InfluencedXMarketplace(gl.Contract):
         stable_id = str(identity["external_user_id"])
         handle = str(identity["handle"])
         identity_hash = str(identity["identity_hash"])
+        identity_key = _identity_key(wallet, source)
+        prior_identity_raw = self.identities.get(identity_key, "")
+        is_new_identity = len(prior_identity_raw) == 0
+        if not is_new_identity:
+            prior_identity = json.loads(prior_identity_raw)
+            if str(prior_identity.get("external_user_id", "")) != stable_id:
+                _expected(
+                    "STABLE_ID_CHANGED",
+                    f"{source} stable identity cannot change for this wallet",
+                )
         stable_key = _source_unique_key(source, stable_id)
         handle_key = _source_unique_key(source, handle)
         bound_wallet = self.identity_wallet.get(stable_key, "")
@@ -798,9 +833,6 @@ class InfluencedXMarketplace(gl.Contract):
         handle_wallet = self.handle_wallet.get(handle_key, "")
         if len(handle_wallet) != 0 and handle_wallet != wallet:
             _expected("HANDLE_BOUND", f"{source} handle is already bound to another wallet")
-        identity_key = _identity_key(wallet, source)
-        prior_identity_raw = self.identities.get(identity_key, "")
-        is_new_identity = len(prior_identity_raw) == 0
         is_new_wallet = len(self.profiles.get(wallet, "")) == 0
         if not is_new_identity:
             prior_identity = json.loads(prior_identity_raw)
@@ -1926,7 +1958,7 @@ Campaign brief:
     @gl.public.write
     def confirm_withdrawal(self, withdrawal_id: str, evidence_hash: str) -> None:
         self._require_zero_value()
-        self._require_owner()
+        self._require_withdrawal_confirmer()
         normalized = _validate_hash(withdrawal_id, "withdrawal_id")
         raw = self.withdrawals.get(normalized, "")
         if len(raw) == 0:
@@ -2060,10 +2092,32 @@ Campaign brief:
         self.treasury = _nonzero_address(treasury, "treasury")
 
     @gl.public.write
+    def set_withdrawal_confirmer(self, withdrawal_confirmer: Address) -> None:
+        self._require_zero_value()
+        self._require_owner()
+        candidate = _nonzero_address(
+            withdrawal_confirmer, "withdrawal_confirmer"
+        )
+        if candidate in (self.owner, self.upgrade_admin) or (
+            self.pending_owner_active and candidate == self.pending_owner
+        ):
+            _expected(
+                "ROLE_OVERLAP",
+                "Withdrawal confirmer must be separate from governance roles",
+            )
+        self.withdrawal_confirmer = candidate
+
+    @gl.public.write
     def propose_owner(self, pending_owner: Address) -> None:
         self._require_zero_value()
         self._require_owner()
-        self.pending_owner = _nonzero_address(pending_owner, "pending_owner")
+        candidate = _nonzero_address(pending_owner, "pending_owner")
+        if candidate == self.withdrawal_confirmer:
+            _expected(
+                "ROLE_OVERLAP",
+                "Pending owner must be separate from withdrawal confirmer",
+            )
+        self.pending_owner = candidate
         self.pending_owner_active = True
 
     @gl.public.write
@@ -2081,6 +2135,7 @@ Campaign brief:
             "storage_schema_version": STORAGE_SCHEMA_VERSION,
             "owner": self.owner,
             "upgrade_admin": self.upgrade_admin,
+            "withdrawal_confirmer": self.withdrawal_confirmer,
             "pending_owner": self.pending_owner,
             "pending_owner_active": self.pending_owner_active,
             "treasury": self.treasury,
