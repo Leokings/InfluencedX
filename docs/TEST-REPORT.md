@@ -14,7 +14,7 @@ Target: **GenLayer StudioNet (`61999`)**
 | --- | --- |
 | Contract source | [`InfluencedXMarketplace.py`](../contracts/genlayer/InfluencedXMarketplace.py) |
 | Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
-| Release source commit | Pending final release freeze; deployed bytes are pinned by SHA-256 above |
+| Release source commit | `8271a92172eb5c014a930ef31611fb956908de16` |
 | GenVM lint | PASS; public ABI contains 50 methods (22 view, 28 write) |
 | Direct suite | PASS; 58 tests |
 | Deployment | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |

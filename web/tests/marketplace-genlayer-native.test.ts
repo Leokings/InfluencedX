@@ -126,6 +126,7 @@ test("web configuration and the deployment manifest pin the fresh StudioNet mark
       deploymentTransaction: string;
       deployedAt: string;
       sourceSha256: string;
+      sourceCommit: string;
     };
     historicalMarketplaces: Array<{ address: string }>;
   };
@@ -141,6 +142,10 @@ test("web configuration and the deployment manifest pin the fresh StudioNet mark
   assert.equal(
     manifest.marketplace.sourceSha256,
     "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
+  );
+  assert.equal(
+    manifest.marketplace.sourceCommit,
+    "8271a92172eb5c014a930ef31611fb956908de16",
   );
   assert.ok(
     manifest.historicalMarketplaces.some(

@@ -47,6 +47,7 @@
     "methodCount": 50,
     "directTestsPassed": 58,
     "sourceSha256": "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
+    "sourceCommit": "8271a92172eb5c014a930ef31611fb956908de16",
     "identityActivation": "ATOMIC_X_AND_FARCASTER_V1",
     "productionOwnerConfigured": false
   },
