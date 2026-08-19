@@ -167,6 +167,8 @@ export function finalizePreState(): StateSnapshot {
     campaign: campaign({
       available_atto: "500",
       reserved_atto: "0",
+      creator_paid_atto: "450",
+      fee_atto: "50",
       submission_deadline_epoch: NOW_EPOCH - 90_000,
       retention_seconds: 60,
     }),
@@ -182,6 +184,8 @@ export function finalizePostState(): StateSnapshot {
       available_atto: "0",
       reserved_atto: "0",
       brand_refunded_atto: "500",
+      creator_paid_atto: "450",
+      fee_atto: "50",
       submission_deadline_epoch: NOW_EPOCH - 90_000,
       retention_seconds: 60,
     }),

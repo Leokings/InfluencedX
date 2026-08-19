@@ -69,6 +69,7 @@ export function assertPostState(
     const oldCampaign = required(before.campaign, "PRE_STATE_CAMPAIGN_MISSING");
     const newCampaign = required(after.campaign, "POST_STATE_CAMPAIGN_MISSING");
     stableCampaign(oldCampaign, newCampaign);
+    assertCampaignAccounting(newCampaign);
     if (newCampaign.status !== "CLOSED") throw new Error("POST_STATE_CAMPAIGN_NOT_CLOSED");
     if (amount(newCampaign.available_atto) !== 0n || amount(newCampaign.reserved_atto) !== 0n) {
       throw new Error("POST_STATE_CAMPAIGN_BALANCE_MISMATCH");
@@ -86,6 +87,7 @@ export function assertPostState(
   const newCampaign = required(after.campaign, "POST_STATE_CAMPAIGN_MISSING");
   stableAssignment(oldAssignment, newAssignment);
   stableCampaign(oldCampaign, newCampaign);
+  assertCampaignAccounting(newCampaign);
 
   if (envelope.action === RESOLVE_ASSIGNMENT) {
     if (integer(newAssignment.resolution_attempts) !== integer(oldAssignment.resolution_attempts) + 1) {
@@ -97,7 +99,11 @@ export function assertPostState(
       if (integer(newAssignment.resolution_round) !== nextRound) throw new Error("POST_STATE_ROUND_MISMATCH");
       const expected = resolutionRequestId(newAssignment, nextRound);
       exactHash(newAssignment.resolution_request_id, expected, "POST_STATE_REQUEST_ID_MISMATCH");
-      sameAmount(oldCampaign.reserved_atto, newCampaign.reserved_atto, "POST_STATE_RESERVATION_CHANGED");
+      atMost(
+        newCampaign.reserved_atto,
+        oldCampaign.reserved_atto,
+        "POST_STATE_RESERVATION_INCREASED",
+      );
       return;
     }
     const passed = newAssignment.status === "SETTLED_PASS" && newAssignment.outcome === "PASS";
@@ -109,13 +115,10 @@ export function assertPostState(
 
   if (oldAssignment.status === "SELECTED") {
     if (newAssignment.status !== "EXPIRED") throw new Error("POST_STATE_ASSIGNMENT_NOT_EXPIRED");
-    const rate = amount(oldAssignment.agreed_rate_atto);
-    if (amount(newCampaign.reserved_atto) !== amount(oldCampaign.reserved_atto) - rate) {
-      throw new Error("POST_STATE_RESERVATION_MISMATCH");
-    }
-    if (amount(newCampaign.available_atto) !== amount(oldCampaign.available_atto) + rate) {
-      throw new Error("POST_STATE_RELEASE_MISMATCH");
-    }
+    // A still-open selection window can reserve another creator between this
+    // operation's pre-state read and its finalized post-state read. The exact
+    // finalized receipt binds this expiration; campaign conservation and the
+    // target assignment transition are the concurrency-safe invariants here.
     return;
   }
   if (oldAssignment.status === "ACCEPTED") {
@@ -136,27 +139,49 @@ function assertSettlementAccounting(
   passed: boolean,
 ): void {
   const rate = amount(oldAssignment.agreed_rate_atto);
-  if (amount(newCampaign.reserved_atto) !== amount(oldCampaign.reserved_atto) - rate) {
-    throw new Error("POST_STATE_RESERVATION_MISMATCH");
-  }
-  if (amount(newCampaign.settled_atto) !== amount(oldCampaign.settled_atto) + rate) {
-    throw new Error("POST_STATE_SETTLED_AMOUNT_MISMATCH");
-  }
+  atMost(
+    newCampaign.reserved_atto,
+    amount(oldCampaign.reserved_atto) - rate,
+    "POST_STATE_RESERVATION_MISMATCH",
+  );
+  atLeast(
+    newCampaign.settled_atto,
+    amount(oldCampaign.settled_atto) + rate,
+    "POST_STATE_SETTLED_AMOUNT_MISMATCH",
+  );
   if (passed) {
     const creator = amount(newAssignment.creator_credit_atto);
     const fee = amount(newAssignment.fee_atto);
     if (creator + fee !== rate) throw new Error("POST_STATE_CREATOR_CREDIT_MISMATCH");
-    if (amount(newCampaign.creator_paid_atto) !== amount(oldCampaign.creator_paid_atto) + creator) {
-      throw new Error("POST_STATE_CREATOR_PAID_MISMATCH");
-    }
-    if (amount(newCampaign.fee_atto) !== amount(oldCampaign.fee_atto) + fee) {
-      throw new Error("POST_STATE_FEE_MISMATCH");
-    }
+    atLeast(
+      newCampaign.creator_paid_atto,
+      amount(oldCampaign.creator_paid_atto) + creator,
+      "POST_STATE_CREATOR_PAID_MISMATCH",
+    );
+    atLeast(
+      newCampaign.fee_atto,
+      amount(oldCampaign.fee_atto) + fee,
+      "POST_STATE_FEE_MISMATCH",
+    );
   } else {
     if (amount(newAssignment.brand_credit_atto) !== rate) throw new Error("POST_STATE_BRAND_CREDIT_MISMATCH");
-    if (amount(newCampaign.brand_refunded_atto) !== amount(oldCampaign.brand_refunded_atto) + rate) {
-      throw new Error("POST_STATE_BRAND_REFUND_MISMATCH");
-    }
+    atLeast(
+      newCampaign.brand_refunded_atto,
+      amount(oldCampaign.brand_refunded_atto) + rate,
+      "POST_STATE_BRAND_REFUND_MISMATCH",
+    );
+  }
+}
+
+function assertCampaignAccounting(campaign: Record<string, unknown>): void {
+  const distributed = amount(campaign.creator_paid_atto)
+    + amount(campaign.brand_refunded_atto)
+    + amount(campaign.fee_atto);
+  if (
+    amount(campaign.available_atto) + amount(campaign.reserved_atto) + distributed !==
+    amount(campaign.budget_atto)
+  ) {
+    throw new Error("POST_STATE_CAMPAIGN_ACCOUNTING_MISMATCH");
   }
 }
 
@@ -221,6 +246,10 @@ function amount(value: unknown): bigint {
   return parsed;
 }
 
-function sameAmount(left: unknown, right: unknown, code: string): void {
-  if (amount(left) !== amount(right)) throw new Error(code);
+function atMost(actual: unknown, ceiling: unknown, code: string): void {
+  if (amount(actual) > amount(ceiling)) throw new Error(code);
+}
+
+function atLeast(actual: unknown, floor: unknown, code: string): void {
+  if (amount(actual) < amount(floor)) throw new Error(code);
 }

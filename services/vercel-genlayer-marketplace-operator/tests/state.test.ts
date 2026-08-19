@@ -50,6 +50,43 @@ test("post-state checks reject accounting drift even after a successful receipt"
   assert.throws(() => assertPostState(finalizeEnvelope(), finalizePreState(), badFinalize));
 });
 
+test("post-state checks tolerate concurrent same-campaign operations", () => {
+  const resolveBefore = {
+    ...resolvePreState(),
+    campaign: {
+      ...resolvePreState().campaign,
+      available_atto: "700",
+      reserved_atto: "300",
+    },
+  };
+  const resolveAfter = {
+    ...resolvePassState(),
+    campaign: {
+      ...resolvePassState().campaign,
+      available_atto: "700",
+      reserved_atto: "0",
+      settled_atto: "300",
+      creator_paid_atto: "270",
+      fee_atto: "30",
+    },
+  };
+  assert.doesNotThrow(() => assertPostState(resolveEnvelope(), resolveBefore, resolveAfter));
+
+  const expireAfterConcurrentSelection = {
+    ...expirePostState(),
+    campaign: {
+      ...expirePostState().campaign,
+      available_atto: "800",
+      reserved_atto: "200",
+    },
+  };
+  assert.doesNotThrow(() => assertPostState(
+    expireEnvelope(),
+    expirePreState(),
+    expireAfterConcurrentSelection,
+  ));
+});
+
 test("v2 undetermined retries bind content_source into the next request id", () => {
   const before = resolvePreState();
   const assignment = before.assignment!;
