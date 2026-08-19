@@ -1,4 +1,6 @@
 import {
+  MARKETPLACE_ADDRESS,
+  MARKETPLACE_RPC_ADDRESS,
   OPERATOR_NETWORK,
   OPERATOR_STAGE,
   STUDIONET_CHAIN_ID,
@@ -13,6 +15,7 @@ export type OperatorConfig = Readonly<{
   chainId: typeof STUDIONET_CHAIN_ID;
   rpcUrl: typeof STUDIONET_RPC_URL;
   contractAddress: `0x${string}`;
+  rpcContractAddress: typeof MARKETPLACE_RPC_ADDRESS;
   contractProtocol: string;
   contractSchemaVersion: number;
   privateKey: `0x${string}`;
@@ -51,6 +54,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
   if (!/^0x[0-9a-f]{40}$/.test(contractAddress) || /^0x0{40}$/.test(contractAddress)) {
     fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS must be an exact non-zero contract address.");
   }
+  if (contractAddress !== MARKETPLACE_ADDRESS) {
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V2 deployment.");
+  }
   if (!/^INFLUENCEDX_MARKETPLACE_V[1-9][0-9]{0,3}$/.test(contractProtocol)) {
     fail("INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL is invalid.");
   }
@@ -80,6 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     chainId: STUDIONET_CHAIN_ID,
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: contractAddress as `0x${string}`,
+    rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
     contractProtocol,
     contractSchemaVersion: Number(contractSchemaVersion),
     privateKey: privateKey as `0x${string}`,

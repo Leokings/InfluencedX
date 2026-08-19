@@ -6,6 +6,7 @@ export const RECONCILER_NETWORK = "studionet" as const;
 export const STUDIONET_CHAIN_ID = 61_999 as const;
 export const STUDIONET_RPC_URL = "https://studio.genlayer.com/api" as const;
 export const MARKETPLACE_ADDRESS = "0x17eb37a3578e21662f4d654b245238df520663fa" as const;
+export const MARKETPLACE_RPC_ADDRESS = "0x17eB37A3578E21662F4D654b245238dF520663Fa" as const;
 export const MARKETPLACE_OWNER = "0x797d3b25fb2cca0ff93f60df1910267f3822d655" as const;
 export const MARKETPLACE_PROTOCOL = "INFLUENCEDX_MARKETPLACE_V2" as const;
 export const MARKETPLACE_SCHEMA_VERSION = 2 as const;

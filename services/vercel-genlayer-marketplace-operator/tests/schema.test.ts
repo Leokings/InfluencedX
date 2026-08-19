@@ -22,8 +22,8 @@ test("the queue consumer is an air-gapped push trigger on the new topic", () => 
   assert.doesNotMatch(serialized, /influencedx-studionet-submissions-v1/);
 });
 
-test("the only write adapter hard-codes zero native value and the configured address", () => {
-  assert.match(clientSource, /address: config\.contractAddress/);
+test("the only write adapter hard-codes zero native value and the checksum RPC address", () => {
+  assert.match(clientSource, /address: config\.rpcContractAddress/);
   assert.match(clientSource, /value: 0n/);
   assert.doesNotMatch(clientSource, /request_withdrawal|confirm_withdrawal|restore_failed_withdrawal/);
 });

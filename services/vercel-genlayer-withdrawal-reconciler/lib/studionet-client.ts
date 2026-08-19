@@ -38,7 +38,7 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
 
   async function read(functionName: string, args: readonly CalldataEncodable[]) {
     const value = await client.readContract({
-      address: config.contractAddress,
+      address: config.rpcContractAddress,
       functionName,
       args: [...args],
       jsonSafeReturn: true,
@@ -89,7 +89,7 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
     async discoverTransfer(withdrawal: WithdrawalState, nowEpoch: number): Promise<TransferDiscovery> {
       await assertBoundary();
       assertEmittedWithdrawal(withdrawal);
-      const rawHistory = await rawRpc(config.rpcUrl, "sim_getTransactionsForAddress", [config.contractAddress]);
+      const rawHistory = await rawRpc(config.rpcUrl, "sim_getTransactionsForAddress", [config.rpcContractAddress]);
       if (!Array.isArray(rawHistory)) throw new Error("STUDIONET_HISTORY_INVALID");
       const candidateHashes = rawHistory
         .filter((candidate) => coarseParentCandidate(candidate, withdrawal, config.contractAddress))
@@ -150,7 +150,7 @@ export function createPinnedWithdrawalClient(config: ReconcilerConfig): Withdraw
       await assertBoundary();
       return client.writeContract({
         account,
-        address: config.contractAddress,
+        address: config.rpcContractAddress,
         functionName: CONFIRM_METHOD,
         args: [canonicalHash(withdrawalId, "withdrawal ID"), canonicalHash(evidenceHash, "evidence hash")],
         value: 0n,

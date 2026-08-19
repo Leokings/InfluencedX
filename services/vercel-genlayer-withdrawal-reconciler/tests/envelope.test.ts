@@ -34,6 +34,7 @@ test("queue messages cannot smuggle proof, method, value, or recipient", () => {
 
 test("configuration is disabled by default and every chain boundary is literal-pinned", () => {
   assert.equal(loadConfig(validEnv()).contractAddress, "0x17eb37a3578e21662f4d654b245238df520663fa");
+  assert.equal(loadConfig(validEnv()).rpcContractAddress, "0x17eB37A3578E21662F4D654b245238dF520663Fa");
   for (const patch of [
     { INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED: "false" },
     { INFLUENCEDX_GENLAYER_CHAIN_ID: "1" },

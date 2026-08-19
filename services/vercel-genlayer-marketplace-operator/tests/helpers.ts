@@ -1,5 +1,7 @@
 import type { OperatorConfig } from "../lib/config";
 import {
+  MARKETPLACE_ADDRESS,
+  MARKETPLACE_RPC_ADDRESS,
   OPERATOR_NETWORK,
   PRECHECK_LEASE_MS,
   STUDIONET_CHAIN_ID,
@@ -21,7 +23,7 @@ import type {
 } from "../lib/types";
 
 export const NOW_EPOCH = 1_786_233_600;
-export const CONTRACT = `0x${"12".repeat(20)}` as `0x${string}`;
+export const CONTRACT = MARKETPLACE_ADDRESS as `0x${string}`;
 export const SIGNER = `0x${"34".repeat(20)}`;
 export const ASSIGNMENT_ID = `0x${"56".repeat(32)}`;
 export const REQUEST_ID = `0x${"78".repeat(32)}`;
@@ -58,6 +60,7 @@ export function configFixture(): OperatorConfig {
     chainId: STUDIONET_CHAIN_ID,
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: CONTRACT,
+    rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
     contractProtocol: "INFLUENCEDX_MARKETPLACE_V2",
     contractSchemaVersion: 2,
     privateKey: `0x${"11".repeat(32)}`,

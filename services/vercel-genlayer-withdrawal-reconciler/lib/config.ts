@@ -2,6 +2,7 @@ import {
   MARKETPLACE_ADDRESS,
   MARKETPLACE_OWNER,
   MARKETPLACE_PROTOCOL,
+  MARKETPLACE_RPC_ADDRESS,
   MARKETPLACE_SCHEMA_VERSION,
   RECONCILER_NETWORK,
   RECONCILER_STAGE,
@@ -17,6 +18,7 @@ export type ReconcilerConfig = Readonly<{
   chainId: typeof STUDIONET_CHAIN_ID;
   rpcUrl: typeof STUDIONET_RPC_URL;
   contractAddress: typeof MARKETPLACE_ADDRESS;
+  rpcContractAddress: typeof MARKETPLACE_RPC_ADDRESS;
   contractOwner: typeof MARKETPLACE_OWNER;
   contractProtocol: typeof MARKETPLACE_PROTOCOL;
   contractSchemaVersion: typeof MARKETPLACE_SCHEMA_VERSION;
@@ -79,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ReconcilerConf
     chainId: STUDIONET_CHAIN_ID,
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: MARKETPLACE_ADDRESS,
+    rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
     contractOwner: MARKETPLACE_OWNER,
     contractProtocol: MARKETPLACE_PROTOCOL,
     contractSchemaVersion: MARKETPLACE_SCHEMA_VERSION,

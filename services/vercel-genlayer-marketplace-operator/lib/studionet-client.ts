@@ -27,7 +27,7 @@ export function createPinnedMarketplaceClient(config: OperatorConfig): Marketpla
 
   async function read(functionName: string, args: readonly CalldataEncodable[], finalized: boolean) {
     const value = await client.readContract({
-      address: config.contractAddress,
+      address: config.rpcContractAddress,
       functionName,
       args: [...args],
       jsonSafeReturn: true,
@@ -74,7 +74,7 @@ export function createPinnedMarketplaceClient(config: OperatorConfig): Marketpla
       assertEnvelopeBoundary(envelope, config);
       return client.writeContract({
         account,
-        address: config.contractAddress,
+        address: config.rpcContractAddress,
         functionName: envelope.action,
         args: [...envelope.args] as CalldataEncodable[],
         value: 0n,
