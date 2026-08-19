@@ -109,14 +109,23 @@ PostgreSQL projections, operator progression, and withdrawal reconciliation.
 The web environment template and active documentation now contain no Base,
 USDC, watcher, relay, or historical submitter secrets.
 
-The exact integrated release tree passed 175 web unit tests, the optimized
+The exact integrated release tree passed 180 web unit tests, the optimized
 Next.js build, 7 rendered-page tests, TypeScript, ESLint, and clean-install
-reproducibility. The isolated Preview database is migrated through `0009` and
-its verifier reports the native StudioNet schema ready. The operator passed
+reproducibility. The isolated Preview database is migrated through `0010` and
+its verifier reports schema version 3 and the native StudioNet schema ready.
+The operator passed
 30 tests plus build/typecheck; the withdrawal reconciler passed 24 tests plus
 build/typecheck. All three enabled Preview deployments fail closed on
-unauthenticated service calls, and the web maintenance queue accepted a
-deployment-local heartbeat.
+unauthenticated service calls.
+
+The fenced maintenance release is commit
+`f6fa400447e9fd373923f006fe2722f0b5dba79d`, deployment
+`dpl_bYGwE9hYzigk4RqVVu2GJ7PnDnJX`, and generation `1`. Neon binds that exact
+deployment to StudioNet `61999`, the final V2 contract, the web project, and
+Preview. Its first two `maintenance-v2` callbacks returned HTTP 200 at
+`1787156516621` and `1787156818284`, 301,663 ms apart. The deployment had no
+error/fatal logs. Both seeded pre-fence deployments were retired and returned
+404, with no post-activation legacy maintenance activity.
 
 ## Required live E2E evidence — pending
 
@@ -126,7 +135,10 @@ The following are release blockers, not completed claims:
   enable it in an isolated environment.
 - [x] Deploy the withdrawal reconciler disabled, verify auth/queue pins, then
   enable it in an isolated environment.
-- [x] Apply and verify the native V2 PostgreSQL migration.
+- [x] Apply and verify native V2 migrations through the deployment-generation
+  fence in `0010`.
+- [x] Promote and prove fenced maintenance generation 1, then retire every
+  seeded pre-fence deployment.
 - [x] Deploy the native web build on an isolated URL with gates disabled, then
   enable in the documented order.
 - [ ] Complete one genuine X ownership challenge and finalized V2 activation.
