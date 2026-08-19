@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "functions": {
+    "app/api/queues/process-withdrawal-reconciliation/route.ts": {
+      "maxDuration": 300,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "influencedx-genlayer-withdrawal-reconciliation-v1",
+          "retryAfterSeconds": 30,
+          "initialDelaySeconds": 0
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/withdrawals/reconciliations",
+      "destination": "/api/v1/withdrawals/reconciliations"
+    },
+    {
+      "source": "/v1/withdrawals/reconciliations/:withdrawalId",
+      "destination": "/api/v1/withdrawals/reconciliations/:withdrawalId"
+    }
+  ]
+}

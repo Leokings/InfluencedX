@@ -1,0 +1,35 @@
+{
+  "name": "influencedx-genlayer-withdrawal-reconciler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "lint": "tsc --noEmit",
+    "migrate": "tsx scripts/migrate.ts",
+    "start": "next start",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@vercel/queue": "0.4.0",
+    "genlayer-js": "1.1.8",
+    "jose": "6.2.8",
+    "next": "16.3.0",
+    "pg": "8.16.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/pg": "8.15.6",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "pg-mem": "3.0.14",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  }
+}
