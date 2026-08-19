@@ -3,7 +3,7 @@
   "network": "studionet",
   "chainId": 61999,
   "rpcUrl": "https://studio.genlayer.com/api",
-  "explorerUrl": "https://genlayer-explorer.vercel.app",
+  "explorerUrl": "https://explorer-studio.genlayer.com",
   "temporaryPersistence": true,
   "deployer": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
   "resolver": {
