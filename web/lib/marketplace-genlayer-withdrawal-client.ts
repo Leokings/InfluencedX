@@ -112,6 +112,7 @@ export function createWithdrawalReconcilerClient(
 ) {
   const headers = Object.freeze({
     authorization: `Bearer ${config.oidcToken}`,
+    "x-vercel-trusted-oidc-idp-token": config.oidcToken,
     "x-influencedx-withdrawal-service-token": config.serviceToken,
     accept: "application/json",
   });

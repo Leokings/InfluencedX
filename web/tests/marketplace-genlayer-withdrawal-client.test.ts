@@ -61,6 +61,7 @@ test("withdrawal client submits only the immutable ID through both service auth 
   assert.deepEqual(JSON.parse(String(capturedInit?.body)), { schemaVersion: 1, withdrawalId });
   const headers = capturedInit?.headers as Record<string, string>;
   assert.equal(headers.authorization, "Bearer a.b.c");
+  assert.equal(headers["x-vercel-trusted-oidc-idp-token"], "a.b.c");
   assert.equal(headers["x-influencedx-withdrawal-service-token"], "ab".repeat(32));
   assert.doesNotMatch(String(capturedInit?.body), /amount|recipient|method|transaction|evidence/i);
 });
