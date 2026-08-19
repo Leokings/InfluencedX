@@ -130,6 +130,8 @@ def mock_farcaster_cast(
     proof_status=200,
     cast_status=200,
     proof_signature=FARCASTER_EIP712_SIGNATURE,
+    recent_status=404,
+    recent_casts=None,
 ):
     direct_vm.mock_web(
         rf".*hub\.pinata\.cloud/v1/userNameProofByName\?name={username}.*",
@@ -162,8 +164,13 @@ def mock_farcaster_cast(
         },
     )
     direct_vm.mock_web(
-        rf".*api\.farcaster\.xyz/v2/casts\?fid={fid}&limit=100.*",
-        {"status": 404, "body": ""},
+        rf".*api\.farcaster\.xyz/v2/casts\?fid={fid}&limit=50.*",
+        {
+            "status": recent_status,
+            "body": json.dumps({"result": {"casts": recent_casts or []}})
+            if recent_status == 200
+            else "",
+        },
     )
 
 
@@ -644,6 +651,61 @@ def test_identity_bundle_accepts_65_byte_hex_and_live_hub_base64_signature_shape
     assert contract.get_identity(
         as_address(direct_bob), "FARCASTER"
     )["active"] is True
+
+
+def test_identity_bundle_farcaster_fallback_verifies_exact_recent_cast_after_primary_400(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    mock_profile(direct_vm)
+    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(direct_alice))
+    farcaster_text = (
+        f"InfluencedX identity w={address_text(direct_alice)} n={CHALLENGE} "
+        f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
+    )
+    mock_farcaster_cast(
+        direct_vm,
+        FARCASTER_OWNERSHIP_CAST,
+        farcaster_text,
+        NOW - 60,
+        cast_status=400,
+        recent_status=200,
+        recent_casts=[
+            {
+                "hash": "0x" + "ff" * 20,
+                "text": "Unrelated recent cast",
+                "timestamp": (NOW - 30) * 1000,
+                "author": {
+                    "fid": FARCASTER_FID,
+                    "username": FARCASTER_USERNAME,
+                },
+            },
+            {
+                "hash": FARCASTER_OWNERSHIP_CAST,
+                "text": farcaster_text,
+                "timestamp": (NOW - 60) * 1000,
+                "author": {
+                    "fid": FARCASTER_FID,
+                    "username": FARCASTER_USERNAME,
+                },
+            },
+        ],
+    )
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    direct_vm.sender = as_address(direct_alice)
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+
+    assert contract.get_ownership_result(bundle_request_id)["outcome"] == "VERIFIED"
+    assert contract.get_ownership_result(farcaster_request_id)["outcome"] == "VERIFIED"
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["active"] is True
 
 
 def test_identity_bundle_malformed_signature_is_retryable_without_partial_activation(
@@ -1351,7 +1413,7 @@ def test_farcaster_access_denials_and_changed_json_are_undetermined(direct_vm, d
             {"status": exact_status, "body": exact_body},
         )
         direct_vm.mock_web(
-            rf".*api\.farcaster\.xyz/v2/casts\?fid={FARCASTER_FID}&limit=100.*",
+            rf".*api\.farcaster\.xyz/v2/casts\?fid={FARCASTER_FID}&limit=50.*",
             {"status": recent_status, "body": recent_body},
         )
         resolve_at(direct_vm, contract, assignment_id, request_id, resolution_time)

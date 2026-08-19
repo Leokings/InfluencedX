@@ -85,6 +85,13 @@
       "when": 1787162400000,
       "tag": "0011_identity_bundle_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787176800000,
+      "tag": "0012_marketplace_contract_cutover",
+      "breakpoints": true
     }
   ]
 }

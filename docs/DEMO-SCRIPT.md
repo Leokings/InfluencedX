@@ -10,9 +10,9 @@ receipt, or describe `EMITTED_UNCONFIRMED` as paid.
 
 - [ ] The public URL resolves to the exact tested V2 release commit.
 - [ ] The live app pins StudioNet `61999`, marketplace
-      `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`, protocol
+      `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`, protocol
       `INFLUENCEDX_MARKETPLACE_V2`, and schema `2`.
-- [ ] Web migrations through `0011_identity_bundle_activation.sql` and
+- [ ] Web migrations through `0012_marketplace_contract_cutover.sql` and
       `npm run db:verify` pass.
 - [ ] The tested deployment owns the active maintenance generation and has two
       consecutive successful `maintenance-v2` callbacks with no legacy loop.

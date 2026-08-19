@@ -94,7 +94,7 @@ const txHash = `0x${"33".repeat(32)}`;
 const campaignId = `0x${"44".repeat(32)}`;
 const assignmentId = `0x${"45".repeat(32)}`;
 const requestId = `0x${"46".repeat(32)}`;
-const marketplaceAddress = "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4";
+const marketplaceAddress = "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb";
 const creator = "0x5555555555555555555555555555555555555555";
 const maintenanceDeploymentId = "dpl_7Gw5ZMBpQA8h9GF832KGp7nwbuh3";
 const nextMaintenanceDeploymentId = "dpl_8Hx6ANCqRB9i0HG943LHq8oxcvi4";
@@ -108,7 +108,53 @@ const maintenanceContext: MarketplaceMaintenanceDeploymentContext = {
 test("StudioNet RPC calls preserve the deployed checksum address", () => {
   assert.equal(
     marketplaceRpcContractAddress(),
-    "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
+    "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb",
+  );
+});
+
+test("web configuration and the deployment manifest pin the fresh StudioNet marketplace", async () => {
+  const [manifestText, environmentExample] = await Promise.all([
+    readFile(
+      new URL("../../deployments/genlayer-studionet.json", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+  ]);
+  const manifest = JSON.parse(manifestText) as {
+    marketplace: {
+      address: string;
+      deploymentTransaction: string;
+      deployedAt: string;
+      sourceSha256: string;
+    };
+    historicalMarketplaces: Array<{ address: string }>;
+  };
+  assert.equal(
+    manifest.marketplace.address,
+    "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb",
+  );
+  assert.equal(
+    manifest.marketplace.deploymentTransaction,
+    "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998",
+  );
+  assert.equal(manifest.marketplace.deployedAt, "2026-08-19T21:45:34.887910Z");
+  assert.equal(
+    manifest.marketplace.sourceSha256,
+    "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
+  );
+  assert.ok(
+    manifest.historicalMarketplaces.some(
+      (marketplace) =>
+        marketplace.address === "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
+    ),
+  );
+  assert.match(
+    environmentExample,
+    /^INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb$/m,
+  );
+  assert.match(
+    environmentExample,
+    /^NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb$/m,
   );
 });
 
@@ -1326,7 +1372,7 @@ test("StudioNet confirmation requires majority agreement and one successful lead
   );
 });
 
-test("live-shaped StudioNet snake tx_data is decoded fail closed", async () => {
+test("live-shaped StudioNet snake tx_data uses the immutable execution timestamp", async () => {
   const encoded = abi.transactions.serialize([
     abi.calldata.encode(
       abi.calldata.makeCalldataObject(
@@ -1349,7 +1395,9 @@ test("live-shaped StudioNet snake tx_data is decoded fail closed", async () => {
           from_address: brand,
           to_address: contract,
           tx_data: encoded.slice(2),
-          current_timestamp: "1800000001",
+          created_timestamp: "1800000001",
+          last_vote_timestamp: "1800000009",
+          current_timestamp: "1800000656",
           data: {
             calldata: {
               // Studio's readable form is diagnostic text, not JSON.
@@ -1378,6 +1426,15 @@ test("live-shaped StudioNet snake tx_data is decoded fail closed", async () => {
   assert.equal(transaction.functionName, "create_campaign");
   assert.deepEqual(transaction.args, [campaignId, 10n]);
   assert.equal(transaction.finalizedAt, 1_800_000_001);
+  assert.doesNotThrow(() => assertFinalizedOwnershipTiming({
+    verifiedAtEpoch: 1_800_000_001,
+    finalizedAtEpoch: transaction.finalizedAt,
+    preparedAtMs: 1_799_999_900_000,
+    readyForGenLayerAtMs: 1_799_999_950_000,
+    issuedAtMs: 1_799_999_800_000,
+    expiresAtMs: 1_800_000_100_000,
+    profileExpiresAtMs: 1_802_592_000_000,
+  }));
 });
 
 test("transaction confirmation fails closed on every prepared-call boundary", () => {
@@ -1546,6 +1603,47 @@ test("0011 releases legacy identity locks and journals atomic bundle child IDs",
     migration,
     /"(?:activation_prepared_id|activation_tx_hash|finalized_request_id)" = NULL/,
   );
+});
+
+test("0012 expires active old-contract attempts and terminalizes only unfinished journals", async () => {
+  const migration = await readFile(
+    new URL(
+      "../drizzle-postgres/0012_marketplace_contract_cutover.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const retiredAddress = "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4";
+  assert.match(
+    migration,
+    /UPDATE "verification_requests" AS request[\s\S]*"status" = 'EXPIRED'[\s\S]*"active_owner_user_id" = NULL[\s\S]*"active_wallet" = NULL/,
+  );
+  assert.match(
+    migration,
+    /request\."active_owner_user_id" IS NOT NULL[\s\S]*journal\."prepared_id" = request\."activation_prepared_id"/,
+  );
+  assert.match(migration, new RegExp(`journal\\."contract_address" = '${retiredAddress}'`));
+  assert.match(
+    migration,
+    /UPDATE "marketplace_genlayer_transactions" AS journal[\s\S]*"status" = 'NETWORK_TERMINATED'[\s\S]*COALESCE\(journal\."error_code", 'MARKETPLACE_CONTRACT_CUTOVER'\)/,
+  );
+  assert.match(
+    migration,
+    /journal\."status" IN \(\s*'PREPARED', 'SUBMITTED', 'ACCEPTED', 'RECONCILIATION_REQUIRED'\s*\)/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /"(?:activation_prepared_id|activation_tx_hash|finalized_request_id|transaction_hash|onchain_entity_id|args)" = NULL/,
+  );
+  assert.match(
+    migration,
+    /DELETE FROM "marketplace_genlayer_maintenance_generations"[\s\S]*"network" = 'studionet'[\s\S]*"chain_id" = 61999[\s\S]*"contract_address" IN \([\s\S]*'0xeaceba807a7a4dc370f3b5a8e45539596b8551b4'[\s\S]*'0x58d598b8323e9c1d041989dcce80e737109de347'[\s\S]*\)/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /(?:INSERT INTO|UPDATE) "marketplace_genlayer_maintenance_generations"/,
+  );
+  assert.doesNotMatch(migration, /0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb/i);
 });
 
 test("identity verification API exposes one bundled challenge and one bundled activation", async () => {

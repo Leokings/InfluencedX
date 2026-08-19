@@ -11,11 +11,13 @@ the source-level design record is
 | Field | Frozen StudioNet value |
 | --- | --- |
 | Network / chain | `studionet` / `61999` |
-| Contract | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
-| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
+| Contract | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
+| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
+| Deployed at | `2026-08-19T21:45:34.887910Z` |
 | Protocol | `INFLUENCEDX_MARKETPLACE_V2` |
 | Storage schema | `2` |
-| Source SHA-256 | `0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be` |
+| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
+| ABI / direct suite | `50` methods / `58` tests passed |
 | Native unit | GEN / 18 decimals |
 | Upgrade delay | `604800` seconds |
 
@@ -26,6 +28,14 @@ to that role and cannot pause, change fees or treasury, transfer ownership, or
 schedule an upgrade. Future code changes still require the onchain seven-day,
 hash-bound, pause-gated upgrade path; constructors do not rerun during an
 in-place upgrade.
+
+The previous pre-public contract
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` (transaction
+`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`)
+is historical evidence only. It was retired because its Farcaster recent-cast
+lookup requested 100 items, above the provider limit. The fresh deployment
+uses 50; the matching backend release also fixes finality-age parsing to use
+the transaction's immutable creation timestamp.
 
 Always compare these values with
 [`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json)

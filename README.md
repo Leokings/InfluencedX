@@ -13,15 +13,15 @@ retryable UNDETERMINED outcomes settle inside the same Intelligent Contract.
 The active contract is
 [`InfluencedXMarketplace.py`](contracts/genlayer/InfluencedXMarketplace.py),
 deployed at
-[`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`](https://explorer-studio.genlayer.com/address/0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4).
+[`0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`](https://explorer-studio.genlayer.com/address/0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb).
 The immutable deployment record is
 [`deployments/genlayer-studionet.json`](deployments/genlayer-studionet.json).
 
 ## Release status
 
-The contract source and deployment are frozen as V2. The native web/API,
-database migration, marketplace operator, and restricted withdrawal reconciler
-are deployed and enabled in an isolated Preview release at
+The corrected contract source is deployed as V2. The native web/API, database
+migrations, marketplace operator, and restricted withdrawal reconciler must be
+repinned and redeployed against this fresh address in the isolated Preview at
 [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app).
 **The existing public URL has not yet been cut over to this GenLayer-only
 build.** A public V2 claim still requires the following user-driven evidence:
@@ -44,8 +44,11 @@ campaign is funded, settled, or paid.
 | Chain ID | `61999` |
 | RPC | `https://studio.genlayer.com/api` |
 | Explorer | `https://explorer-studio.genlayer.com` |
-| Marketplace V2 | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
-| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
+| Marketplace V2 | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
+| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
+| Deployed at | `2026-08-19T21:45:34.887910Z` |
+| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
+| ABI / direct suite | `50` methods / `58` tests passed |
 | Protocol / storage | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native asset | `GEN`, 18 decimals |
 | Protocol fee | `250` bps, snapshotted per campaign |
@@ -56,6 +59,13 @@ successful leader return. The manifest also records the owner, treasury,
 dedicated upgrade administrator, source hash, and retired V1 deployment. Do not
 copy addresses from prose into runtime configuration without comparing the
 manifest and live `get_config()` result.
+
+The prior pre-public deployment `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`
+(transaction `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`)
+is retired. Its Farcaster verification requested 100 recent casts, above the
+provider's defined limit. The replacement requests 50, and its companion
+backend release reads immutable transaction creation time instead of a moving
+current timestamp when enforcing finality age.
 
 ## Active architecture
 

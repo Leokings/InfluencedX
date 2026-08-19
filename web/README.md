@@ -15,7 +15,9 @@ Do not present a public URL as the V2 product until the E2E and cutover gates in
 | --- | --- |
 | Network | GenLayer StudioNet |
 | Chain ID | `61999` |
-| Contract | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
+| Contract | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
+| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
+| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
 | Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native unit | GEN / 18 decimals |
 | Deployment record | [`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json) |
@@ -51,8 +53,8 @@ The active chain pins are:
 
 ```text
 GENLAYER_STUDIONET_RPC_URL=https://studio.genlayer.com/api
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
-NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
+NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
 INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION=2
 ```
 
@@ -112,8 +114,12 @@ into a failed identity or campaign.
 ## Native marketplace projection
 
 Apply all migrations through
-[`0011_identity_bundle_activation.sql`](drizzle-postgres/0011_identity_bundle_activation.sql)
-before enabling V2 mutations. `npm run db:verify` must pass afterward.
+[`0012_marketplace_contract_cutover.sql`](drizzle-postgres/0012_marketplace_contract_cutover.sql)
+before enabling V2 mutations. It expires unfinished identity and transaction
+work scoped to the retired marketplace and clears only the two retired
+marketplace namespaces that held maintenance-generation authority, without
+deleting audit evidence. `npm run
+db:verify` must pass afterward.
 
 Native projection records are scoped by network, chain ID, contract address,
 protocol/storage version, and onchain ID. Private pitches are stored only for
@@ -149,7 +155,9 @@ Production are separate generation scopes. Consumers prove the active database
 row before claiming maintenance work and again before rescheduling; stale
 deployments acknowledge their messages without extending their loop.
 
-Migration `0010` intentionally creates no active generation. After deploying,
+Migrations `0010` and `0012` intentionally leave the fresh contract namespace
+without an active generation. Never reuse a generation belonging to a retired
+contract. After deploying,
 an operator must call the authenticated `POST /api/internal/campaign-progression`
 route with `x-influencedx-maintenance-generation` set to the last observed
 generation (`0` on first boot). An authenticated `GET` to an inactive
@@ -176,8 +184,9 @@ V2 at `EMITTED_UNCONFIRMED`; that state is not delivered payment.
 The separate
 [withdrawal reconciler](../services/vercel-genlayer-withdrawal-reconciler/README.md)
 derives recipient/amount/evidence from finalized chain state, proves the unique
-native transfer child, and uses the V2 owner boundary only for exact zero-value
-`confirm_withdrawal`. The web caller sends only the lowercase withdrawal ID.
+native transfer child, and uses the dedicated V2 withdrawal-confirmer boundary
+only for exact zero-value `confirm_withdrawal`. The web caller sends only the
+lowercase withdrawal ID.
 
 Only a `FINALIZED` reconciler projection backed by contract status `CONFIRMED`
 may be shown as delivered. Reconciliation ambiguity is a manual terminal state;

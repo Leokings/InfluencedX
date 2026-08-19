@@ -16,11 +16,11 @@ export const MARKETPLACE_NATIVE_SYMBOL = "GEN" as const;
 export const MARKETPLACE_NATIVE_DECIMALS = 18 as const;
 export const DEFAULT_STUDIONET_RPC_URL = "https://studio.genlayer.com/api";
 export const MARKETPLACE_V2_STUDIONET_ADDRESS =
-  "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4" as const;
+  "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb" as const;
 export const MARKETPLACE_V2_STUDIONET_RPC_ADDRESS =
-  "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4" as const;
+  "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb" as const;
 export const MARKETPLACE_V2_DEPLOYMENT_TX =
-  "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2" as const;
+  "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998" as const;
 export const MARKETPLACE_GENLAYER_ARG_TYPES = [
   "string",
   "bool",
@@ -523,12 +523,12 @@ function canonicalize(value: unknown): unknown {
 function transactionTimestamp(transaction: GenLayerTransaction): number {
   const record = transaction as GenLayerTransaction & Record<string, unknown>;
   const raw =
-    transaction.currentTimestamp ??
-    record.current_timestamp ??
+    transaction.createdTimestamp ??
+    record.created_timestamp ??
     transaction.lastVoteTimestamp ??
     record.last_vote_timestamp ??
-    transaction.createdTimestamp ??
-    record.created_timestamp;
+    transaction.currentTimestamp ??
+    record.current_timestamp;
   if (typeof raw === "string" && /^\d+$/.test(raw)) {
     const numeric = Number(raw);
     if (Number.isSafeInteger(numeric) && numeric > 0) {

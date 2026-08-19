@@ -35,7 +35,10 @@ from genlayer_py.contracts.utils import make_calldata_object
 import requests
 
 
-MARKETPLACE = "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4"
+MARKETPLACE = "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb"
+MARKETPLACE_DEPLOYMENT_TX = (
+    "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998"
+)
 STUDIONET_CHAIN_ID = 61_999
 CANARY_AMOUNT_ATTO = 1
 
@@ -313,6 +316,7 @@ def test_frozen_v2_native_gen_escrow_refund_and_eoa_withdrawal(
                 "network": "studionet",
                 "chain_id": STUDIONET_CHAIN_ID,
                 "contract": MARKETPLACE,
+                "contract_deployment_tx": MARKETPLACE_DEPLOYMENT_TX,
                 "brand": brand_address,
                 "amount_atto": CANARY_AMOUNT_ATTO,
                 "faucet_tx": faucet_hash,

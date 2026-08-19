@@ -384,7 +384,7 @@ def _extract_farcaster(
         MAX_FARCASTER_BODY,
     )
     recent_status, recent_body = _fetch(
-        f"https://api.farcaster.xyz/v2/casts?fid={fid}&limit=100",
+        f"https://api.farcaster.xyz/v2/casts?fid={fid}&limit=50",
         MAX_FARCASTER_BODY,
     )
     try:

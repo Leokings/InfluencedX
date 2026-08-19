@@ -9,8 +9,8 @@ An isolated, disabled-by-default StudioNet service for three permissionless mark
 It cannot accept a target, method, arbitrary argument array, or native value from a caller. The target is the configured marketplace contract, the method is selected from the fixed allowlist, arguments are derived from a strict request shape, and the only write adapter hard-codes `value: 0n`.
 
 The service is address- and protocol-driven for Marketplace V2, deployed on
-StudioNet at `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` by finalized transaction
-`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`, with
+StudioNet at `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` by finalized transaction
+`0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998`, with
 protocol `INFLUENCEDX_MARKETPLACE_V2` and storage schema `2`. It deliberately does
 **not** operate retired V1 at `0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11`.
 Keep it disabled until the exact address, ABI, live `get_config()`, database
@@ -47,7 +47,7 @@ All variables are required when enabled:
 | `INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE` | `studionet` |
 | `INFLUENCEDX_GENLAYER_NETWORK` | `studionet` |
 | `INFLUENCEDX_GENLAYER_CHAIN_ID` | `61999` |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`; non-zero lower/upper input is normalized to lower case. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`; non-zero lower/upper input is normalized to lower case. |
 | `INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL` | `INFLUENCEDX_MARKETPLACE_V2`, matching live `get_config().protocol_version`. |
 | `INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION` | `2`, matching live `get_config().storage_schema_version`. |
 | `GENLAYER_MARKETPLACE_OPERATOR_PRIVATE_KEY` | Dedicated zero-fund StudioNet operator key. Never reuse an owner/governance key. |
@@ -92,7 +92,14 @@ npm run build
 npm audit --omit=dev
 ```
 
-Deploy this directory as its own Vercel project only after v2 is deployed and verified. Run the migration against a private database, configure every exact environment binding, leave `INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false`, deploy, verify the queue trigger exists, then enable it in a new deployment.
+Deploy this directory as its own Vercel project only after V2 is deployed and
+verified. Run all migrations through
+[`0003_fresh_studionet_marketplace_address.sql`](migrations/0003_fresh_studionet_marketplace_address.sql)
+against a private database. Migration `0003` refuses to relabel rows belonging
+to another contract; use a fresh database or explicitly archive fully
+reconciled historical rows. Configure every exact environment binding, leave
+`INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false`, deploy, verify the queue
+trigger exists, then enable it in a new deployment.
 
 ## Governance boundary
 

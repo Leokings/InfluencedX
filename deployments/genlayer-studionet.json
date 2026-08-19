@@ -24,9 +24,9 @@
     }
   },
   "marketplace": {
-    "address": "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
-    "deploymentTransaction": "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2",
-    "deployedAt": "2026-08-19T17:32:09.897573Z",
+    "address": "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb",
+    "deploymentTransaction": "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998",
+    "deployedAt": "2026-08-19T21:45:34.887910Z",
     "status": "FINALIZED",
     "executionResult": "SUCCESS",
     "consensusResult": "MAJORITY_AGREE",
@@ -45,13 +45,20 @@
     "abiVerified": true,
     "stateVerified": true,
     "methodCount": 50,
-    "directTestsPassed": 57,
-    "sourceSha256": "0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be",
-    "sourceCommit": "11bb155d1dd192efd87d8bcab4962f3233cf4735",
+    "directTestsPassed": 58,
+    "sourceSha256": "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
     "identityActivation": "ATOMIC_X_AND_FARCASTER_V1",
     "productionOwnerConfigured": false
   },
   "historicalMarketplaces": [
+    {
+      "address": "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
+      "deploymentTransaction": "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2",
+      "protocolVersion": "INFLUENCEDX_MARKETPLACE_V2",
+      "storageSchemaVersion": 2,
+      "status": "FINALIZED",
+      "reasonRetired": "Replaced after StudioNet rejected the Farcaster recent-casts limit of 100; the fresh source-pinned deployment uses the supported bounded limit of 50."
+    },
     {
       "address": "0x58D598B8323E9C1d041989DccE80E737109DE347",
       "deploymentTransaction": "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a",

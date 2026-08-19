@@ -12,8 +12,10 @@ temporary, and the network may reset.
 | Chain ID | `61999` |
 | RPC | `https://studio.genlayer.com/api` |
 | Explorer | `https://explorer-studio.genlayer.com` |
-| Marketplace | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
-| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
+| Marketplace | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
+| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
+| Deployed at | `2026-08-19T21:45:34.887910Z` |
+| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
 | Protocol | `INFLUENCEDX_MARKETPLACE_V2` |
 | Storage schema | `2` |
 | Native asset | `GEN`, 18 decimals |
@@ -24,6 +26,13 @@ The canonical record is
 A runtime must compare the manifest with live schema, source, deployment receipt,
 and `get_config()` before enabling mutations. A page label, screenshot, database
 row, or environment variable alone is not deployment evidence.
+
+The manifest retains the former marketplace
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` and transaction
+`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`
+only as retired evidence. It requested 100 Farcaster recent casts, above the
+provider's limit. The replacement requests 50 and is paired with the backend
+timestamp fix that uses immutable transaction creation time for finality age.
 
 The same manifest preserves a separately deployed APV2 resolver at
 `0x0913b5593Ff16974E2fd616cA678A4986Cb48600`. Marketplace V2 does not call or

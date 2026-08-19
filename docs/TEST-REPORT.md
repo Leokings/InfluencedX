@@ -13,12 +13,13 @@ Target: **GenLayer StudioNet (`61999`)**
 | Check | Recorded result |
 | --- | --- |
 | Contract source | [`InfluencedXMarketplace.py`](../contracts/genlayer/InfluencedXMarketplace.py) |
-| Source SHA-256 | `0x9c99fd11fd47141b753447b3b79e9a6bff5f67ab2d3450c5cc4a23c5b96135be` |
-| Frozen source commit | `11bb155d1dd192efd87d8bcab4962f3233cf4735` |
+| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
+| Release source commit | Pending final release freeze; deployed bytes are pinned by SHA-256 above |
 | GenVM lint | PASS; public ABI contains 50 methods (22 view, 28 write) |
-| Direct suite | PASS; 57 tests |
-| Deployment | `0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` |
-| Deployment transaction | `0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2` |
+| Direct suite | PASS; 58 tests |
+| Deployment | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
+| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
+| Deployed at | `2026-08-19T21:45:34.887910Z` |
 | Deployment receipt | `FINALIZED`, `MAJORITY_AGREE`, successful leader return |
 | Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
 | Native asset / fee | GEN (18 decimals) / 250 bps |
@@ -36,14 +37,23 @@ upgrade behavior is covered in direct tests; a future governance E2E must use
 typed bytes through the reviewed write adapter and cancel the canary
 commitment afterward.
 
+The retired pre-public deployment
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` (transaction
+`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`)
+held no campaign, profile, withdrawal, or native-value state requiring
+migration. It was replaced after its 100-item Farcaster recent-casts request
+exceeded the provider limit. The replacement uses 50, and the web finality
+adapter now prefers immutable transaction creation time over current time.
+
 ## Direct-mode coverage
 
-The 57 direct tests cover the contract's deterministic and adversarial
+The 58 direct tests cover the contract's deterministic and adversarial
 boundaries, including:
 
 - atomic X + Farcaster ownership, stable IDs, and all-or-nothing activation;
 - exact 65-byte Farcaster username-proof encodings (hex 132 including `0x`,
   and padded base64 88);
+- the provider-compatible 50-item Farcaster recent-casts query boundary;
 - source-keyed profiles and cross-source campaign rejection;
 - payable campaign creation with exact native GEN value;
 - deterministic campaign, application, assignment, resolution, and withdrawal
@@ -111,38 +121,40 @@ USDC, watcher, relay, or historical submitter secrets.
 
 The exact integrated release tree passed 188 web unit tests, the optimized
 Next.js build, 7 rendered-page tests, TypeScript, ESLint, and clean-install
-reproducibility. The isolated Preview database must be migrated through `0011`
-before the bundled identity build is enabled; the previous hosted proof was
-through `0010`. After cutover,
+reproducibility. The isolated Preview database must be migrated through `0012`
+before the fresh contract build is enabled; the previous hosted proof was
+through `0010`. Migration `0012` retires unfinished old-contract work and
+removes only the two retired marketplaces' maintenance generations. After cutover,
 its verifier reports schema version 3 and the native StudioNet schema ready.
 The operator passed
 30 tests plus build/typecheck; the withdrawal reconciler passed 24 tests plus
 build/typecheck. All three enabled Preview deployments fail closed on
 unauthenticated service calls.
 
-The fenced maintenance release is commit
+The fenced maintenance release at commit
 `f6fa400447e9fd373923f006fe2722f0b5dba79d`, deployment
-`dpl_bYGwE9hYzigk4RqVVu2GJ7PnDnJX`, and generation `1`. Neon binds that exact
-deployment to StudioNet `61999`, the final V2 contract, the web project, and
-Preview. Its first two `maintenance-v2` callbacks returned HTTP 200 at
+`dpl_bYGwE9hYzigk4RqVVu2GJ7PnDnJX`, and generation `1` is historical evidence
+for the retired marketplace only. Its first two `maintenance-v2` callbacks returned HTTP 200 at
 `1787156516621` and `1787156818284`, 301,663 ms apart. The deployment had no
 error/fatal logs. Both seeded pre-fence deployments were retired and returned
-404, with no post-activation legacy maintenance activity.
+404, with no post-activation legacy maintenance activity. The fresh contract
+starts with no active generation and requires a new address-pinned deployment
+promotion from observed generation `0`.
 
 ## Required live E2E evidence — pending
 
 The following are release blockers, not completed claims:
 
-- [x] Deploy the marketplace operator disabled, verify auth/queue pins, then
-  enable it in an isolated environment.
-- [x] Deploy the withdrawal reconciler disabled, verify auth/queue pins, then
-  enable it in an isolated environment.
-- [ ] Apply and verify native V2 migrations through bundled identity migration
-  `0011`.
-- [x] Promote and prove fenced maintenance generation 1, then retire every
-  seeded pre-fence deployment.
-- [x] Deploy the native web build on an isolated URL with gates disabled, then
-  enable in the documented order.
+- [ ] Apply operator migration `0003`, repin the service to the fresh address,
+  deploy disabled, verify auth/queue pins, then enable it in isolation.
+- [ ] Apply withdrawal migration `0005`, repin the reconciler to the fresh
+  address, deploy disabled, verify auth/queue pins, then enable it in isolation.
+- [ ] Apply and verify native V2 web migrations through contract-cutover
+  migration `0012`.
+- [ ] Promote and prove a fresh-contract maintenance generation from observed
+  generation `0`; do not reuse the retired contract's generation `1`.
+- [ ] Deploy the fresh-address native web build on the isolated URL with gates
+  disabled, then enable in the documented order.
 - [ ] Complete one genuine X challenge and Farcaster challenge in a single
   finalized V2 bundle activation.
 - [ ] Complete one native-GEN campaign through create, apply, select, accept,

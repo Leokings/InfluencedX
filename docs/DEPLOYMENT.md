@@ -6,13 +6,20 @@ relay.
 
 ## Current release boundary
 
-The frozen StudioNet V2 contract exists at
-`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4`. The native PostgreSQL migrations
-are applied and verified, and the web/API plus both hosted services are enabled
-in an isolated Preview release at
-`https://influencedx-native-preview.vercel.app`. The existing public alias has
-not moved. **Public cutover and complete user-driven V2 E2E evidence are still
-pending.**
+The corrected StudioNet V2 contract exists at
+`0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`. The existing isolated Preview
+and both hosted services predate this address and must be migrated, repinned,
+and redeployed while disabled. The existing public alias has not moved.
+**Preview repinning, public cutover, and complete user-driven V2 E2E evidence
+are still pending.**
+
+The former pre-public deployment
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` (transaction
+`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`)
+is retired. Its Farcaster lookup requested 100 recent casts, exceeding the
+provider's defined limit. The fresh contract uses 50, and the associated web
+release also prefers immutable transaction creation time over a moving current
+timestamp when checking finality age.
 
 The release consists of three separately deployed projects:
 
@@ -67,10 +74,10 @@ Read, do not mutate, the deployment before configuring hosted services:
 
 ```powershell
 genlayer network set studionet
-genlayer schema 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
-genlayer code 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
-genlayer call 0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4 get_config
-genlayer receipt 0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2
+genlayer schema 0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
+genlayer code 0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
+genlayer call 0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb get_config
+genlayer receipt 0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998
 ```
 
 Stop if any live value differs from
@@ -110,7 +117,22 @@ The web migrations include
 and the additive
 [`0010_maintenance_generation_fence.sql`](../web/drizzle-postgres/0010_maintenance_generation_fence.sql)
 and
-[`0011_identity_bundle_activation.sql`](../web/drizzle-postgres/0011_identity_bundle_activation.sql).
+[`0011_identity_bundle_activation.sql`](../web/drizzle-postgres/0011_identity_bundle_activation.sql),
+followed by
+[`0012_marketplace_contract_cutover.sql`](../web/drizzle-postgres/0012_marketplace_contract_cutover.sql).
+Migration `0012` expires unfinished identity work scoped to the retired
+contract, terminates its unfinished transaction journal entries without
+deleting evidence, and removes only the two retired marketplace namespaces
+that previously held maintenance-generation authority. The fresh contract
+namespace intentionally starts without an active generation.
+
+The operator migration
+[`0003_fresh_studionet_marketplace_address.sql`](../services/vercel-genlayer-marketplace-operator/migrations/0003_fresh_studionet_marketplace_address.sql)
+and reconciler migration
+[`0005_fresh_studionet_marketplace_address.sql`](../services/vercel-genlayer-withdrawal-reconciler/migrations/0005_fresh_studionet_marketplace_address.sql)
+pin their tables to the fresh address. They fail closed if unreconciled rows
+from another contract remain; archive those rows explicitly or use fresh
+isolated service databases rather than rewriting their contract identity.
 Confirm every projection and uniqueness boundary is scoped by network, chain,
 contract, protocol/schema version, and onchain ID. Never rewrite historical
 Base or V1 rows into V2 rows.
@@ -129,7 +151,7 @@ INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false
 INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE=studionet
 INFLUENCEDX_GENLAYER_NETWORK=studionet
 INFLUENCEDX_GENLAYER_CHAIN_ID=61999
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
 INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
 INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
 ```
@@ -158,7 +180,7 @@ INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false
 INFLUENCEDX_WITHDRAWAL_RECONCILER_STAGE=studionet
 INFLUENCEDX_GENLAYER_NETWORK=studionet
 INFLUENCEDX_GENLAYER_CHAIN_ID=61999
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
 INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER=0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8
 INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL=INFLUENCEDX_MARKETPLACE_V2
 INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION=2
@@ -185,6 +207,16 @@ XPROOF_VERIFICATION_MUTATIONS_ENABLED=false
 XPROOF_MARKETPLACE_MUTATIONS_ENABLED=false
 INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false
 INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false
+```
+
+In the web project's isolated Preview scope, pin the same deployment on both
+the private server and public wallet boundary:
+
+```text
+GENLAYER_STUDIONET_RPC_URL=https://studio.genlayer.com/api
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
+NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
+INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION=2
 ```
 
 Pin the StudioNet RPC, V2 address, public address, and version. Configure the
@@ -224,12 +256,15 @@ Do not enable the public alias yet.
 
 ### Promote the maintenance generation
 
-Migration `0010` deliberately creates no active worker. Inventory Queue
+Migrations `0010` and `0012` deliberately leave the fresh contract with no
+active worker. Generation authority is contract-address scoped: do not carry
+the retired contract's generation into this namespace. Inventory Queue
 Observability and runtime logs, then retire every seeded pre-fence deployment;
 moving an alias does not stop its deployment-partitioned queue loop. Allow one
 visibility lease (up to ten minutes) to clear.
 
-Read the currently observed generation (`0` on first activation), move only the
+Read the fresh contract's currently observed generation (`0` on first
+activation), move only the
 isolated native Preview alias to the new immutable deployment, and dispatch
 [`promote-native-preview.yml`](../.github/workflows/promote-native-preview.yml)
 with that exact number. The workflow is pinned to the InfluencedX native
