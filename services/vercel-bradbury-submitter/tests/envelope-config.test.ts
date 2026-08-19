@@ -1,20 +1,32 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { studionet } from "genlayer-js/chains";
 
-import { PINNED_BRADBURY_RESOLVER } from "../lib/constants";
+import {
+  PINNED_STUDIONET_RESOLVER,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RESOLVER_DEPLOYMENT_TX,
+  STUDIONET_RPC_URL,
+} from "../lib/constants";
 import { loadConfig } from "../lib/config";
 import { validateOwnershipEnvelope, validateQueueMessage } from "../lib/envelope";
 import { PoisonMessageError } from "../lib/problem";
 import { makeEnvelope, NOW_EPOCH, validEnv } from "./helpers";
 
-test("configuration pins testnet, resolver, key, database, and exact caller identity", () => {
+test("configuration pins StudioNet, resolver, key, database, and exact caller identity", () => {
   const config = loadConfig(validEnv());
-  assert.equal(config.network, "testnet-bradbury");
-  assert.equal(config.resolver, PINNED_BRADBURY_RESOLVER);
+  assert.equal(config.stage, "studionet");
+  assert.equal(config.network, "studionet");
+  assert.equal(config.chainId, STUDIONET_CHAIN_ID);
+  assert.equal(config.rpcUrl, STUDIONET_RPC_URL);
+  assert.equal(config.resolver, PINNED_STUDIONET_RESOLVER);
+  assert.equal(STUDIONET_RESOLVER_DEPLOYMENT_TX, "0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591");
   assert.equal(config.caller.projectId, "prj_4W0EuXNi5nFD46ArUAbvk2YnTacu");
   for (const patch of [
     { XPROOF_SUBMITTER_ENABLED: "false" },
     { XPROOF_GENLAYER_NETWORK: "mainnet" },
+    { XPROOF_GENLAYER_CHAIN_ID: "1" },
     { XPROOF_GENLAYER_RESOLVER: `0x${"22".repeat(20)}` },
     { GENLAYER_SUBMITTER_PRIVATE_KEY: "" },
     { DATABASE_URL: "https://not-postgres.example" },
@@ -23,6 +35,14 @@ test("configuration pins testnet, resolver, key, database, and exact caller iden
   ]) {
     assert.throws(() => loadConfig(validEnv(patch)), (error: unknown) => (error as { code?: string }).code === "SUBMITTER_CONFIGURATION_INVALID");
   }
+});
+
+test("the writer uses the SDK StudioNet chain and never imports a legacy testnet chain", async () => {
+  assert.equal(studionet.id, STUDIONET_CHAIN_ID);
+  const source = await readFile(new URL("../lib/studionet-client.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ studionet \} from "genlayer-js\/chains"/);
+  assert.match(source, /createClient\(\{ chain: studionet,/);
+  assert.doesNotMatch(source, /testnetBradbury|testnetAsimov/);
 });
 
 test("ownership envelope is exact, canonical, time-bounded, and request-bound", async () => {

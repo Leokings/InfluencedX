@@ -278,7 +278,7 @@ function metricsRefreshMessage(state: MetricsRefreshState): string {
   }
   if (state.phase === "polling") {
     return state.submission
-      ? `Idempotently checking ${state.submission.requestId.slice(0, 10)}... on GenLayer Bradbury.`
+      ? `Idempotently checking ${state.submission.requestId.slice(0, 10)}... on GenLayer StudioNet.`
       : "The dispatch outcome was ambiguous; checking the deterministic job ID before any retry.";
   }
   return "No caller-supplied follower, engagement, risk, or pay values are accepted.";

@@ -21,7 +21,7 @@ const NOW_MS = 1_786_270_000_000;
 const BINDING = Object.freeze({
   requestId: `0x${"11".repeat(32)}` as Hex,
   genlayerTxHash: `0x${"22".repeat(32)}` as Hex,
-  resolver: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" as Address,
+  resolver: "0x0913b5593Ff16974E2fd616cA678A4986Cb48600" as Address,
   baseReceiver: "0x15dDbCd98F97065746a1c35f88BB670a7A942264" as Address,
   baseRegistry: "0x10079EF049D283BC3f212CCaC4291b3aC2719C48" as Address,
   expectedWallet: "0x63038a310a46AC61A59c1bC5eAD5fe41040eF38e" as Address,

@@ -1,6 +1,7 @@
 import {
-  BRADBURY_RPC_URL,
-  PINNED_BRADBURY_RESOLVER,
+  PINNED_STUDIONET_RESOLVER,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RPC_URL,
   SUBMITTER_NETWORK,
   SUBMITTER_STAGE,
 } from "./constants";
@@ -8,10 +9,11 @@ import { SubmitterProblem } from "./problem";
 
 export type SubmitterConfig = Readonly<{
   enabled: true;
-  stage: "testnet";
-  network: "testnet-bradbury";
-  resolver: typeof PINNED_BRADBURY_RESOLVER;
-  rpcUrl: typeof BRADBURY_RPC_URL;
+  stage: "studionet";
+  network: "studionet";
+  chainId: typeof STUDIONET_CHAIN_ID;
+  resolver: typeof PINNED_STUDIONET_RESOLVER;
+  rpcUrl: typeof STUDIONET_RPC_URL;
   privateKey: `0x${string}`;
   databaseUrl: string;
   caller: Readonly<{
@@ -27,6 +29,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SubmitterConfi
   const enabled = required(env, "XPROOF_SUBMITTER_ENABLED");
   const stage = required(env, "XPROOF_SUBMITTER_STAGE");
   const network = required(env, "XPROOF_GENLAYER_NETWORK");
+  const chainId = required(env, "XPROOF_GENLAYER_CHAIN_ID");
   const resolver = required(env, "XPROOF_GENLAYER_RESOLVER");
   const privateKey = required(env, "GENLAYER_SUBMITTER_PRIVATE_KEY");
   const databaseUrl = required(env, "DATABASE_URL");
@@ -39,7 +42,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SubmitterConfi
   if (enabled !== "true") fail("XPROOF_SUBMITTER_ENABLED must be exactly true.");
   if (stage !== SUBMITTER_STAGE) fail(`XPROOF_SUBMITTER_STAGE must be ${SUBMITTER_STAGE}.`);
   if (network !== SUBMITTER_NETWORK) fail(`XPROOF_GENLAYER_NETWORK must be ${SUBMITTER_NETWORK}.`);
-  if (resolver.toLowerCase() !== PINNED_BRADBURY_RESOLVER.toLowerCase()) fail("XPROOF_GENLAYER_RESOLVER must be the pinned APV2 Bradbury resolver.");
+  if (chainId !== String(STUDIONET_CHAIN_ID)) fail(`XPROOF_GENLAYER_CHAIN_ID must be ${STUDIONET_CHAIN_ID}.`);
+  if (resolver.toLowerCase() !== PINNED_STUDIONET_RESOLVER.toLowerCase()) fail("XPROOF_GENLAYER_RESOLVER must be the pinned APV2 StudioNet resolver.");
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey) || /^0x0{64}$/i.test(privateKey)) fail("GENLAYER_SUBMITTER_PRIVATE_KEY must be a non-zero 32-byte key.");
   if (!/^postgres(?:ql)?:\/\//.test(databaseUrl)) fail("DATABASE_URL must be a PostgreSQL connection URL.");
   if (!/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(teamSlug)) fail("XPROOF_CALLER_TEAM_SLUG is invalid.");
@@ -55,8 +59,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SubmitterConfi
     enabled: true,
     stage: SUBMITTER_STAGE,
     network: SUBMITTER_NETWORK,
-    resolver: PINNED_BRADBURY_RESOLVER,
-    rpcUrl: BRADBURY_RPC_URL,
+    chainId: STUDIONET_CHAIN_ID,
+    resolver: PINNED_STUDIONET_RESOLVER,
+    rpcUrl: STUDIONET_RPC_URL,
     privateKey: privateKey as `0x${string}`,
     databaseUrl,
     caller: Object.freeze({ teamSlug, teamId, projectName, projectId, environment }),

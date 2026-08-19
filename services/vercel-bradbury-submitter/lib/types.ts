@@ -89,6 +89,8 @@ export type ResolverOutcome =
 
 export type SubmissionRecord = Readonly<{
   requestId: string;
+  network: string;
+  resolver: string;
   envelope: SubmissionEnvelope | null;
   functionName: SubmitterFunctionName;
   envelopeFingerprint: string;
@@ -122,7 +124,7 @@ export type SignerClaim = Readonly<{
 
 export type Receipt = Record<string, unknown>;
 
-export interface BradburyClient {
+export interface StudioNetClient {
   readonly signerAddress: string;
   readExistingResult(requestId: string): Promise<unknown>;
   submitOwnership(envelope: OwnershipEnvelope): Promise<string>;
@@ -132,10 +134,10 @@ export interface BradburyClient {
   readFinalResult(requestId: string): Promise<unknown>;
 }
 
-export type BradburyReader = Pick<
-  BradburyClient,
+export type GenLayerReader = Pick<
+  StudioNetClient,
   "signerAddress" | "getTransaction" | "readFinalResult"
->;
+> & Readonly<{ resolverAddress: string }>;
 
 export interface SubmissionRepository {
   createOrReplay(envelope: SubmissionEnvelope, envelopeFingerprint: string, callFingerprint: string): Promise<{ record: SubmissionRecord; replayed: boolean }>;

@@ -7,15 +7,15 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import type { RelayConfig, WatcherTarget } from "./config";
-import { MAX_RESPONSE_BYTES } from "./constants";
-import { RelayProblem } from "./problem";
+import type { RelayConfig, WatcherTarget } from "./config.js";
+import { MAX_RESPONSE_BYTES } from "./constants.js";
+import { RelayProblem } from "./problem.js";
 import type {
   ResolutionContext,
   SerializedResolutionMessage,
   WatcherRequest,
   WatcherSignature,
-} from "./types";
+} from "./types.js";
 
 export function buildWatcherRequest(context: ResolutionContext, escrow: Address): WatcherRequest {
   const submissionDocument = Object.freeze({

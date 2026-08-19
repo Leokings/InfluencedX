@@ -11,7 +11,7 @@ Complete these before pressing Record:
 - [ ] A stable public InfluencedX URL is reachable in a private/incognito window.
 - [ ] The deployed address table in the root README matches the live build.
 - [ ] Preview database migrations and `npm run db:verify` pass.
-- [ ] Preview verification, marketplace, and Bradbury submitter gates are enabled.
+- [ ] Preview verification, marketplace, and StudioNet submitter gates are enabled.
 - [ ] The isolated submitter is healthy and the exact Vercel OIDC identity matches.
 - [ ] Brand wallet has Base Sepolia ETH and enough Base Sepolia test USDC.
 - [ ] Creator wallet has Base Sepolia ETH and an active public creator profile.
@@ -40,9 +40,9 @@ Show the landing page and say:
 > GenLayer evaluates the published work against rules frozen when the campaign
 > was funded.
 
-Point briefly to “Base Sepolia” and “GenLayer Bradbury.” State that this is a
-testnet submission and the current GenLayer-to-Base transport uses a 2-of-3
-watcher quorum.
+Point briefly to “Base Sepolia” and “GenLayer StudioNet.” State that this is a
+developer-network submission, StudioNet state is temporary/resettable, and the
+current GenLayer-to-Base transport uses a 2-of-3 watcher quorum.
 
 ### 0:20-0:45 — Live ownership proof
 
@@ -53,7 +53,12 @@ and identify active registry profile `1`.
 
 Say:
 
-> This state came from a live APV2 result finalized on Bradbury and relayed to
+The linked profile was created during the earlier Bradbury phase and is retained
+as historical evidence. Do not describe it as a StudioNet proof. For the current
+walkthrough, use a fresh profile whose APV2 result finalized on StudioNet and
+say:
+
+> This state came from a live APV2 result finalized on StudioNet and relayed to
 > the Base registry; it is not a UI fixture.
 
 ### 0:45-1:15 — Brand creates and funds a campaign
@@ -84,7 +89,7 @@ Show the public X post logged out, paste its canonical
 `https://x.com/<handle>/status/<id>` URL, and submit the evidence commitment.
 After the retention gate, request resolution and show the Base request receipt.
 
-Show the Bradbury lifecycle changing from queued/submitted/polling to finalized.
+Show the StudioNet lifecycle changing from queued/submitted/polling to finalized.
 State the actual result (`PASS`, `FAIL`, or `UNDETERMINED`) only after the API
 reports terminal finality.
 
@@ -107,7 +112,7 @@ Show the architecture diagram or deployed-address table and say:
 
 > Base holds agreements and test funds, GenLayer judges public X evidence, and
 > PostgreSQL holds deletable marketplace data. The submission is Base Sepolia
-> plus Bradbury today; mainnet requires new contracts, independent review, and a
+> plus StudioNet today; mainnet requires new contracts, independent review, and a
 > stronger cross-chain operations plan.
 
 End on the public URL and repository README.
@@ -118,7 +123,7 @@ End on the public URL and repository README.
 - Dedicated public repository URL.
 - Three-minute video URL with captions or clear narration.
 - Base registry, escrow, receiver, test-USDC, and live-proof explorer links.
-- Bradbury resolver address and deployment transaction.
+- StudioNet resolver address and deployment transaction.
 - Architecture diagram and concise testnet disclaimer.
 - Exact test commands and the date/commit on which they passed.
 - One fresh-wallet ownership proof and one complete campaign transaction trail.

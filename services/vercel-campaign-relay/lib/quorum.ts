@@ -5,14 +5,14 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import type { RelayConfig } from "./config";
-import { BASE_SEPOLIA_CHAIN_ID, campaignResolutionTypes } from "./constants";
-import { RelayProblem } from "./problem";
+import type { RelayConfig } from "./config.js";
+import { BASE_SEPOLIA_CHAIN_ID, campaignResolutionTypes } from "./constants.js";
+import { RelayProblem } from "./problem.js";
 import type {
   ResolutionContext,
   SerializedResolutionMessage,
   WatcherSignature,
-} from "./types";
+} from "./types.js";
 
 export type VerifiedQuorum = Readonly<{
   digest: Hex;

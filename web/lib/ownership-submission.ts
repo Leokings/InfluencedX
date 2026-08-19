@@ -13,10 +13,13 @@ import {
 } from "./verification-core.ts";
 
 export const OWNERSHIP_SUBMISSION_SCHEMA_VERSION = 1 as const;
-export const BRADBURY_NETWORK = "testnet-bradbury" as const;
+// The exported names remain stable because they are part of the web/service
+// module API and the historical persistence schema. Their values are the
+// active GenLayer deployment.
+export const BRADBURY_NETWORK = "studionet" as const;
 export const BRADBURY_METHOD = "verify_ownership" as const;
 export const PINNED_BRADBURY_RESOLVER =
-  "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" as const;
+  "0x0913b5593Ff16974E2fd616cA678A4986Cb48600" as const;
 
 export const ownershipSubmissionStatuses = [
   "NOT_SUBMITTED",
@@ -54,6 +57,8 @@ export type OwnershipSubmissionEnvelope = {
 
 export type SubmitterSubmission = {
   requestId: Hex;
+  network: typeof BRADBURY_NETWORK;
+  resolver: typeof PINNED_BRADBURY_RESOLVER;
   status: Exclude<OwnershipSubmissionStatus, "NOT_SUBMITTED" | "DISPATCHING" | "DISPATCH_UNKNOWN">;
   lifecycleStatus: string | null;
   executionResult: string | null;
@@ -139,6 +144,8 @@ export function parseSubmitterSubmission(value: unknown): SubmitterSubmission {
   const pollAttempts = normalizeNonnegativeInteger(value.pollAttempts, "pollAttempts");
   const submission = {
     requestId,
+    network: requireStudioNetwork(value.network),
+    resolver: requireStudioResolver(value.resolver),
     status: value.status,
     lifecycleStatus: normalizeNullableShortString(value.lifecycleStatus),
     executionResult: normalizeNullableShortString(value.executionResult),
@@ -160,6 +167,23 @@ export function parseSubmitterSubmission(value: unknown): SubmitterSubmission {
     throw new Error("A finalized ownership submission has no resolver outcome.");
   }
   return Object.freeze(submission);
+}
+
+export function requireStudioNetwork(value: unknown): typeof BRADBURY_NETWORK {
+  if (value !== BRADBURY_NETWORK) {
+    throw new Error("The submitter response is not bound to StudioNet.");
+  }
+  return BRADBURY_NETWORK;
+}
+
+export function requireStudioResolver(value: unknown): typeof PINNED_BRADBURY_RESOLVER {
+  if (
+    typeof value !== "string" ||
+    value.toLowerCase() !== PINNED_BRADBURY_RESOLVER.toLowerCase()
+  ) {
+    throw new Error("The submitter response is not bound to the StudioNet resolver.");
+  }
+  return PINNED_BRADBURY_RESOLVER;
 }
 
 function normalizeHash(value: unknown, label: string): Hex {

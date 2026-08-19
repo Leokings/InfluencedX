@@ -1,6 +1,14 @@
-# InfluencedX private Bradbury submitter
+# RETIRED: InfluencedX private Bradbury submitter
 
-This directory contains a validated Cloudflare Durable Object alternative for a
+> **Historical reference only. Do not deploy this service.** It is permanently
+> pinned to the retired Bradbury resolver and cannot submit current InfluencedX
+> requests. The hosted StudioNet implementation lives in
+> `services/vercel-bradbury-submitter/`; that directory name is retained only
+> for source/deployment compatibility. Current network configuration must use
+> StudioNet (`61999`) and resolver
+> `0x0913b5593Ff16974E2fd616cA678A4986Cb48600`.
+
+This directory contains the retired Cloudflare Durable Object alternative for a
 testnet-only boundary that may submit an already
 wallet-authorized APV2 ownership envelope to GenLayer Bradbury. It is designed
 as a Cloudflare Worker service binding backed by one Durable Object per APV2
@@ -34,7 +42,7 @@ testnet stage, Bradbury network, and pinned resolver are set exactly. The RPC
 URL is compiled as the official Bradbury endpoint rather than accepted from a
 request or environment variable.
 
-The active deployment path is the separate Vercel submitter under
+The current deployment path is the separate Vercel submitter under
 `services/vercel-bradbury-submitter`; this implementation remains useful as an
 independent protocol and concurrency reference, but is not reachable from the
 Vercel web app while `workers_dev = false` and no custom route exists.

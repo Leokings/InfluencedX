@@ -379,7 +379,7 @@ test("0005 marketplace migration is journaled and includes all durable tables", 
     ),
   ) as { entries: Array<{ tag: string }> };
   assert.ok(journal.entries.some((entry) => entry.tag === "0005_influencedx_marketplace"));
-  assert.equal(journal.entries.at(-1)?.tag, "0007_campaign_progression_worker");
+  assert.equal(journal.entries.at(-1)?.tag, "0008_studionet_cutover");
 });
 
 test("0007 adds a recoverable CAS lease without storing signer material", async () => {
@@ -397,6 +397,27 @@ test("0007 adds a recoverable CAS lease without storing signer material", async 
   assert.match(migration, /progression_lease_pair/);
   assert.match(migration, /progression_attempts_nonnegative/);
   assert.doesNotMatch(migration, /private_key|keystore|watcher_signature/i);
+});
+
+test("0008 defaults new GenLayer rows to StudioNet while retaining coupled Bradbury history", async () => {
+  const migration = await readFile(
+    new URL("../drizzle-postgres/0008_studionet_cutover.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /ALTER COLUMN network SET DEFAULT 'studionet'/);
+  assert.match(
+    migration,
+    /ALTER COLUMN resolver SET DEFAULT '0x0913b5593ff16974e2fd616ca678a4986cb48600'/,
+  );
+  assert.match(
+    migration,
+    /network = 'studionet' AND resolver = '0x0913b5593ff16974e2fd616ca678a4986cb48600'/,
+  );
+  assert.match(
+    migration,
+    /network = 'testnet-bradbury' AND resolver = '0x017311b35dbb9802883bdae7fb0efd7bd77cb0b2'/,
+  );
+  assert.match(migration, /network_resolver_check/);
 });
 
 const PROGRESSION_EXTENSION_COLUMNS = new Set([

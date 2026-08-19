@@ -18,7 +18,7 @@ export class PoisonMessageError extends SubmitterProblem {
 
 export class GateBusyError extends SubmitterProblem {
   constructor() {
-    super(503, "SIGNER_GATE_BUSY", "The serialized Bradbury signer is busy.");
+    super(503, "SIGNER_GATE_BUSY", "The serialized StudioNet signer is busy.");
     this.name = "GateBusyError";
   }
 }

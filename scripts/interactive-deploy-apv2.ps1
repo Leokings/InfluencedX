@@ -28,9 +28,9 @@ if (Test-Path -LiteralPath $deployLog) {
   throw "Refusing to overwrite an existing deployment log: $deployLog"
 }
 
-Write-Host "Step 3/3: deploy the fresh APV2 resolver to Bradbury" -ForegroundColor Cyan
-& genlayer.cmd network set testnet-bradbury
-if ($LASTEXITCODE -ne 0) { throw "Could not select Bradbury" }
+Write-Host "Step 3/3: deploy the fresh APV2 resolver to StudioNet" -ForegroundColor Cyan
+& genlayer.cmd network set studionet
+if ($LASTEXITCODE -ne 0) { throw "Could not select StudioNet" }
 
 $deployCommand = 'genlayer.cmd deploy --contract "contracts\genlayer\AdProofXResolver.py" 2>&1'
 & cmd.exe /d /s /c $deployCommand | Tee-Object -FilePath $deployLog

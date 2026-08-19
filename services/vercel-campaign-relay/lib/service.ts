@@ -1,24 +1,24 @@
 import type { Hex } from "viem";
-import type { RelayConfig } from "./config";
+import type { RelayConfig } from "./config.js";
 import {
   createBaseSettlementTransport,
   type BaseSettlementTransport,
-} from "./base-settlement";
-import { RelayProblem } from "./problem";
-import { verifyWatcherQuorum } from "./quorum";
+} from "./base-settlement.js";
+import { RelayProblem } from "./problem.js";
+import { verifyWatcherQuorum } from "./quorum.js";
 import {
   independentlyResolveCampaign,
   type RevalidationDependencies,
-} from "./revalidation";
+} from "./revalidation.js";
 import {
   createResolutionRepository,
   type ResolutionRepository,
-} from "./repository";
-import type { ResolutionOutcome, WatcherSignature } from "./types";
+} from "./repository.js";
+import type { ResolutionOutcome, WatcherSignature } from "./types.js";
 import {
   buildWatcherRequest,
   requestWatcherSignatures,
-} from "./watcher-client";
+} from "./watcher-client.js";
 
 export type RelayServiceDependencies = Readonly<{
   repository?: ResolutionRepository;

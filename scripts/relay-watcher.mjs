@@ -57,7 +57,7 @@ const record = {
   schemaVersion: 2,
   ...bundle,
   source: {
-    network: 'testnet-bradbury',
+    network: 'studionet',
     resolver,
     txHash,
     requestId,

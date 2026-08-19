@@ -6,7 +6,7 @@ import {
   inspectLegacyValueOmission,
   LEGACY_VALUE_OMISSION_ERROR,
 } from "../lib/operator-reconciliation";
-import type { BradburyReader, SubmissionRecord } from "../lib/types";
+import type { GenLayerReader, SubmissionRecord } from "../lib/types";
 import {
   finalizedReceipt,
   makeEnvelope,
@@ -20,6 +20,8 @@ function fixture() {
   const now = new Date();
   const record: SubmissionRecord = Object.freeze({
     requestId: envelope.requestId,
+    network: "testnet-bradbury",
+    resolver: "0x017311b35dbb9802883bdae7fb0efd7bd77cb0b2",
     envelope: null,
     functionName: "verify_ownership",
     envelopeFingerprint: "f".repeat(64),
@@ -43,16 +45,18 @@ function fixture() {
     updatedAt: now,
   });
   const receipt = finalizedReceipt(envelope);
+  receipt.recipient = record.resolver;
   delete receipt.value;
-  const reader: BradburyReader = {
+  const reader: GenLayerReader = {
     signerAddress: SIGNER,
+    resolverAddress: record.resolver,
     async getTransaction() { return receipt; },
     async readFinalResult() { return ownershipResult(envelope.requestId, "VERIFIED"); },
   };
   return { envelope, record, receipt, reader };
 }
 
-test("legacy value omission reconciliation accepts the exact value-less finalized Bradbury receipt", async () => {
+test("legacy value omission reconciliation accepts the exact value-less finalized historical receipt", async () => {
   const { record, reader } = fixture();
   const observed = await inspectLegacyValueOmission(record, reader);
   assert.equal(observed.state, "FINALIZED");

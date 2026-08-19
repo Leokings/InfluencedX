@@ -1,8 +1,10 @@
-import { requireCallerAuth } from "../../lib/auth";
-import { loadConfig } from "../../lib/config";
-import { readRequestId } from "../../lib/http";
-import { json, problemResponse } from "../../lib/problem";
-import { settleFinalizedCampaignResolution } from "../../lib/service";
+import { requireCallerAuth } from "../../lib/auth.js";
+import { loadConfig } from "../../lib/config.js";
+import { readRequestId } from "../../lib/http.js";
+import { json, problemResponse } from "../../lib/problem.js";
+import { settleFinalizedCampaignResolution } from "../../lib/service.js";
+import { serveVercelNodeRequest } from "../../lib/vercel-node.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const config = { runtime: "nodejs" };
 
@@ -17,4 +19,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-export default POST;
+export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  await serveVercelNodeRequest(request, response, POST);
+}

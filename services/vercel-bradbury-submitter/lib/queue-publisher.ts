@@ -15,10 +15,14 @@ export interface QueuePublisher {
 
 export const vercelQueuePublisher: QueuePublisher = Object.freeze({
   async submit(requestId: string) {
-    return sendMessage(requestId, `xproof-submit:${requestId}`);
+    return sendMessage(requestId, `influencedx-studionet-submit:${requestId}`);
   },
   async poll(requestId: string, attempt: number) {
-    return sendMessage(requestId, `xproof-poll:${requestId}:${attempt}`, POLL_INTERVAL_SECONDS);
+    return sendMessage(
+      requestId,
+      `influencedx-studionet-poll:${requestId}:${attempt}`,
+      POLL_INTERVAL_SECONDS,
+    );
   },
 });
 

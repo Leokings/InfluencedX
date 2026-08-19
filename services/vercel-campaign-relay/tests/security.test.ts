@@ -6,7 +6,8 @@ import { verifyCallerToken } from "../lib/auth";
 import {
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
 } from "../lib/constants";
 import {
   configFixture,
@@ -24,10 +25,12 @@ function envFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED: "true",
     XPROOF_BASE_CHAIN_ID: "84532",
     XPROOF_BASE_SEPOLIA_RPC_URL: "https://base.example.test",
-    XPROOF_GENLAYER_RPC_URL: "https://genlayer.example.test",
+    XPROOF_GENLAYER_NETWORK: "studionet",
+    XPROOF_GENLAYER_CHAIN_ID: "61999",
+    XPROOF_GENLAYER_RPC_URL: STUDIONET_RPC_URL,
     XPROOF_BASE_ESCROW: BASE_SEPOLIA_ESCROW,
     XPROOF_BASE_RECEIVER: BASE_SEPOLIA_RECEIVER,
-    XPROOF_GENLAYER_RESOLVER: BRADBURY_RESOLVER,
+    XPROOF_GENLAYER_RESOLVER: STUDIONET_RESOLVER,
     XPROOF_BASE_RELAYER_PRIVATE_KEY: relayerKey,
     XPROOF_BASE_RELAYER_ADDRESS: relayerAddress,
     XPROOF_RELAYER_MAX_BALANCE_WEI: "10000000000000000",
@@ -55,9 +58,17 @@ test("relay configuration isolates one low-balance Base key from all watcher and
   const config = loadConfig(envFixture());
   assert.equal(config.relayerAddress, relayerAddress);
   assert.equal(config.watchers.length, 3);
+  assert.equal(config.genlayerNetwork, "studionet");
+  assert.equal(config.genlayerChainId, 61_999);
+  assert.equal(config.genlayerRpcUrl, STUDIONET_RPC_URL);
+  assert.equal(config.resolver, STUDIONET_RESOLVER);
   const cases: NodeJS.ProcessEnv[] = [
     { XPROOF_CAMPAIGN_RELAY_ENABLED: "false" },
     { XPROOF_BASE_CHAIN_ID: "1" },
+    { XPROOF_GENLAYER_NETWORK: "testnet-bradbury" },
+    { XPROOF_GENLAYER_CHAIN_ID: "4221" },
+    { XPROOF_GENLAYER_RPC_URL: "https://rpc-bradbury.genlayer.com" },
+    { XPROOF_GENLAYER_RESOLVER: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" },
     { XPROOF_BASE_RECEIVER: "0x5555555555555555555555555555555555555555" },
     { XPROOF_BASE_RELAYER_PRIVATE_KEY: watcherKeys[0], XPROOF_BASE_RELAYER_ADDRESS: watcherAccounts[0]!.address },
     { XPROOF_WATCHER_PRIVATE_KEY: watcherKeys[0] },

@@ -45,9 +45,9 @@ export const INFLUENCEDX_BASE_SEPOLIA_DEPLOYMENT = Object.freeze({
   registry: getAddress("0x10079ef049d283bc3f212ccac4291b3ac2719c48"),
   escrow: getAddress("0x7e9b6b757d1ef12509889826b2f2a42906661927"),
   receiver: getAddress("0x15ddbcd98f97065746a1c35f88bb670a7a942264"),
-  genlayerResolver: getAddress("0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2"),
+  genlayerResolver: getAddress("0x0913b5593Ff16974E2fd616cA678A4986Cb48600"),
   genlayerContract:
-    "0x000000000000000000000000017311b35dbb9802883bdae7fb0efd7bd77cb0b2" as Hex,
+    "0x0000000000000000000000000913b5593ff16974e2fd616ca678a4986cb48600" as Hex,
   protocolFeeBps: 250,
   receiverDomainName: "XProofAttestationReceiver",
   receiverDomainVersion: "2",

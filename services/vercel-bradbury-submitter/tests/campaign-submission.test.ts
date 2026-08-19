@@ -16,7 +16,7 @@ import {
 } from "../lib/submission-service";
 import {
   campaignResult,
-  FakeBradburyClient,
+  FakeStudioNetClient,
   FakeQueue,
   finalizedCampaignReceipt,
   makeCampaignEnvelope,
@@ -29,7 +29,7 @@ import {
 
 function setup() {
   const repository = new MemoryRepository();
-  const client = new FakeBradburyClient();
+  const client = new FakeStudioNetClient();
   const queue = new FakeQueue();
   const ingress = new SubmissionIngressService(repository, queue);
   const processor = new SubmissionService(repository, client, queue);

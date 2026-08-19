@@ -121,7 +121,8 @@ test("server-renders accurate public privacy and testnet terms pages", async () 
   assert.match(privacy, /HttpOnly/);
   assert.match(privacy, /NEON POSTGRES/);
   assert.match(privacy, /BASE SEPOLIA/);
-  assert.match(privacy, /GENLAYER BRADBURY/);
+  assert.match(privacy, /GENLAYER STUDIONET/);
+  assert.doesNotMatch(privacy, /GENLAYER BRADBURY/);
   assert.match(privacy, /cannot be erased by InfluencedX/i);
   assert.match(privacy, /does not use X OAuth/i);
 

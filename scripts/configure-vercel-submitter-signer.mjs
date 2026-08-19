@@ -21,16 +21,16 @@ const PRIVATE_KEY_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 const stat = await fs.stat(KEYSTORE_PATH);
 if (!stat.isFile() || stat.size === 0 || stat.size > MAX_KEYSTORE_BYTES) {
-  throw new Error('The encrypted Bradbury keystore is missing or invalid.');
+  throw new Error('The encrypted StudioNet submitter keystore is missing or invalid.');
 }
 
 const keystore = await fs.readFile(KEYSTORE_PATH, 'utf8');
 if (!isKeystoreJson(keystore)) {
-  throw new Error('The Bradbury credential is not a Web3 Secret Storage keystore.');
+  throw new Error('The StudioNet submitter credential is not a Web3 Secret Storage keystore.');
 }
 
 process.stderr.write(
-  'This uploads the funded Bradbury testnet account to the isolated submitter Preview only.\n',
+  'This uploads the dedicated StudioNet account to the isolated submitter Preview only.\n',
 );
 const password = await promptForKeystorePassword();
 
@@ -42,7 +42,7 @@ try {
   if (error instanceof Error && error.message === 'The keystore password cannot be empty.') {
     throw error;
   }
-  throw new Error('Unable to decrypt the Bradbury keystore; check the password.');
+  throw new Error('Unable to decrypt the StudioNet submitter keystore; check the password.');
 } finally {
   password.fill(0);
 }

@@ -88,7 +88,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       "POISONED",
     ]).has(application.genlayerSubmitterStatus ?? "");
     if (terminal) return;
-    // A finalized Bradbury result is not a finished marketplace payment. Keep
+    // A finalized StudioNet result is not a finished marketplace payment. Keep
     // retrying this idempotent request until the fenced Base relay is mirrored.
     if (
       application.genlayerSubmitterStatus === "FINALIZED" &&

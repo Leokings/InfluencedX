@@ -1,7 +1,7 @@
 import { assertResolverResult, project, transactionBindingError } from "./submission-service";
 import { SubmitterProblem } from "./problem";
 import type {
-  BradburyReader,
+  GenLayerReader,
   ResolverOutcome,
   SubmissionProjection,
   SubmissionRecord,
@@ -20,7 +20,7 @@ export type ReconciliationObservation = Readonly<{
 
 /**
  * Read-only inspection for the one legacy quarantine caused by requiring a
- * `value` property that Bradbury consensus receipts do not expose.
+ * `value` property that historical Bradbury consensus receipts did not expose.
  *
  * This function has no writer in its dependency type and cannot submit or
  * unlock the signer. The operator script applies a terminal observation only
@@ -28,7 +28,7 @@ export type ReconciliationObservation = Readonly<{
  */
 export async function inspectLegacyValueOmission(
   record: SubmissionRecord,
-  reader: BradburyReader,
+  reader: GenLayerReader,
 ): Promise<ReconciliationObservation> {
   if (
     record.status !== "RECONCILIATION_REQUIRED" ||
@@ -43,12 +43,17 @@ export async function inspectLegacyValueOmission(
   }
 
   const receipt = await reader.getTransaction(record.txHash);
-  const bindingError = transactionBindingError(receipt, record, reader.signerAddress);
+  const bindingError = transactionBindingError(
+    receipt,
+    record,
+    reader.signerAddress,
+    reader.resolverAddress,
+  );
   if (bindingError) {
     throw new SubmitterProblem(
       409,
       "RECONCILIATION_BINDING_FAILED",
-      `The existing Bradbury transaction failed exact binding: ${bindingError}.`,
+      `The existing historical GenLayer transaction failed exact binding: ${bindingError}.`,
     );
   }
 

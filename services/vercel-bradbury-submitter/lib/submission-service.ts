@@ -4,9 +4,10 @@ import {
   CAMPAIGN_SUBMITTER_METHOD,
   METRICS_SUBMITTER_METHOD,
   MAX_POLL_ATTEMPTS,
-  PINNED_BRADBURY_RESOLVER,
+  PINNED_STUDIONET_RESOLVER,
   PRECHECK_LEASE_MS,
   SUBMITTER_METHOD,
+  SUBMITTER_NETWORK,
   TERMINAL_STATUSES,
 } from "./constants";
 import {
@@ -22,7 +23,7 @@ import {
 import { GateBusyError, PoisonMessageError, SubmitterProblem } from "./problem";
 import type { QueuePublisher } from "./queue-publisher";
 import type {
-  BradburyClient,
+  StudioNetClient,
   QueueMessage,
   Receipt,
   MetricsResultData,
@@ -55,7 +56,7 @@ const VERIFIED_FLAGS = [
 export class SubmissionService {
   constructor(
     private readonly repository: SubmissionRepository,
-    private readonly client: BradburyClient,
+    private readonly client: StudioNetClient,
     private readonly queue: QueuePublisher,
     private readonly now = () => new Date(),
   ) {}
@@ -65,6 +66,17 @@ export class SubmissionService {
     const record = await this.repository.get(message.requestId);
     if (!record) throw new PoisonMessageError("UNKNOWN_QUEUE_REQUEST", "The queue request does not exist.", message.requestId);
     if (TERMINAL_STATUSES.has(record.status)) return;
+    if (
+      record.network !== SUBMITTER_NETWORK ||
+      record.resolver.toLowerCase() !== PINNED_STUDIONET_RESOLVER.toLowerCase()
+    ) {
+      await this.repository.markPoisoned(record.requestId, "SUBMISSION_NETWORK_BINDING_MISMATCH");
+      throw new PoisonMessageError(
+        "SUBMISSION_NETWORK_BINDING_MISMATCH",
+        "The durable submission is not bound to the current StudioNet resolver.",
+        record.requestId,
+      );
+    }
     if (record.status === "SUBMITTED" || record.status === "POLLING") {
       await this.poll(record);
       return;
@@ -105,7 +117,8 @@ export class SubmissionService {
       existing = await this.client.readExistingResult(record.requestId);
     } catch {
       await this.repository.failPrecheck(claim, "BRADBURY_PRECHECK_UNAVAILABLE");
-      throw new SubmitterProblem(503, "BRADBURY_PRECHECK_UNAVAILABLE", "Bradbury could not be checked safely; no transaction was submitted.");
+      // The persisted error code is retained for compatibility with existing alerts.
+      throw new SubmitterProblem(503, "BRADBURY_PRECHECK_UNAVAILABLE", "StudioNet could not be checked safely; no transaction was submitted.");
     }
     if (existing !== null) {
       let outcome: ResolverOutcome | null = null;
@@ -167,7 +180,8 @@ export class SubmissionService {
         lastPolledAt: this.now(),
         errorCode: "BRADBURY_POLL_UNAVAILABLE",
       });
-      throw new SubmitterProblem(503, "BRADBURY_POLL_UNAVAILABLE", "Bradbury transaction polling is temporarily unavailable.");
+      // The persisted error code is retained for compatibility with existing alerts.
+      throw new SubmitterProblem(503, "BRADBURY_POLL_UNAVAILABLE", "StudioNet transaction polling is temporarily unavailable.");
     }
 
     const bindingError = transactionBindingError(receipt, record, this.client.signerAddress);
@@ -262,6 +276,7 @@ export function transactionBindingError(
   receipt: Receipt,
   record: Pick<SubmissionRecord, "requestId" | "txHash" | "callFingerprint" | "functionName">,
   signerAddress: string,
+  expectedResolver: string = PINNED_STUDIONET_RESOLVER,
 ): string | null {
   const hash = normalizedString(receipt.hash ?? receipt.txId);
   if (!hash) return "TRANSACTION_HASH_MISSING_FROM_RECEIPT";
@@ -273,9 +288,9 @@ export function transactionBindingError(
 
   const recipient = normalizedString(receipt.toAddress ?? receipt.recipient ?? receipt.to_address);
   if (!recipient) return "TRANSACTION_RESOLVER_MISSING";
-  if (recipient.toLowerCase() !== PINNED_BRADBURY_RESOLVER.toLowerCase()) return "TRANSACTION_RESOLVER_MISMATCH";
+  if (recipient.toLowerCase() !== expectedResolver.toLowerCase()) return "TRANSACTION_RESOLVER_MISMATCH";
 
-  // Bradbury's consensus transaction view (the object returned by
+  // StudioNet's consensus transaction view (the object returned by
   // genlayer-js getTransaction) does not currently expose the outer EVM
   // transaction value. The only write adapter in this service hard-codes
   // `value: 0n`, and callers cannot supply or override it. If a future SDK

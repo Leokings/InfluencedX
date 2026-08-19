@@ -1,8 +1,8 @@
-# InfluencedX Vercel Bradbury submitter
+# InfluencedX Vercel StudioNet submitter
 
-This is a separate, testnet-only Vercel service that accepts exact InfluencedX
+This is a separate, StudioNet-only Vercel service that accepts exact InfluencedX
 ownership, campaign-resolution, and creator-metrics envelopes and submits only
-their three allowlisted Intelligent Contract calls to GenLayer Bradbury. It is
+their three allowlisted Intelligent Contract calls to GenLayer StudioNet. It is
 source code only: it has not been linked, deployed, migrated, funded, or given
 secrets.
 
@@ -11,16 +11,19 @@ secrets.
 The caller cannot choose transaction controls. The only state-changing calls are:
 
 ```text
-network:  testnet-bradbury
-RPC:      https://rpc-bradbury.genlayer.com
-resolver: 0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2
+stage:    studionet
+network:  studionet
+chain ID: 61999
+RPC:      https://studio.genlayer.com/api
+resolver: 0x0913b5593Ff16974E2fd616cA678A4986Cb48600
+deploy tx: 0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591
 methods:  verify_ownership | resolve_submission | snapshot_metrics
 args:     the exact schema-bound arguments for the selected envelope kind
 value:    0
 ```
 
 Configuration fails closed unless the enable flag is exactly `true`, the stage
-is `testnet`, the network and resolver match those constants, the database is
+is `studionet`, the network, chain ID, and resolver match those constants, the database is
 PostgreSQL, a non-zero 32-byte signer key exists, and every expected caller
 identity field is configured. The signer key belongs only in this separate
 Vercel project; it must never be added to the InfluencedX web project.
@@ -34,7 +37,7 @@ Vercel project; it must never be added to the InfluencedX web project.
 2. The ingress rejects extra JSON fields, recomputes the APV2 request ID, checks
    the challenge/credential windows and X snowflake timestamp, creates an
    idempotent database job, sends a small request-ID-only queue message, and
-   returns `202` without waiting for Bradbury.
+   returns `202` without waiting for StudioNet.
 3. Vercel Queues invokes the push consumer. `vercel.json` makes that consumer
    air-gapped: Vercel documents that it has no public URL and only queue
    infrastructure can invoke it.
@@ -106,6 +109,8 @@ New requests return `202`; an existing request returns `200`. Both use:
   "replayed": false,
   "submission": {
     "requestId": "0x...",
+    "network": "studionet",
+    "resolver": "0x0913b5593ff16974e2fd616ca678a4986cb48600",
     "status": "QUEUED",
     "lifecycleStatus": null,
     "executionResult": null,
@@ -129,9 +134,15 @@ New requests return `202`; an existing request returns `200`. Both use:
 ## Shared Neon status contract
 
 Run `migrations/0001_bradbury_submissions.sql`,
-`migrations/0002_campaign_submissions.sql`, and
-`migrations/0003_metrics_submissions.sql`, in that order, on the dedicated
+`migrations/0002_campaign_submissions.sql`,
+`migrations/0003_metrics_submissions.sql`, and
+`migrations/0004_studionet_cutover.sql`, in that order, on the dedicated
 InfluencedX submitter database used by the corresponding web environment.
+
+The first migration retains its historical filename and table names. Migration
+0004 changes the defaults for new rows to the coupled StudioNet network/resolver
+pair while allowing the coupled historical Bradbury pair for existing records.
+Mixed network/resolver pairs are rejected.
 
 - `xproof_bradbury_submission_status` is a safe request-ID-keyed projection for
   DB-only web polling.
@@ -154,14 +165,14 @@ npm run build
 npm audit --omit=dev
 ```
 
-No test reads a real secret, calls Bradbury, connects to Neon, sends a real
+No test reads a real secret, calls StudioNet, connects to Neon, sends a real
 queue message, or deploys anything.
 
 ## Deployment prerequisites and order
 
 1. Create a **new Vercel project** with this directory as its Root Directory.
    Do not add this code to the public InfluencedX project.
-2. Create dedicated Preview and Production Neon branches. Apply all three
+2. Create dedicated Preview and Production Neon branches. Apply all four
    service migrations in order and provision least-privilege submitter/web
    database roles.
 3. In the InfluencedX caller project, enable Vercel Secure Backend Access with the
@@ -170,7 +181,7 @@ queue message, or deploys anything.
 4. Configure each submitter environment using `.env.example`. Scope Preview to
    the Preview database and `XPROOF_CALLER_ENVIRONMENT=preview`; scope
    Production to its own database and `production`.
-5. Create a dedicated low-balance Bradbury account. Store
+5. Create a dedicated low-balance StudioNet account. Store
    `GENLAYER_SUBMITTER_PRIVATE_KEY` as a sensitive Vercel secret only in this
    project. Do not reuse a Base owner, treasury, watcher, relayer, browser, or
    team wallet.
@@ -179,7 +190,7 @@ queue message, or deploys anything.
 7. Enable **Preview only**, redeploy, submit one controlled APV2 request, and
    independently verify the transaction hash, sender, resolver, the signer's
    hard-coded zero-value call, decoded method/arguments, execution result, and
-   latest-final resolver result. Bradbury's `genlayer-js` consensus receipt
+   latest-final resolver result. StudioNet's `genlayer-js` consensus receipt
    currently omits the outer EVM `value` field, so absence of that receipt
    field is not itself an error; if the SDK exposes it, it must equal zero.
 8. Add alerts for `RECONCILIATION_REQUIRED`, `EXECUTION_FAILED`,
@@ -198,13 +209,13 @@ WHERE gate_name = 'bradbury-signer-v1';
 ```
 
 Never release a `BROADCASTING` gate based only on age. First establish whether
-Bradbury accepted the call, record/verify its transaction and account nonce,
+the historical Bradbury network accepted the call, record/verify its transaction and account nonce,
 and resolve the request. Only then may an operator clear the singleton gate in
 one reviewed SQL transaction. There is deliberately no public "unlock" or
 arbitrary transaction endpoint.
 
-The Preview incident caused by `genlayer-js` omitting `value` from its
-consensus receipt has a narrowly scoped operator command. It accepts only a
+The historical Bradbury Preview incident caused by `genlayer-js` omitting
+`value` from its consensus receipt has a narrowly scoped operator command. It accepts only a
 `RECONCILIATION_REQUIRED` row whose error is exactly
 `TRANSACTION_VALUE_MISSING`, verifies the saved hash, signer, resolver, method,
 and all eight arguments, and remains read-only until the transaction is

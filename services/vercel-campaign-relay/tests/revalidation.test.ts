@@ -12,7 +12,7 @@ import {
 } from "viem";
 import {
   BASE_SEPOLIA_CHAIN_ID,
-  BRADBURY_RESOLVER,
+  STUDIONET_RESOLVER,
 } from "../lib/constants";
 import {
   independentlyResolveCampaign,
@@ -93,7 +93,7 @@ function baseFixture(overrides: { used?: boolean; assignment?: unknown[]; campai
     async getChainId() { return BASE_SEPOLIA_CHAIN_ID; },
     async readContract(input: { functionName: string }) {
       if (input.functionName === "escrow") return config.escrow;
-      if (input.functionName === "genlayerContract") return padHex(BRADBURY_RESOLVER, { size: 32 });
+      if (input.functionName === "genlayerContract") return padHex(STUDIONET_RESOLVER, { size: 32 });
       if (input.functionName === "threshold") return 2n;
       if (input.functionName === "usedAttestations") return overrides.used ?? false;
       if (input.functionName === "paused") return false;
@@ -111,7 +111,7 @@ function sourceFixture(overrides: { receipt?: Record<string, unknown>; result?: 
     receipt: {
       statusName: TransactionStatus.FINALIZED,
       txExecutionResultName: ExecutionResult.FINISHED_WITH_RETURN,
-      toAddress: BRADBURY_RESOLVER,
+      toAddress: STUDIONET_RESOLVER,
       txDataDecoded: { callData: { method: "resolve_submission", args } },
       ...(overrides.receipt ?? {}),
     },
@@ -131,7 +131,7 @@ function sourceFixture(overrides: { receipt?: Record<string, unknown>; result?: 
   });
 }
 
-test("coordinator independently derives the same settlement from live Base and finalized Bradbury state", async () => {
+test("coordinator independently derives the same settlement from live Base and finalized StudioNet state", async () => {
   const result = await independentlyResolveCampaign({
     request,
     config,
@@ -163,6 +163,7 @@ test("coordinator rejects Base lifecycle, campaign commitment, GenLayer finality
     [baseFixture({ assignment: invalidAssignment }), sourceFixture(), /not awaiting resolution/],
     [baseFixture({ campaign: invalidCampaign }), sourceFixture(), /terms commitment/],
     [baseFixture(), sourceFixture({ receipt: { statusName: TransactionStatus.ACCEPTED } }), /not finalized successfully/],
+    [baseFixture(), sourceFixture({ receipt: { toAddress: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" } }), /another resolver/],
     [baseFixture(), sourceFixture({ args: changedArgs }), /argument 1 mismatch/],
     [baseFixture(), sourceFixture({ result: { evidence_hash: "0x1234" } }), /result evidence is invalid/],
   ];

@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { getAddress, type Address, type Hex } from "viem";
-import type { RelayConfig } from "./config";
-import { LEASE_DURATION_MS } from "./constants";
-import { RelayProblem } from "./problem";
+import type { RelayConfig } from "./config.js";
+import { LEASE_DURATION_MS } from "./constants.js";
+import { RelayProblem } from "./problem.js";
 import type {
   ClaimedResolution,
   RelayJob,
   ResolutionContext,
   ResolutionOutcome,
-} from "./types";
+} from "./types.js";
 
 const { Pool } = pg;
 let sharedPool: pg.Pool | undefined;

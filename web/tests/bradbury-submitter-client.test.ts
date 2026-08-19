@@ -6,6 +6,8 @@ import {
   type BradburySubmitterConfig,
 } from "../lib/bradbury-submitter-client.ts";
 import {
+  BRADBURY_NETWORK,
+  PINNED_BRADBURY_RESOLVER,
   buildOwnershipSubmissionEnvelope,
   ownershipSubmissionRequestId,
 } from "../lib/ownership-submission.ts";
@@ -60,6 +62,8 @@ function envelopeFixture() {
 function projection(requestId: string) {
   return {
     requestId,
+    network: BRADBURY_NETWORK,
+    resolver: PINNED_BRADBURY_RESOLVER,
     status: "QUEUED",
     lifecycleStatus: null,
     executionResult: null,

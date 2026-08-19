@@ -2,7 +2,7 @@ import { DuplicateMessageError, send } from "@vercel/queue";
 import { ApiProblem } from "./verification-api.ts";
 
 export const CAMPAIGN_PROGRESSION_QUEUE_TOPIC =
-  "influencedx-campaign-progression-v1";
+  "influencedx-studionet-campaign-progression-v2";
 export const CAMPAIGN_PROGRESSION_QUEUE_SCHEMA_VERSION = 1;
 export const CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS =
   7 * 24 * 60 * 60;

@@ -14,7 +14,7 @@ fails closed unless all of the following are true:
   `XPROOF_CREATOR_REGISTRY` exactly match the request;
 - a matching, unexpired, unconsumed row exists in
   `ownership_authorization_grants`;
-- the saved request and the trusted Bradbury status projection both say
+- the saved request and the trusted StudioNet status projection both say
   `FINALIZED` / `FINISHED_WITH_RETURN` / `VERIFIED`, with the exact request,
   transaction, resolver, receiver, registry, and creator wallet bindings;
 - the evidence is present, unpurged, unexpired, and its digest, envelope,

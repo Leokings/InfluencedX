@@ -9,15 +9,15 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import type { RelayConfig } from "./config";
+import type { RelayConfig } from "./config.js";
 import {
   BASE_SEPOLIA_CHAIN_ID,
   escrowAbi,
   receiverAbi,
-} from "./constants";
-import { RelayProblem } from "./problem";
-import type { VerifiedQuorum } from "./quorum";
-import type { ResolutionOutcome } from "./types";
+} from "./constants.js";
+import { RelayProblem } from "./problem.js";
+import type { VerifiedQuorum } from "./quorum.js";
+import type { ResolutionOutcome } from "./types.js";
 
 export type PreparedSettlement = Readonly<{
   request: Record<string, unknown>;

@@ -1,7 +1,7 @@
 import pg, { type PoolClient } from "pg";
 
 import {
-  PINNED_BRADBURY_RESOLVER,
+  PINNED_STUDIONET_RESOLVER,
   PRECHECK_LEASE_MS,
   SIGNER_GATE,
   SUBMITTER_NETWORK,
@@ -57,7 +57,7 @@ export class PostgresSubmissionRepository implements SubmissionRepository {
            (request_id, status, network, resolver, function_name)
          VALUES ($1, 'QUEUED', $2, $3, $4)
          ON CONFLICT (request_id) DO NOTHING`,
-        [envelope.requestId, SUBMITTER_NETWORK, PINNED_BRADBURY_RESOLVER.toLowerCase(), functionName],
+        [envelope.requestId, SUBMITTER_NETWORK, PINNED_STUDIONET_RESOLVER.toLowerCase(), functionName],
       );
       await client.query(
         `INSERT INTO xproof_bradbury_submission_jobs
@@ -383,6 +383,8 @@ function mapRecord(row: Record<string, unknown>): SubmissionRecord {
 function mapProjection(row: Record<string, unknown>): SubmissionProjection {
   return Object.freeze({
     requestId: String(row.request_id),
+    network: String(row.network),
+    resolver: String(row.resolver),
     functionName: row.function_name as SubmissionProjection["functionName"],
     status: row.status as SubmissionProjection["status"],
     lifecycleStatus: nullable(row.lifecycle_status),

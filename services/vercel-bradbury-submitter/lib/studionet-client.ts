@@ -1,10 +1,11 @@
 import { createAccount, createClient } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import { TransactionHashVariant, type CalldataEncodable, type TransactionHash } from "genlayer-js/types";
 
 import {
   CAMPAIGN_SUBMITTER_METHOD,
   METRICS_SUBMITTER_METHOD,
+  STUDIONET_CHAIN_ID,
   SUBMITTER_METHOD,
 } from "./constants";
 import type { SubmitterConfig } from "./config";
@@ -14,16 +15,19 @@ import {
   submissionArgs,
 } from "./envelope";
 import type {
-  BradburyClient,
   CampaignEnvelope,
   MetricsEnvelope,
   OwnershipEnvelope,
   Receipt,
+  StudioNetClient,
 } from "./types";
 
-export function createPinnedBradburyClient(config: SubmitterConfig): BradburyClient {
+export function createPinnedStudioNetClient(config: SubmitterConfig): StudioNetClient {
+  if (studionet.id !== STUDIONET_CHAIN_ID || config.chainId !== STUDIONET_CHAIN_ID) {
+    throw new Error("The genlayer-js StudioNet chain ID does not match the pinned submitter chain ID.");
+  }
   const account = createAccount(config.privateKey);
-  const client = createClient({ chain: testnetBradbury, endpoint: config.rpcUrl, account });
+  const client = createClient({ chain: studionet, endpoint: config.rpcUrl, account });
 
   return Object.freeze({
     signerAddress: account.address.toLowerCase(),

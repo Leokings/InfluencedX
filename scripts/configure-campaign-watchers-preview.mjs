@@ -81,11 +81,13 @@ export const WATCHERS = Object.freeze([
 ]);
 
 const BASE_RPC_URL = 'https://sepolia.base.org';
-const GENLAYER_RPC_URL = 'https://rpc-bradbury.genlayer.com';
+const GENLAYER_NETWORK = 'studionet';
+const GENLAYER_CHAIN_ID = 61_999;
+const GENLAYER_RPC_URL = 'https://studio.genlayer.com/api';
 const WEB_PREVIEW_ORIGIN = 'https://influencedx-preview.vercel.app';
 const BASE_ESCROW = getAddress('0x7e9B6B757d1Ef12509889826B2f2A42906661927');
 const BASE_RECEIVER = getAddress('0x15dDbCd98F97065746a1c35f88BB670a7A942264');
-const GENLAYER_RESOLVER = getAddress('0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2');
+const GENLAYER_RESOLVER = getAddress('0x0913b5593Ff16974E2fd616cA678A4986Cb48600');
 const DEPLOYER_KEYSTORE = path.join(
   PROJECT_ROOT,
   '.secrets',
@@ -206,6 +208,8 @@ export function watcherEnvironment({ watcher, privateKey, serviceToken, configEp
     envEntry('XPROOF_SETTLEMENT_CONFIG_EPOCH', assertConfigEpoch(configEpoch)),
     envEntry('XPROOF_BASE_CHAIN_ID', String(baseSepolia.id)),
     envEntry('XPROOF_BASE_SEPOLIA_RPC_URL', BASE_RPC_URL),
+    envEntry('XPROOF_GENLAYER_NETWORK', GENLAYER_NETWORK),
+    envEntry('XPROOF_GENLAYER_CHAIN_ID', String(GENLAYER_CHAIN_ID)),
     envEntry('XPROOF_GENLAYER_RPC_URL', GENLAYER_RPC_URL),
     envEntry('XPROOF_BASE_ESCROW', BASE_ESCROW),
     envEntry('XPROOF_BASE_RECEIVER', BASE_RECEIVER),
@@ -239,6 +243,8 @@ export function relayEnvironment({
     envEntry('XPROOF_SETTLEMENT_CONFIG_EPOCH', assertConfigEpoch(configEpoch)),
     envEntry('XPROOF_BASE_CHAIN_ID', String(baseSepolia.id)),
     envEntry('XPROOF_BASE_SEPOLIA_RPC_URL', BASE_RPC_URL),
+    envEntry('XPROOF_GENLAYER_NETWORK', GENLAYER_NETWORK),
+    envEntry('XPROOF_GENLAYER_CHAIN_ID', String(GENLAYER_CHAIN_ID)),
     envEntry('XPROOF_GENLAYER_RPC_URL', GENLAYER_RPC_URL),
     envEntry('XPROOF_BASE_ESCROW', BASE_ESCROW),
     envEntry('XPROOF_BASE_RECEIVER', BASE_RECEIVER),
@@ -277,6 +283,7 @@ export function webEnvironment({ relayOrigin, relayServiceToken, configEpoch }) 
     envEntry('XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED', 'false'),
     envEntry('XPROOF_SETTLEMENT_CONFIG_EPOCH', assertConfigEpoch(configEpoch)),
     envEntry('XPROOF_APP_ORIGIN', WEB_PREVIEW_ORIGIN),
+    envEntry('XPROOF_GENLAYER_CONTRACT', GENLAYER_RESOLVER),
     envEntry('XPROOF_CAMPAIGN_RELAY_URL', exactHttpsOrigin(relayOrigin)),
     envEntry('XPROOF_CAMPAIGN_RELAY_SERVICE_TOKEN', relayServiceToken, 'sensitive'),
   ];

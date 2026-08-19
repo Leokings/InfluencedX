@@ -2,6 +2,7 @@ import {
   ApiProblem,
   apiError,
   readSameOriginJson,
+  requireString,
 } from "@/lib/verification-api";
 import { createVerificationRequest } from "@/lib/verification-service";
 import { applicationOriginForRequest } from "@/lib/verification-config";
@@ -19,6 +20,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
+    const wallet = requireString(body, "wallet", 64);
     let session = readWalletSession(request);
     const createdPendingSession = !session;
     session ??= createPendingWalletSession();
@@ -27,7 +29,7 @@ export async function POST(request: Request) {
     });
     if (
       isAuthenticatedWalletSession(session) &&
-      !walletSessionMatches(session, body.wallet)
+      !walletSessionMatches(session, wallet)
     ) {
       throw new ApiProblem(
         409,
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
 
     const created = await createVerificationRequest({
       ownerUserId: session.subject,
-      wallet: body.wallet,
+      wallet,
       origin: applicationOriginForRequest(request),
     });
     const response = Response.json(

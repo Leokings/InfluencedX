@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { getAddress } from "viem";
 import {
@@ -18,11 +19,35 @@ import {
   applicationOriginForRequest,
   verificationMutationsEnabled,
 } from "../lib/verification-config.ts";
+import { ApiProblem, apiError, requireString } from "../lib/verification-api.ts";
 
 const WALLET = getAddress("0x1111111111111111111111111111111111111111");
 const RECEIVER = getAddress("0x2222222222222222222222222222222222222222");
 const RESOLVER = getAddress("0x3333333333333333333333333333333333333333");
 const ISSUED_AT = Date.UTC(2026, 7, 8, 20, 0, 0);
+
+test("wallet challenge rejects a missing wallet as a bounded client error", async () => {
+  let problem: unknown;
+  try {
+    requireString({}, "wallet", 64);
+  } catch (error) {
+    problem = error;
+  }
+  assert.ok(problem instanceof ApiProblem);
+  const response = apiError(problem);
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    error: { code: "INVALID_REQUEST", message: "wallet is required." },
+  });
+
+  const route = await readFile(
+    new URL("../app/api/verification/challenge/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /const wallet = requireString\(body, "wallet", 64\)/);
+  assert.match(route, /walletSessionMatches\(session, wallet\)/);
+  assert.match(route, /wallet,\s*origin: applicationOriginForRequest/);
+});
 
 test("normalizes public X handles and rejects profile URLs", () => {
   assert.equal(normalizeXHandle(" @Creator_7 "), "creator_7");

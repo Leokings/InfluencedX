@@ -6,7 +6,7 @@ sequenceDiagram
     actor Creator
     participant App as InfluencedX / PostgreSQL
     participant Base as Base Sepolia escrow
-    participant GL as GenLayer Bradbury
+    participant GL as GenLayer StudioNet
     participant Watchers as 2-of-3 watchers
     participant X as Public X
 
@@ -118,7 +118,7 @@ The exact challenge envelope and resolver ABI are specified in
 5. The creator submits a canonical X post URL. Base stores commitments rather
    than raw X content; the API confirms the exact submission event.
 6. After the retention interval, Base emits a deterministic resolution request.
-7. The app queues only that persisted request through the isolated Bradbury
+7. The app queues only that persisted request through the isolated StudioNet
    submitter. The public route accepts no caller-controlled method or resolver
    arguments and polls idempotently to a terminal lifecycle.
 8. GenLayer resolves the public post against the frozen rules.
@@ -136,12 +136,17 @@ with a receiver backed by a verified GenLayer/Base messaging protocol without
 changing campaign accounting.
 
 The testnet receiver is deliberately a 2-of-3 EIP-712 threshold relay. Each
-watcher independently reads a FINALIZED Bradbury result, rebuilds the exact
+watcher independently reads a FINALIZED StudioNet result, rebuilds the exact
 typed payload, and signs on a separate host. The Base submitter rejects duplicate
 or unauthorized signers, the receiver rejects non-allowlisted resolver sources,
 and each request ID is consumed once. The contract will not permit fewer than
 three watchers or a threshold below two. This is an explicit trust boundary,
 not a claim that Base currently verifies GenLayer consensus directly.
+
+StudioNet is a gasless, temporary developer network whose state may be reset.
+That makes it suitable for the submission rehearsal, but not a durable
+production ledger. A later persistent-network cutover requires a new resolver,
+receiver-source update, environment migration, and fresh end-to-end proofs.
 
 ## Data minimization
 

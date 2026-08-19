@@ -1,7 +1,8 @@
 # InfluencedX automatic campaign settlement runbook
 
-This runbook is for Base Sepolia + GenLayer Bradbury Preview. It does not
-authorize a Mainnet cutover.
+This runbook is for Base Sepolia + GenLayer StudioNet Preview. StudioNet is a
+temporary, resettable developer network; this runbook does not authorize a
+Mainnet cutover.
 
 ## Project topology
 
@@ -38,7 +39,7 @@ Configure exact claims, never team-wide/wildcard callers:
 - web: its Vercel workload identity calls only the relay coordinator origin.
 
 Do not add browser origins, public webhooks, arbitrary cron projects, Production
-environments, or the Bradbury submitter as trusted callers.
+environments, or the StudioNet submitter as trusted callers.
 
 ## Environment variables
 

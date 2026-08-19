@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "network": "studionet",
+  "chainId": 61999,
+  "rpcUrl": "https://studio.genlayer.com/api",
+  "explorerUrl": "https://genlayer-explorer.vercel.app",
+  "temporaryPersistence": true,
+  "deployer": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
+  "resolver": {
+    "address": "0x0913b5593Ff16974E2fd616cA678A4986Cb48600",
+    "deploymentTransaction": "0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591",
+    "deployedAt": "2026-08-19T09:10:51.3583784Z",
+    "status": "FINALIZED",
+    "executionResult": "SUCCESS",
+    "consensusResult": "MAJORITY_AGREE",
+    "protocolVersion": "APV2",
+    "abiVerified": true,
+    "codeVerified": true,
+    "methods": {
+      "verify_ownership": 8,
+      "snapshot_metrics": 5,
+      "resolve_submission": 11,
+      "get_result": 1
+    }
+  },
+  "limitations": {
+    "durability": "StudioNet persistence is temporary. A network reset requires a fresh resolver deployment and a new Base receiver resolver-update ceremony.",
+    "mainnet": false
+  }
+}

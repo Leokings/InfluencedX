@@ -43,7 +43,7 @@ function deploymentArguments(key) {
     manifest.initialOwner,
     manifest.contracts.registry.address,
     manifest.contracts.escrow.address,
-    manifest.genlayerContract,
+    manifest.initialGenlayerContract ?? manifest.genlayerContract,
     manifest.watchers,
     BigInt(manifest.threshold),
   ];
@@ -70,6 +70,16 @@ function mockClient({ registryReceiptAddress, disabledWatcher } = {}) {
       target: manifest.contracts.escrow.address,
     }],
   ]);
+  if (manifest.resolverUpdate) {
+    wiringByHash.set(manifest.resolverUpdate.transactionHash.toLowerCase(), {
+      key: 'receiver',
+      blockNumber: BigInt(manifest.resolverUpdate.blockNumber),
+      functionName: 'setGenLayerContract',
+      args: [manifest.genlayerContract],
+      target: manifest.contracts.receiver.address,
+      from: manifest.finalOwner,
+    });
+  }
 
   return {
     getChainId: async () => 84_532,
@@ -103,7 +113,7 @@ function mockClient({ registryReceiptAddress, disabledWatcher } = {}) {
         status: 'success',
         contractAddress: null,
         blockNumber: wiring.blockNumber,
-        from: manifest.deployer,
+        from: wiring.from ?? manifest.deployer,
         to: wiring.target,
       };
     },
@@ -128,7 +138,7 @@ function mockClient({ registryReceiptAddress, disabledWatcher } = {}) {
       if (!wiring) throw new Error(`unexpected transaction ${hash}`);
       return {
         hash,
-        from: manifest.deployer,
+        from: wiring.from ?? manifest.deployer,
         to: wiring.target,
         blockNumber: wiring.blockNumber,
         nonce: 3n,
@@ -221,4 +231,21 @@ test('verification CLI contains no signer or write path', () => {
   );
   const source = `${cli}\n${verifier}`;
   assert.doesNotMatch(source, /createWalletClient|deployContract|writeContract|sendTransaction|sendRawTransaction/);
+});
+
+test('StudioNet cutover requires the exact ceremony confirmation before every mutation path', () => {
+  const source = fs.readFileSync(
+    path.join(projectRoot, 'scripts', 'cutover-base-receiver-studionet.mjs'),
+    'utf8',
+  );
+
+  assert.match(source, /const CONFIRMATION = 'CUT OVER INFLUENCEDX TO STUDIONET'/);
+  assert.match(
+    source,
+    /if \(currentContract\.toLowerCase\(\) === oldContract\.toLowerCase\(\)\) \{[\s\S]*?await requireMutationConfirmation\([\s\S]*?await write\('setGenLayerContract'/,
+  );
+  assert.match(
+    source,
+    /if \(pausedAfterUpdate\) \{\s*await requireMutationConfirmation\([\s\S]*?await write\('unpause'\)/,
+  );
 });

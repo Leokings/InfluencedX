@@ -6,7 +6,7 @@ import { GateBusyError, PoisonMessageError } from "../lib/problem";
 import { SubmissionIngressService } from "../lib/submission-ingress";
 import { assertResolverResult, SubmissionService, transactionBindingError } from "../lib/submission-service";
 import {
-  FakeBradburyClient,
+  FakeStudioNetClient,
   FakeQueue,
   finalizedReceipt,
   makeEnvelope,
@@ -18,7 +18,7 @@ import {
 
 function setup() {
   const repository = new MemoryRepository();
-  const client = new FakeBradburyClient();
+  const client = new FakeStudioNetClient();
   const queue = new FakeQueue();
   const processor = new SubmissionService(repository, client, queue);
   const ingress = new SubmissionIngressService(repository, queue);
@@ -148,6 +148,27 @@ test("unknown and missing-envelope queue jobs are poisoned without touching the 
   assert.equal(client.submitCalls, 0);
 });
 
+test("a stale Bradbury queue delivery cannot broadcast or poll through the StudioNet runtime", async () => {
+  const { repository, service, client } = setup();
+  const envelope = makeEnvelope();
+  await service.accept(envelope);
+  const current = repository.records.get(envelope.requestId);
+  assert.ok(current);
+  repository.records.set(envelope.requestId, Object.freeze({
+    ...current,
+    network: "testnet-bradbury",
+    resolver: "0x017311b35dbb9802883bdae7fb0efd7bd77cb0b2",
+  }));
+
+  await assert.rejects(
+    service.process(message(envelope.requestId), 1),
+    (error: unknown) =>
+      (error as { code?: string }).code === "SUBMISSION_NETWORK_BINDING_MISMATCH",
+  );
+  assert.equal(repository.records.get(envelope.requestId)?.status, "POISONED");
+  assert.equal(client.submitCalls, 0);
+});
+
 test("polling binds the exact transaction and final resolver outcome", async () => {
   const { repository, service, client, queue } = setup();
   const envelope = makeEnvelope();
@@ -211,7 +232,7 @@ test("receipt binding rejects every mismatched state-changing field", () => {
   assert.equal(transactionBindingError(missingValue, record, SIGNER), null);
 });
 
-test("Bradbury's value-less consensus receipt is accepted only because the signer adapter hard-codes zero value", async () => {
+test("StudioNet's value-less consensus receipt is accepted only because the signer adapter hard-codes zero value", async () => {
   const envelope = makeEnvelope();
   const record = {
     requestId: envelope.requestId,
@@ -225,7 +246,7 @@ test("Bradbury's value-less consensus receipt is accepted only because the signe
   assert.equal(transactionBindingError(receipt, record, SIGNER), null);
 
   const source = await import("node:fs/promises").then((fs) =>
-    fs.readFile(new URL("../lib/bradbury-client.ts", import.meta.url), "utf8"),
+    fs.readFile(new URL("../lib/studionet-client.ts", import.meta.url), "utf8"),
   );
   assert.match(source, /value:\s*0n/);
 });

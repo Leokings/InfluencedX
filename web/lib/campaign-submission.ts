@@ -1,6 +1,10 @@
 import { isHash, type Hex } from "viem";
 import {
+  BRADBURY_NETWORK,
+  PINNED_BRADBURY_RESOLVER,
   ownershipSubmissionStatuses,
+  requireStudioNetwork,
+  requireStudioResolver,
   type OwnershipSubmissionStatus,
 } from "./ownership-submission.ts";
 
@@ -28,6 +32,8 @@ export type CampaignSubmissionEnvelope = Readonly<{
 
 export type CampaignSubmitterSubmission = Readonly<{
   requestId: Hex;
+  network: typeof BRADBURY_NETWORK;
+  resolver: typeof PINNED_BRADBURY_RESOLVER;
   functionName: typeof CAMPAIGN_BRADBURY_METHOD;
   status: Exclude<
     OwnershipSubmissionStatus,
@@ -116,6 +122,8 @@ export function parseCampaignSubmitterSubmission(
   }
   return Object.freeze({
     requestId: bytes32(value.requestId, "requestId"),
+    network: requireStudioNetwork(value.network),
+    resolver: requireStudioResolver(value.resolver),
     functionName: CAMPAIGN_BRADBURY_METHOD,
     status: value.status as CampaignSubmitterSubmission["status"],
     lifecycleStatus: nullableShortString(value.lifecycleStatus),

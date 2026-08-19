@@ -7,7 +7,7 @@
       "experimentalTriggers": [
         {
           "type": "queue/v2beta",
-          "topic": "xproof-bradbury-ownership-v1",
+          "topic": "influencedx-studionet-submissions-v1",
           "retryAfterSeconds": 30,
           "initialDelaySeconds": 0
         }

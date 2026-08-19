@@ -3,17 +3,17 @@ import { createClient } from "genlayer-js";
 import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionHashVariant, type TransactionHash } from "genlayer-js/types";
 
-import {
-  BRADBURY_RPC_URL,
-  PINNED_BRADBURY_RESOLVER,
-  SIGNER_GATE,
-} from "../lib/constants";
+import { SIGNER_GATE } from "../lib/constants";
 import {
   inspectLegacyValueOmission,
   LEGACY_VALUE_OMISSION_ERROR,
 } from "../lib/operator-reconciliation";
 import { closeRepositoryPools, repositoryFor } from "../lib/postgres-repository";
-import type { BradburyReader } from "../lib/types";
+import type { GenLayerReader } from "../lib/types";
+
+const HISTORICAL_BRADBURY_RPC_URL = "https://rpc-bradbury.genlayer.com" as const;
+const HISTORICAL_BRADBURY_RESOLVER =
+  "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" as const;
 
 const REQUEST_ID = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -24,15 +24,16 @@ const signerAddress = required("XPROOF_RECONCILE_SIGNER_ADDRESS").toLowerCase();
 if (!REQUEST_ID.test(requestId)) throw new Error("XPROOF_RECONCILE_REQUEST_ID is invalid.");
 if (!ADDRESS.test(signerAddress)) throw new Error("XPROOF_RECONCILE_SIGNER_ADDRESS is invalid.");
 
-const sdk = createClient({ chain: testnetBradbury, endpoint: BRADBURY_RPC_URL });
-const reader: BradburyReader = Object.freeze({
+const sdk = createClient({ chain: testnetBradbury, endpoint: HISTORICAL_BRADBURY_RPC_URL });
+const reader: GenLayerReader = Object.freeze({
   signerAddress,
+  resolverAddress: HISTORICAL_BRADBURY_RESOLVER,
   async getTransaction(txHash: string) {
     return await sdk.getTransaction({ hash: txHash as TransactionHash }) as Record<string, unknown>;
   },
   async readFinalResult(boundRequestId: string) {
     const raw = await sdk.readContract({
-      address: PINNED_BRADBURY_RESOLVER,
+      address: HISTORICAL_BRADBURY_RESOLVER,
       functionName: "get_result",
       args: [boundRequestId],
       transactionHashVariant: TransactionHashVariant.LATEST_FINAL,

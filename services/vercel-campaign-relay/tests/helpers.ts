@@ -11,7 +11,10 @@ import type { RelayConfig } from "../lib/config";
 import {
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
+  GENLAYER_NETWORK,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
 } from "../lib/constants";
 import { RelayProblem } from "../lib/problem";
 import { typed, type VerifiedQuorum } from "../lib/quorum";
@@ -36,10 +39,12 @@ export function configFixture(overrides: Partial<RelayConfig> = {}): RelayConfig
   return Object.freeze({
     databaseUrl: "postgresql://user:password@db.example.test/db?sslmode=require",
     baseRpcUrl: "https://base.example.test/",
-    genlayerRpcUrl: "https://genlayer.example.test/",
+    genlayerNetwork: GENLAYER_NETWORK,
+    genlayerChainId: STUDIONET_CHAIN_ID,
+    genlayerRpcUrl: STUDIONET_RPC_URL,
     escrow: BASE_SEPOLIA_ESCROW,
     receiver: BASE_SEPOLIA_RECEIVER,
-    resolver: BRADBURY_RESOLVER,
+    resolver: STUDIONET_RESOLVER,
     broadcastEnabled: true,
     relayerPrivateKey: relayerKey,
     relayerAddress,
@@ -90,7 +95,7 @@ export function messageFixture(overrides: Partial<SerializedResolutionMessage> =
     assignmentId: "9",
     outcome: 1,
     evidenceHash,
-    genlayerContract: padHex(BRADBURY_RESOLVER, { size: 32 }).toLowerCase() as Hex,
+    genlayerContract: padHex(STUDIONET_RESOLVER, { size: 32 }).toLowerCase() as Hex,
     genlayerTxHash,
     resolvedAt: "2000",
     relayDeadline: "606800",

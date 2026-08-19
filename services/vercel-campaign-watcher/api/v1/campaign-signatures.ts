@@ -1,11 +1,13 @@
-import { loadConfig } from "../../lib/config";
-import { readJsonBody, requireServiceToken } from "../../lib/http";
-import { requireCallerOidc } from "../../lib/oidc";
-import { json, problemResponse } from "../../lib/problem";
+import { loadConfig } from "../../lib/config.js";
+import { readJsonBody, requireServiceToken } from "../../lib/http.js";
+import { requireCallerOidc } from "../../lib/oidc.js";
+import { json, problemResponse } from "../../lib/problem.js";
 import {
   parseCampaignSignatureRequest,
   signVerifiedCampaignResolution,
-} from "../../lib/protocol";
+} from "../../lib/protocol.js";
+import { serveVercelNodeRequest } from "../../lib/vercel-node.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const config = { runtime: "nodejs" };
 
@@ -21,4 +23,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-export default POST;
+export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  await serveVercelNodeRequest(request, response, POST);
+}

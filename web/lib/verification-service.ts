@@ -706,7 +706,7 @@ export async function refreshOwnershipSubmissionStatus(input: {
     return toProjection(row);
   }
   // Browser polling reads only the submitter's safe status projection. The
-  // private jobs/envelopes table and Bradbury RPC are never touched here.
+  // private jobs/envelopes table and StudioNet RPC are never touched here.
   const result = await getDb().execute(sql`
     select
       request_id,

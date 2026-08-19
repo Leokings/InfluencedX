@@ -19,7 +19,7 @@ test('PowerShell deploy wrapper pins public inputs and keeps secrets out of its 
     'utf8',
   );
 
-  assert.match(source, /0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2/);
+  assert.match(source, /0x0913b5593Ff16974E2fd616cA678A4986Cb48600/);
   assert.match(source, /0x2b71436526cb7fe24e81a2c88e8914121d5b4f1c350fc6946fe6c37cbbf16369/);
   assert.match(source, /BASE_SEPOLIA_RECOVER_REGISTRY_TRANSACTION_HASH/);
   assert.match(source, /grounding-bradbury\.keystore\.json/);

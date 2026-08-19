@@ -5,6 +5,7 @@ import { DataType, newDb } from "pg-mem";
 import type pg from "pg";
 
 import { envelopeFingerprint, submissionCallFingerprint } from "../lib/envelope";
+import { PINNED_STUDIONET_RESOLVER, SUBMITTER_NETWORK } from "../lib/constants";
 import { PostgresSubmissionRepository } from "../lib/postgres-repository";
 import type { SubmissionEnvelope } from "../lib/types";
 import {
@@ -127,8 +128,18 @@ test("Postgres status projection contains no private envelope", async () => {
   const projection = await repository.getProjection(envelope.requestId);
   assert.equal(projection?.requestId, envelope.requestId);
   assert.equal(projection?.queueMessageId, "msg_123");
+  assert.equal(projection?.network, SUBMITTER_NETWORK);
+  assert.equal(projection?.resolver, PINNED_STUDIONET_RESOLVER.toLowerCase());
   assert.equal("envelope" in (projection ?? {}), false);
   assert.equal("challenge" in (projection ?? {}), false);
+  const binding = await pool.query(
+    "SELECT network, resolver FROM xproof_bradbury_submission_status WHERE request_id = $1",
+    [envelope.requestId],
+  );
+  assert.deepEqual(binding.rows[0], {
+    network: SUBMITTER_NETWORK,
+    resolver: PINNED_STUDIONET_RESOLVER.toLowerCase(),
+  });
   await pool.end();
 });
 

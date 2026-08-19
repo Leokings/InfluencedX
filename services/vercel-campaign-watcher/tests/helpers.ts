@@ -14,7 +14,10 @@ import {
   BASE_SEPOLIA_CHAIN_ID,
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
+  GENLAYER_NETWORK,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
 } from "../lib/constants";
 import type {
   BaseReadClient,
@@ -72,10 +75,12 @@ export const requestId = keccak256(encodeAbiParameters(
 export function configFixture(overrides: Partial<WatcherConfig> = {}): WatcherConfig {
   return Object.freeze({
     baseRpcUrl: "https://base.example.test/",
-    genlayerRpcUrl: "https://genlayer.example.test/",
+    genlayerNetwork: GENLAYER_NETWORK,
+    genlayerChainId: STUDIONET_CHAIN_ID,
+    genlayerRpcUrl: STUDIONET_RPC_URL,
     escrow: BASE_SEPOLIA_ESCROW,
     receiver: BASE_SEPOLIA_RECEIVER,
-    resolver: BRADBURY_RESOLVER,
+    resolver: STUDIONET_RESOLVER,
     watcherPrivateKey,
     watcherAddress,
     serviceToken: "s".repeat(40),
@@ -152,7 +157,7 @@ export function baseClientFixture(overrides: {
     async getChainId() { return overrides.chainId ?? BASE_SEPOLIA_CHAIN_ID; },
     async readContract(input: { functionName: string }) {
       if (input.functionName === "escrow") return overrides.wiredEscrow ?? getAddress(BASE_SEPOLIA_ESCROW);
-      if (input.functionName === "genlayerContract") return overrides.wiredResolver ?? (`0x${"0".repeat(24)}${BRADBURY_RESOLVER.slice(2)}`.toLowerCase() as Hex);
+      if (input.functionName === "genlayerContract") return overrides.wiredResolver ?? (`0x${"0".repeat(24)}${STUDIONET_RESOLVER.slice(2)}`.toLowerCase() as Hex);
       if (input.functionName === "threshold") return overrides.threshold ?? 2n;
       if (input.functionName === "isWatcher") return overrides.enabled ?? true;
       if (input.functionName === "usedAttestations") return overrides.used ?? false;
@@ -186,7 +191,7 @@ export function sourceFixture(overrides: {
     receipt: {
       statusName: TransactionStatus.FINALIZED,
       txExecutionResultName: ExecutionResult.FINISHED_WITH_RETURN,
-      toAddress: BRADBURY_RESOLVER,
+      toAddress: STUDIONET_RESOLVER,
       txDataDecoded: { callData: { method: "resolve_submission", args } },
       ...(overrides.receipt ?? {}),
     },

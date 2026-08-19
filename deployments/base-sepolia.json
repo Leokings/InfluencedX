@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "deployedAt": "2026-08-09T05:20:45.426Z",
   "chainId": 84532,
   "rpcUrl": "https://sepolia.base.org",
@@ -9,8 +9,8 @@
   "ownershipAcceptanceRequired": false,
   "treasury": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
   "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "genlayerResolver": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
-  "genlayerContract": "0x000000000000000000000000017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+  "genlayerResolver": "0x0913b5593Ff16974E2fd616cA678A4986Cb48600",
+  "genlayerContract": "0x0000000000000000000000000913b5593Ff16974E2fd616cA678A4986Cb48600",
   "feeBps": 250,
   "watchers": [
     "0x51a54A0E3Fc06B108175b06bE25bFB253Ec53c40",
@@ -45,5 +45,16 @@
     "registry": "0x6eeba5920c00e94ee1c4a41e1804121544d05c9d98c4c1e9bd30d9ae38d5b0d6",
     "escrow": "0xb422cd94edb9e7abe508965205949002399797f7cb78e80de05af8e82e3b62f2"
   },
-  "ownershipTransferTransactions": {}
+  "ownershipTransferTransactions": {},
+  "initialGenlayerResolver": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+  "initialGenlayerContract": "0x000000000000000000000000017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+  "resolverUpdate": {
+    "previousResolver": "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+    "newResolver": "0x0913b5593Ff16974E2fd616cA678A4986Cb48600",
+    "transactionHash": "0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839",
+    "blockNumber": "45683426",
+    "pauseTransactionHash": "0xc047ac56bb4a7210ba8ea7e663f091c1a3a8551c30b4a7c532b617983063b313",
+    "unpauseTransactionHash": "0x9b8c44329557850caacd8a8cc146ca178b44c8902672abf6d69f634808fb64b2",
+    "receiverPausedAfterCutover": false
+  }
 }

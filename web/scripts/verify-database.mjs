@@ -17,6 +17,24 @@ const [tableState] = await sql.query(`
     to_regclass('public.marketplace_creator_profiles') is not null as marketplace_profiles_ready,
     to_regclass('public.marketplace_creator_metrics_snapshots') is not null as marketplace_metrics_ready,
     to_regclass('public.marketplace_campaign_resolution_relays') is not null as marketplace_relays_ready,
+    EXISTS (
+      SELECT 1
+      FROM pg_constraint c
+      JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = 'public'
+        AND t.relname = 'xproof_bradbury_submission_status'
+        AND c.conname = 'xproof_bradbury_submission_status_network_resolver_check'
+        AND pg_get_constraintdef(c.oid) LIKE '%studionet%'
+        AND pg_get_constraintdef(c.oid) LIKE '%testnet-bradbury%'
+    ) AS studionet_history_constraint_ready,
+    (
+      SELECT column_default = '''studionet''::text'
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'xproof_bradbury_submission_status'
+        AND column_name = 'network'
+    ) AS studionet_default_ready,
     (
       select count(*)::int
       from information_schema.columns
@@ -69,6 +87,8 @@ if (
   !tableState.marketplace_profiles_ready ||
   !tableState.marketplace_metrics_ready ||
   !tableState.marketplace_relays_ready ||
+  !tableState.studionet_history_constraint_ready ||
+  !tableState.studionet_default_ready ||
   tableState.column_count !== 68 ||
   tableState.base_relay_column_count !== 13 ||
   tableState.marketplace_genlayer_column_count !== 8 ||
@@ -100,5 +120,6 @@ process.stdout.write(
     marketplaceGenLayerColumns: tableState.marketplace_genlayer_column_count,
     marketplaceRelayColumns: tableState.marketplace_relay_column_count,
     marketplaceRelayRows: marketplaceRelayState.relay_count,
+    studioNetCutoverReady: true,
   })}\n`,
 );

@@ -7,7 +7,8 @@ import { verifyCallerToken } from "../lib/oidc";
 import {
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
 } from "../lib/constants";
 import { configFixture, watcherAddress, watcherPrivateKey } from "./helpers";
 
@@ -17,10 +18,12 @@ function envFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     XPROOF_CAMPAIGN_WATCHER_STAGE: "testnet",
     XPROOF_BASE_CHAIN_ID: "84532",
     XPROOF_BASE_SEPOLIA_RPC_URL: "https://base.example.test",
-    XPROOF_GENLAYER_RPC_URL: "https://genlayer.example.test",
+    XPROOF_GENLAYER_NETWORK: "studionet",
+    XPROOF_GENLAYER_CHAIN_ID: "61999",
+    XPROOF_GENLAYER_RPC_URL: STUDIONET_RPC_URL,
     XPROOF_BASE_ESCROW: BASE_SEPOLIA_ESCROW,
     XPROOF_BASE_RECEIVER: BASE_SEPOLIA_RECEIVER,
-    XPROOF_GENLAYER_RESOLVER: BRADBURY_RESOLVER,
+    XPROOF_GENLAYER_RESOLVER: STUDIONET_RESOLVER,
     XPROOF_WATCHER_PRIVATE_KEY: watcherPrivateKey,
     XPROOF_WATCHER_ADDRESS: watcherAddress,
     XPROOF_WATCHER_SERVICE_TOKEN: "s".repeat(40),
@@ -37,9 +40,17 @@ function envFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 test("configuration permits exactly one pinned watcher key and fails closed", () => {
   const config = loadConfig(envFixture());
   assert.equal(config.watcherAddress, watcherAddress);
+  assert.equal(config.genlayerNetwork, "studionet");
+  assert.equal(config.genlayerChainId, 61_999);
+  assert.equal(config.genlayerRpcUrl, STUDIONET_RPC_URL);
+  assert.equal(config.resolver, STUDIONET_RESOLVER);
   for (const mutation of [
     { XPROOF_CAMPAIGN_WATCHER_ENABLED: "false" },
     { XPROOF_BASE_CHAIN_ID: "1" },
+    { XPROOF_GENLAYER_NETWORK: "testnet-bradbury" },
+    { XPROOF_GENLAYER_CHAIN_ID: "4221" },
+    { XPROOF_GENLAYER_RPC_URL: "https://rpc-bradbury.genlayer.com" },
+    { XPROOF_GENLAYER_RESOLVER: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" },
     { XPROOF_BASE_ESCROW: "0x3333333333333333333333333333333333333333" },
     { XPROOF_WATCHER_PRIVATE_KEY: `0x${"22".repeat(32)}` },
     { XPROOF_WATCHER_PRIVATE_KEYS: `${watcherPrivateKey},${watcherPrivateKey}` },

@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
-import type { RelayConfig } from "./config";
-import { RelayProblem } from "./problem";
+import type { RelayConfig } from "./config.js";
+import { RelayProblem } from "./problem.js";
 
 const jwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 

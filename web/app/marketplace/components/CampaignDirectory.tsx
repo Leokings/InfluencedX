@@ -85,7 +85,7 @@ export function CampaignDirectory() {
             <div><strong>{summary ? summary.openCampaigns : "—"}</strong><span>OPEN CAMPAIGNS</span></div>
             <div><strong>{summary ? usdcAtomsToDisplay(summary.lockedUsdc) : "—"}</strong><span>FUNDED TEST USDC</span></div>
             <div><strong>84532</strong><span>BASE SEPOLIA CHAIN</span></div>
-            <div className="live-stat"><strong>TESTNET</strong><span>GENLAYER BRADBURY</span></div>
+            <div className="live-stat"><strong>STUDIO</strong><span>GENLAYER STUDIONET</span></div>
           </div>
         </div>
 

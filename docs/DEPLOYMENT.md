@@ -1,10 +1,17 @@
 # InfluencedX deployment and rollback runbook
 
-This runbook deploys the submission build against the already-recorded Base
-Sepolia and GenLayer Bradbury contracts. It does not authorize a mainnet launch
-or a contract redeployment.
+This runbook deploys the submission build against the recorded Base Sepolia
+contracts and the current GenLayer StudioNet resolver. It does not authorize a
+mainnet launch or a Base contract redeployment. StudioNet is temporary and may
+be reset; treat every StudioNet deployment and proof as replaceable demo state.
 
-## 1. Pin the testnet boundary
+The current hosted submission build is
+[influencedx-preview.vercel.app](https://influencedx-preview.vercel.app). Its
+six Preview deployments are enabled: web, StudioNet submitter, three isolated
+watchers, and the settlement coordinator/low-balance Base relayer. These hosted
+services do not depend on a developer laptop remaining online.
+
+## 1. Pin the developer-network boundary
 
 | Setting | Required value |
 | --- | --- |
@@ -14,12 +21,16 @@ or a contract redeployment.
 | Creator registry | `0x10079EF049D283BC3f212CCaC4291b3aC2719C48` |
 | Campaign escrow | `0x7e9B6B757d1Ef12509889826B2f2A42906661927` |
 | Attestation receiver | `0x15dDbCd98F97065746a1c35f88BB670a7A942264` |
-| Bradbury APV2 resolver | `0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2` |
+| GenLayer network | StudioNet (`61999`) |
+| GenLayer RPC | `https://studio.genlayer.com/api` |
+| StudioNet APV2 resolver | `0x0913b5593Ff16974E2fd616cA678A4986Cb48600` |
+| Receiver cutover transaction | [`0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839`](https://sepolia.basescan.org/tx/0x6b203216de54bf5be136c8eb66f90c55c0479887fe743be643088682290bc839) |
+| Receiver current state | StudioNet resolver pinned; unpaused |
 | Watcher policy | Three enabled addresses, threshold two |
 
 Before every release, compare those values with
 [`../deployments/base-sepolia.json`](../deployments/base-sepolia.json) and
-[`../deployments/genlayer-bradbury.json`](../deployments/genlayer-bradbury.json),
+[`../deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json),
 then run the read-only verifier:
 
 ```powershell
@@ -31,40 +42,14 @@ npm run verify:base-sepolia
 
 Do not copy an address from a browser screenshot or a frontend label.
 
-## 2. Create a clean source boundary
+## 2. Preserve the dedicated source boundary
 
-The current `adproof/` directory sits inside a different workspace repository.
-Before publishing, create a dedicated InfluencedX repository and make this
-directory its root. Do not carry the parent workspace history or remote into the
-submission repository.
-
-`web/` may retain local nested Git metadata from an earlier standalone web
-checkout. If `web/.git` exists, preserve that metadata outside the source tree
-before initializing the InfluencedX repository; otherwise a recursive `git add`
-can record `web/` as an embedded repository instead of committing the
-application files. From `adproof/`, use a recoverable move into the
-already-ignored `.secrets/` tree:
-
-```powershell
-$sourceRoot = (Resolve-Path .).Path
-$nestedGit = (Resolve-Path .\web\.git -ErrorAction Stop).Path
-$backupRoot = Join-Path $sourceRoot '.secrets\repo-backups'
-$backupGit = Join-Path $backupRoot 'web.git'
-
-if (-not $nestedGit.StartsWith($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-  throw 'Nested Git metadata resolved outside the InfluencedX source root.'
-}
-if (Test-Path -LiteralPath $backupGit) {
-  throw "Refusing to overwrite the existing backup at $backupGit"
-}
-
-New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-Move-Item -LiteralPath $nestedGit -Destination $backupGit
-```
-
-Keep that backup local until the new repository has been cloned elsewhere and
-the complete `web/` tree is confirmed. The committed workflows are already
-root-relative; do not prepend `adproof/` to their paths.
+The project has a dedicated public repository at
+[github.com/Leokings/InfluencedX](https://github.com/Leokings/InfluencedX).
+The repository root is the InfluencedX source boundary and the `origin` remote
+must continue to point to `Leokings/InfluencedX`; do not publish it through an
+unrelated parent workspace or restore nested `web/.git` metadata into the
+source tree. The committed workflows are root-relative.
 
 The repository root `.gitignore` excludes:
 
@@ -84,6 +69,15 @@ Review filenames and staged paths before every commit. Never stage
 `web/.env.local`, a database URL, an auth secret, a private key, a keystore, a
 password file, an exported wallet, or Vercel project metadata. Public addresses
 and transaction hashes in `deployments/*.json` are intentional.
+
+Before publishing, confirm the remote and source boundary without printing any
+secret-bearing files:
+
+```powershell
+git remote -v
+git status --short
+git ls-files web
+```
 
 ## 3. Provision and migrate PostgreSQL
 
@@ -123,9 +117,10 @@ Server-only secret groups are documented in [`../web/.env.example`](../web/.env.
 - Base Sepolia RPC and deployed contract addresses;
 - exact public origin and independent verification/marketplace mutation gates.
 
-None of these values may use the `NEXT_PUBLIC_` prefix. Start with both mutation
-gates and the submitter bridge disabled. Deploy, verify the read-only pages, then
-enable only the Preview gates required for the controlled testnet rehearsal:
+None of these values may use the `NEXT_PUBLIC_` prefix. For a new environment,
+start with both mutation gates and every bridge disabled, deploy, and verify the
+read-only pages before enabling them. The current controlled Preview has these
+gates enabled after migration, binding, and simulation checks:
 
 - `XPROOF_VERIFICATION_MUTATIONS_ENABLED=true`
 - `XPROOF_MARKETPLACE_MUTATIONS_ENABLED=true`
@@ -134,40 +129,54 @@ enable only the Preview gates required for the controlled testnet rehearsal:
   a server-only default: the request body cannot select a sub-day retention,
   the exact effective value is committed into the campaign terms hash, and a
   configured override fails closed unless the runtime is Vercel Preview.
-- `XPROOF_SUBMITTER_BRIDGE_ENABLED=true` only after the isolated submitter is
+- `XPROOF_SUBMITTER_BRIDGE_ENABLED=true` after the isolated submitter is
   healthy and its exact HTTPS origin is configured
-- `XPROOF_AUTHORIZATION_BROKER_ENABLED=true` only for the operator-assisted
-  Preview ownership relay
+- `XPROOF_AUTHORIZATION_BROKER_ENABLED=true` for the scoped Preview ownership
+  relay authorization path
+- `XPROOF_CAMPAIGN_RELAY_BRIDGE_ENABLED=true` after all three watcher services
+  and the coordinator simulation/broadcast gates pass
 
-Production mutations remain disabled until the final security/cutover review.
-Deploying `web/vercel.json` also registers the air-gapped Vercel Queues consumer
-for `influencedx-campaign-progression-v1`. The confirmed Base request publishes
-only its request, campaign, and application IDs; the consumer reclaims the exact
-binding through a fenced Neon lease before contacting GenLayer or the Base relay.
-No browser, laptop process, signer key, or watcher key participates in that
-worker. Queue retries are bounded and the database remains the authoritative
-idempotency boundary.
+These are Preview testnet settings, not authorization for a Production/mainnet
+release. Deploying `web/vercel.json` registers the air-gapped Vercel Queues
+consumer for `influencedx-studionet-campaign-progression-v2`. The confirmed
+Base request publishes only its request, campaign, and application IDs; the
+consumer reclaims the exact binding through a fenced Neon lease before
+contacting GenLayer or the Base relay. No browser, laptop process, signer key,
+or watcher key participates in that worker. Queue retries are bounded and the
+database remains the authoritative idempotency boundary.
 
 The daily cleanup cron and optional authenticated progression-recovery route
 additionally require an independent `CRON_SECRET`. The recovery route is not a
 minute cron and is not part of the normal queue path.
 
-## 5. Deploy the isolated Bradbury submitter
+The old
+[`../deployments/genlayer-bradbury.json`](../deployments/genlayer-bradbury.json)
+record is historical evidence only. Never copy its resolver into current
+configuration.
+
+## 5. Deploy the isolated StudioNet submitter
 
 Deploy `services/vercel-bradbury-submitter/` as a separate Vercel project. It is
-the only hosted process that may hold the funded Bradbury testnet signer. Follow
+the only hosted process that may hold the StudioNet signer. The directory name
+is retained as an internal compatibility path; it does not select the network.
+Follow
 its [service README](../services/vercel-bradbury-submitter/README.md) and use the
 safe names in its `.env.example`.
 
 Required controls:
 
-1. Keep the signer key server-only and scoped to Bradbury testnet.
+1. Keep the signer key server-only and scoped to StudioNet. StudioNet calls are
+   gasless, so do not fund this key with real assets.
 2. Validate the exact Vercel team, project, environment, issuer, audience, and
    submitter stage claims from the short-lived OIDC token.
 3. Allow only the pinned resolver and fixed ownership/campaign methods.
 4. Keep the application database reader away from the private submission-job
    table.
 5. Leave the service disabled until migrations and reconciliation checks pass.
+
+Its Vercel Queues consumer is pinned to
+`influencedx-studionet-submissions-v1`; do not reuse the historical queue topic
+or point the consumer at another GenLayer network.
 
 Do not replace Vercel OIDC with a long-lived shared bearer token.
 
@@ -179,19 +188,27 @@ Do not replace Vercel OIDC with a long-lived shared bearer token.
 4. Deploy the web project with all mutation gates false.
 5. Confirm the landing page, campaign directory empty/loading/error states,
    public creator profile, contract links, and Base Sepolia chain prompt.
-6. Enable the submitter, then Preview verification and marketplace mutations.
-7. Complete one fresh-wallet ownership proof and confirm both Bradbury finality
+6. Enable the three watchers, coordinator simulation, coordinator broadcast,
+   submitter, web bridges, and finally Preview verification/marketplace
+   mutations in that order.
+7. Complete one fresh-wallet ownership proof and confirm both StudioNet finality
    and the Base registry receipt.
 8. Complete one full campaign rehearsal: create, approve/fund, apply, select,
-   accept, submit a canonical X URL, request resolution, and reach Bradbury
+   accept, submit a canonical X URL, request resolution, and reach StudioNet
    finality.
-9. Have two independent watchers relay the campaign result and confirm the final
-   Base settlement receipt before calling the rehearsal paid or refunded.
+9. Allow the hosted coordinator to collect at least two matching watcher
+   signatures and relay the result automatically. Confirm the final Base
+   settlement receipt before calling the rehearsal paid or refunded.
 10. Run the [three-minute demo checklist](DEMO-SCRIPT.md) without showing any
     secret-bearing terminal, hosting settings page, or wallet recovery material.
 
 Every displayed state must come from the API or chain receipt. Do not use a demo
 fixture to label a campaign funded, verified, paid, or refunded.
+
+The infrastructure portion of this sequence is live on Preview. Steps 7-10
+remain the submission-evidence gap: record a fresh StudioNet ownership flow, a
+complete campaign through the final Base receipt, and the three-minute demo
+video.
 
 ## 7. Rollback and reconciliation
 
@@ -201,7 +218,7 @@ If a release fails:
 2. Stop new jobs, but do not delete database rows or rebroadcast transactions.
 3. Restore the previous known-good Vercel deployment.
 4. Reconcile every prepared or submitted transaction by hash against Base or
-   Bradbury before retrying it.
+   StudioNet before retrying it.
 5. Resume an idempotent request only after the database state matches the chain.
 6. Rotate a secret only if exposure is suspected; keep retiring evidence keys
    available until every ciphertext sealed under them has expired or completed.
@@ -228,6 +245,7 @@ A mainnet launch additionally requires, at minimum:
 - dedicated RPC providers, observability, database backup/restore and deletion
   drills, legal/privacy review, and a controlled production cutover.
 
-Base Sepolia ETH, Base Sepolia test USDC, and Bradbury state have no monetary
-value. Passing this runbook makes the submission reproducible; it does not turn
-the testnet deployment into a production mainnet system.
+Base Sepolia ETH, Base Sepolia test USDC, and StudioNet state have no monetary
+value. StudioNet state is also resettable and must not be treated as durable.
+Passing this runbook makes the submission reproducible; it does not turn the
+developer-network deployment into a production mainnet system.

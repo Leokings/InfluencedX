@@ -1,7 +1,8 @@
 # InfluencedX campaign settlement coordinator
 
-Private Vercel Function that turns a persisted FINALIZED GenLayer campaign
-result into a fenced Base Sepolia `submitCampaignResolution` transaction.
+Private Vercel Function that turns a persisted FINALIZED StudioNet campaign
+result from the pinned APV2 resolver into a fenced Base Sepolia
+`submitCampaignResolution` transaction.
 
 The caller supplies only `requestId`. The coordinator reloads the application,
 committed campaign terms, submission, Base assignment, and finalized GenLayer
@@ -9,6 +10,12 @@ projection from Postgres. It requests all three independent watchers, verifies
 at least the live receiver threshold (never below two) distinct enabled
 signatures over one identical EIP-712 message, independently repeats Base and
 GenLayer binding checks, and simulates the exact receiver call.
+
+The runtime fails closed unless the GenLayer network is `studionet`, chain ID
+is `61999`, RPC is `https://studio.genlayer.com/api`, and resolver is
+`0x0913b5593Ff16974E2fd616cA678A4986Cb48600`. Legacy-network jobs cannot pass
+the new RPC, recipient, and resolver bindings. StudioNet state is temporary, so
+the resolver and every hosted binding must be cut over together after a reset.
 
 `0006_campaign_settlement_relay.sql` is required. Its one-request/one-round
 fence allows pre-broadcast retries only after lease expiry. Once broadcast

@@ -1,6 +1,13 @@
-# Preview ownership proof -> Base Sepolia
+# RETIRED: Bradbury ownership proof -> Base Sepolia
 
-This one-shot operator relays the currently pinned InfluencedX ownership proof from
+> **Do not run this procedure after the StudioNet cutover.** It is retained only
+> to explain the historical Base transaction recorded in the verification
+> report. Its proof, transaction hash, and resolver are bound to Bradbury and
+> cannot be replayed or relabeled as StudioNet evidence. New ownership proofs
+> must be submitted through the hosted StudioNet pipeline and finalized against
+> resolver `0x0913b5593Ff16974E2fd616cA678A4986Cb48600`.
+
+The historical one-shot operator relayed the then-pinned InfluencedX ownership proof from
 GenLayer Bradbury to the deployed Base Sepolia attestation receiver. It is not a
 generic relayer and it refuses Production.
 
@@ -15,13 +22,11 @@ generic relayer and it refuses Production.
 - The encrypted testnet watcher files and funded Base Sepolia relayer keystore
   are present under `.secrets/`. The relayer password is known to the operator.
 
-## Launch
+## Disabled entry point
 
-Open a visible PowerShell window from `adproof`:
-
-```powershell
-npm run relay:preview:base-sepolia -- -PreviewUrl https://influencedx-DEPLOYMENT.vercel.app
-```
+The npm launch entry was removed during the StudioNet cutover so this historical
+Bradbury ceremony cannot be invoked accidentally. The source remains only for
+audit and regression-test provenance.
 
 The program performs, in order:
 

@@ -16,7 +16,7 @@ import {
   transactionBindingError,
 } from "../lib/submission-service";
 import {
-  FakeBradburyClient,
+  FakeStudioNetClient,
   FakeQueue,
   finalizedMetricsReceipt,
   makeMetricsEnvelope,
@@ -29,7 +29,7 @@ import {
 
 function setup() {
   const repository = new MemoryRepository();
-  const client = new FakeBradburyClient();
+  const client = new FakeStudioNetClient();
   const queue = new FakeQueue();
   return {
     repository,

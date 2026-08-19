@@ -505,7 +505,7 @@ export default function VerifyFlow() {
       );
       setRequest(result.request);
       setNotice(
-        "Submission accepted for Bradbury processing. Finality is tracked asynchronously; this is not yet a Base attestation.",
+        "Submission accepted for StudioNet processing. Finality is tracked asynchronously; this is not yet a Base attestation.",
       );
     } catch (submissionError) {
       setError(
@@ -782,14 +782,14 @@ export default function VerifyFlow() {
                       : baseRelayNeedsReview
                         ? `The Base record is not a current verified profile${baseRelayErrorCode ? ` (${baseRelayErrorCode})` : ""}. InfluencedX will not present it as active.`
                         : genlayerDidNotVerify
-                          ? `Bradbury finalized this request as ${request.genlayerOutcome ?? "UNDETERMINED"}. Nothing was relayed to Base.`
+                          ? `StudioNet finalized this request as ${request.genlayerOutcome ?? "UNDETERMINED"}. Nothing was relayed to Base.`
                           : genlayerFailed
                             ? `Durable state: ${request.submissionStatus.replaceAll("_", " ")}. Nothing is presented as verified on Base.`
                             : genlayerVerified
                               ? "Validator consensus is final. The creator credential is not active on Base until watcher quorum relays it to the receiver."
                       : genlayerStarted
                         ? `Durable state: ${request.submissionStatus.replaceAll("_", " ")}. You can leave this page and return later.`
-                        : "Submit the sealed proof to Bradbury. The submitter cannot choose another contract, method, or argument set."}
+                        : "Submit the sealed proof to StudioNet. The submitter cannot choose another contract, method, or argument set."}
                   </p>
                   {!genlayerStarted || genlayerRetryable ? (
                     <button

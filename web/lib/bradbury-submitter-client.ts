@@ -206,7 +206,7 @@ async function request(
   } catch {
     throw new BradburySubmitterProblem(
       "SUBMITTER_UNAVAILABLE",
-      "The Bradbury submission service is temporarily unavailable.",
+      "The StudioNet submission service is temporarily unavailable.",
       { ambiguous: ambiguousOnFailure },
     );
   }
@@ -215,7 +215,7 @@ async function request(
   if (!response.ok) {
     throw new BradburySubmitterProblem(
       "SUBMITTER_UNAVAILABLE",
-      "The Bradbury submission service did not accept the request.",
+      "The StudioNet submission service did not accept the request.",
       { ambiguous: ambiguousOnFailure },
     );
   }
@@ -270,14 +270,14 @@ function looksLikeJwt(value: unknown): value is string {
 function configurationRequired(): BradburySubmitterProblem {
   return new BradburySubmitterProblem(
     "CONFIGURATION_REQUIRED",
-    "The authenticated Bradbury submission boundary is not configured.",
+    "The authenticated StudioNet submission boundary is not configured.",
   );
 }
 
 function invalidResponse(): BradburySubmitterProblem {
   return new BradburySubmitterProblem(
     "SUBMITTER_RESPONSE_INVALID",
-    "The Bradbury submission service returned an invalid response.",
+    "The StudioNet submission service returned an invalid response.",
   );
 }
 

@@ -24,7 +24,7 @@ import {
   watcherAddress,
 } from "./helpers";
 
-test("one watcher independently verifies Base and finalized Bradbury state before signing", async () => {
+test("one watcher independently verifies Base and finalized StudioNet state before signing", async () => {
   const result = await signVerifiedCampaignResolution(requestFixture(), configFixture(), {
     baseClient: baseClientFixture(),
     readFinalizedSource: async () => sourceFixture(),
@@ -110,6 +110,7 @@ test("watcher rejects receiver configuration, replay, and campaign terms diverge
 test("watcher rejects non-final, wrong-call, divergent-result, and stale GenLayer sources", async () => {
   const cases: Array<[ReturnType<typeof sourceFixture>, number, RegExp]> = [
     [sourceFixture({ receipt: { statusName: TransactionStatus.ACCEPTED } }), 2_000, /not finalized/],
+    [sourceFixture({ receipt: { toAddress: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" } }), 2_000, /another resolver/],
     [sourceFixture({ receipt: { toAddress: creator } }), 2_000, /another resolver/],
     [sourceFixture({ receipt: { txDataDecoded: { callData: { method: "verify_ownership", args: [] } } } }), 2_000, /method or arguments/],
     [sourceFixture({ args: [requestId, "wrong", ...sourceFixture().receipt.txDataDecoded ? [] : []] }), 2_000, /method or arguments|argument/],

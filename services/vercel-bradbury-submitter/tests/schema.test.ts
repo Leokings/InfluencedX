@@ -5,6 +5,9 @@ import test from "node:test";
 const migration = await readFile(new URL("../migrations/0001_bradbury_submissions.sql", import.meta.url), "utf8");
 const campaignMigration = await readFile(new URL("../migrations/0002_campaign_submissions.sql", import.meta.url), "utf8");
 const metricsMigration = await readFile(new URL("../migrations/0003_metrics_submissions.sql", import.meta.url), "utf8");
+const studioNetMigration = await readFile(new URL("../migrations/0004_studionet_cutover.sql", import.meta.url), "utf8");
+const vercelConfig = await readFile(new URL("../vercel.json", import.meta.url), "utf8");
+const queuePublisher = await readFile(new URL("../lib/queue-publisher.ts", import.meta.url), "utf8");
 
 test("shared Neon schema exposes a safe requestId status projection and a separate private job table", () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS xproof_bradbury_submission_status/);
@@ -33,4 +36,20 @@ test("metrics migration allowlists snapshot_metrics and stores only sanitized re
   assert.match(metricsMigration, /function_name = 'snapshot_metrics'/);
   assert.match(metricsMigration, /'followers'.*'engagement_consistency'/s);
   assert.doesNotMatch(metricsMigration, /raw_html|raw_json|caller_counts/i);
+});
+
+test("StudioNet cutover defaults new rows to the finalized resolver while preserving only coupled historical pairs", () => {
+  assert.match(studioNetMigration, /ALTER COLUMN network SET DEFAULT 'studionet'/);
+  assert.match(studioNetMigration, /ALTER COLUMN resolver SET DEFAULT '0x0913b5593ff16974e2fd616ca678a4986cb48600'/);
+  assert.match(studioNetMigration, /xproof_bradbury_submission_status_network_resolver_check/);
+  assert.match(studioNetMigration, /network = 'testnet-bradbury'[\s\S]+resolver = '0x017311b35dbb9802883bdae7fb0efd7bd77cb0b2'/);
+  assert.match(studioNetMigration, /network = 'studionet'[\s\S]+resolver = '0x0913b5593ff16974e2fd616ca678a4986cb48600'/);
+  assert.doesNotMatch(studioNetMigration, /network\s+IN|resolver\s+IN/);
+});
+
+test("the queue trigger uses a StudioNet-specific topic so legacy deliveries cannot reach this consumer", () => {
+  assert.match(vercelConfig, /"topic": "influencedx-studionet-submissions-v1"/);
+  assert.doesNotMatch(vercelConfig, /xproof-bradbury-ownership-v1/);
+  assert.match(queuePublisher, /influencedx-studionet-submit:/);
+  assert.match(queuePublisher, /influencedx-studionet-poll:/);
 });

@@ -5,7 +5,8 @@ addresses. Watchers are independent attestors, not deployers. Never reuse the
 GenLayer/Base deployer, contract owner, treasury, creator, or relayer account as
 a watcher.
 
-This bootstrap is intentionally limited to Base Sepolia and GenLayer Bradbury.
+This bootstrap is intentionally limited to Base Sepolia and GenLayer StudioNet.
+StudioNet is temporary/resettable and these test keys are not production keys.
 It creates three distinct secp256k1 keys, immediately encrypts each one as a
 standard Web3 Secret Storage v3 keystore using a separate scrypt-derived key,
 and writes only encrypted JSON keystores. Private keys exist transiently in
@@ -58,7 +59,7 @@ ADPROOF_WATCHER_KEYSTORE_PASSWORD_FILE=C:\run\secrets\watcher-1.password
 Then use the existing relay command:
 
 ```powershell
-npm run relay:watch -- --resolver <BRADBURY_RESOLVER> --tx <GENLAYER_TX> --request-id <REQUEST_ID> --receiver <BASE_RECEIVER> --ownership-signature <CREATOR_SIGNATURE> --output <UNIQUE_OUTPUT_FILE>
+npm run relay:watch -- --resolver <STUDIONET_RESOLVER> --tx <GENLAYER_TX> --request-id <REQUEST_ID> --receiver <BASE_RECEIVER> --ownership-signature <CREATOR_SIGNATURE> --output <UNIQUE_OUTPUT_FILE>
 ```
 
 `relay-watcher.mjs` decrypts the key only in memory, signs the exact EIP-712
@@ -77,7 +78,7 @@ accepts `ADPROOF_WATCHER_PRIVATE_KEY`.
   provider or host.
 - Give watchers no Base ETH; watcher addresses only sign. The separate relayer
   pays transaction gas.
-- A watcher must independently read the finalized Bradbury result before
+- A watcher must independently read the finalized StudioNet result before
   signing. Never distribute a pre-approved result from the app server.
 - Collect any two matching bundles and submit them with `relay-submit.mjs`.
 - If a keystore or password is exposed, disable that watcher on the receiver,

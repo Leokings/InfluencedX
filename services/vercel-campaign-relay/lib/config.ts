@@ -4,9 +4,12 @@ import {
   BASE_SEPOLIA_CHAIN_ID,
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
-} from "./constants";
-import { RelayProblem } from "./problem";
+  GENLAYER_NETWORK,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
+} from "./constants.js";
+import { RelayProblem } from "./problem.js";
 
 export type WatcherTarget = Readonly<{
   origin: string;
@@ -17,10 +20,12 @@ export type WatcherTarget = Readonly<{
 export type RelayConfig = Readonly<{
   databaseUrl: string;
   baseRpcUrl: string;
-  genlayerRpcUrl: string;
+  genlayerNetwork: typeof GENLAYER_NETWORK;
+  genlayerChainId: typeof STUDIONET_CHAIN_ID;
+  genlayerRpcUrl: typeof STUDIONET_RPC_URL;
   escrow: typeof BASE_SEPOLIA_ESCROW;
   receiver: typeof BASE_SEPOLIA_RECEIVER;
-  resolver: typeof BRADBURY_RESOLVER;
+  resolver: typeof STUDIONET_RESOLVER;
   broadcastEnabled: boolean;
   relayerPrivateKey: Hex | null;
   relayerAddress: Address | null;
@@ -42,10 +47,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
   if (required(env, "XPROOF_BASE_CHAIN_ID") !== String(BASE_SEPOLIA_CHAIN_ID)) fail("XPROOF_BASE_CHAIN_ID must be 84532.");
   const databaseUrl = postgresUrl(required(env, "DATABASE_URL"));
   const baseRpcUrl = httpsUrl(required(env, "XPROOF_BASE_SEPOLIA_RPC_URL"), "XPROOF_BASE_SEPOLIA_RPC_URL", true);
+  if (required(env, "XPROOF_GENLAYER_NETWORK") !== GENLAYER_NETWORK) fail("XPROOF_GENLAYER_NETWORK must be studionet.");
+  if (required(env, "XPROOF_GENLAYER_CHAIN_ID") !== String(STUDIONET_CHAIN_ID)) fail("XPROOF_GENLAYER_CHAIN_ID must be 61999.");
   const genlayerRpcUrl = httpsUrl(required(env, "XPROOF_GENLAYER_RPC_URL"), "XPROOF_GENLAYER_RPC_URL", true);
+  if (genlayerRpcUrl !== STUDIONET_RPC_URL) fail("XPROOF_GENLAYER_RPC_URL must be the pinned StudioNet RPC URL.");
   pinnedAddress(required(env, "XPROOF_BASE_ESCROW"), BASE_SEPOLIA_ESCROW, "XPROOF_BASE_ESCROW");
   pinnedAddress(required(env, "XPROOF_BASE_RECEIVER"), BASE_SEPOLIA_RECEIVER, "XPROOF_BASE_RECEIVER");
-  pinnedAddress(required(env, "XPROOF_GENLAYER_RESOLVER"), BRADBURY_RESOLVER, "XPROOF_GENLAYER_RESOLVER");
+  pinnedAddress(required(env, "XPROOF_GENLAYER_RESOLVER"), STUDIONET_RESOLVER, "XPROOF_GENLAYER_RESOLVER");
   const broadcastRaw = required(env, "XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED");
   if (broadcastRaw !== "true" && broadcastRaw !== "false") fail("XPROOF_CAMPAIGN_RELAY_BROADCAST_ENABLED must be true or false.");
   const broadcastEnabled = broadcastRaw === "true";
@@ -86,10 +94,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
   return Object.freeze({
     databaseUrl,
     baseRpcUrl,
-    genlayerRpcUrl,
+    genlayerNetwork: GENLAYER_NETWORK,
+    genlayerChainId: STUDIONET_CHAIN_ID,
+    genlayerRpcUrl: STUDIONET_RPC_URL,
     escrow: BASE_SEPOLIA_ESCROW,
     receiver: BASE_SEPOLIA_RECEIVER,
-    resolver: BRADBURY_RESOLVER,
+    resolver: STUDIONET_RESOLVER,
     broadcastEnabled,
     relayerPrivateKey,
     relayerAddress,

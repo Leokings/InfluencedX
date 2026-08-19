@@ -1,5 +1,8 @@
 import {
-  PINNED_BRADBURY_RESOLVER,
+  PINNED_STUDIONET_RESOLVER,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RPC_URL,
+  SUBMITTER_NETWORK,
   SUBMITTER_SCHEMA_VERSION,
   X_EPOCH_MS,
 } from "../lib/constants";
@@ -14,7 +17,7 @@ import {
 import { SubmitterProblem } from "../lib/problem";
 import type { QueuePublisher } from "../lib/queue-publisher";
 import type {
-  BradburyClient,
+  StudioNetClient,
   CampaignEnvelope,
   MetricsEnvelope,
   OwnershipEnvelope,
@@ -36,9 +39,10 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): No
   return {
     NODE_ENV: "test",
     XPROOF_SUBMITTER_ENABLED: "true",
-    XPROOF_SUBMITTER_STAGE: "testnet",
-    XPROOF_GENLAYER_NETWORK: "testnet-bradbury",
-    XPROOF_GENLAYER_RESOLVER: PINNED_BRADBURY_RESOLVER,
+    XPROOF_SUBMITTER_STAGE: "studionet",
+    XPROOF_GENLAYER_NETWORK: "studionet",
+    XPROOF_GENLAYER_CHAIN_ID: String(STUDIONET_CHAIN_ID),
+    XPROOF_GENLAYER_RESOLVER: PINNED_STUDIONET_RESOLVER,
     GENLAYER_SUBMITTER_PRIVATE_KEY: `0x${"11".repeat(32)}`,
     DATABASE_URL: "postgresql://example.invalid/xproof",
     XPROOF_CALLER_TEAM_SLUG: "leokings588-5902s-projects",
@@ -53,10 +57,11 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): No
 export function configFixture(): SubmitterConfig {
   return {
     enabled: true,
-    stage: "testnet",
-    network: "testnet-bradbury",
-    resolver: PINNED_BRADBURY_RESOLVER,
-    rpcUrl: "https://rpc-bradbury.genlayer.com",
+    stage: "studionet",
+    network: "studionet",
+    chainId: STUDIONET_CHAIN_ID,
+    resolver: PINNED_STUDIONET_RESOLVER,
+    rpcUrl: STUDIONET_RPC_URL,
     privateKey: `0x${"11".repeat(32)}`,
     databaseUrl: "postgresql://example.invalid/xproof",
     caller: {
@@ -146,7 +151,7 @@ export function finalizedReceipt(envelope: OwnershipEnvelope, overrides: Receipt
   return {
     hash: TX_HASH,
     sender: SIGNER,
-    recipient: PINNED_BRADBURY_RESOLVER,
+    recipient: PINNED_STUDIONET_RESOLVER,
     value: 0,
     statusName: "FINALIZED",
     txExecutionResultName: "FINISHED_WITH_RETURN",
@@ -192,7 +197,7 @@ export function finalizedCampaignReceipt(
   return {
     hash: TX_HASH,
     sender: SIGNER,
-    recipient: PINNED_BRADBURY_RESOLVER,
+    recipient: PINNED_STUDIONET_RESOLVER,
     value: 0,
     statusName: "FINALIZED",
     txExecutionResultName: "FINISHED_WITH_RETURN",
@@ -241,7 +246,7 @@ export function finalizedMetricsReceipt(
   return {
     hash: TX_HASH,
     sender: SIGNER,
-    recipient: PINNED_BRADBURY_RESOLVER,
+    recipient: PINNED_STUDIONET_RESOLVER,
     value: 0,
     statusName: "FINALIZED",
     txExecutionResultName: "FINISHED_WITH_RETURN",
@@ -268,7 +273,7 @@ export class FakeQueue implements QueuePublisher {
   }
 }
 
-export class FakeBradburyClient implements BradburyClient {
+export class FakeStudioNetClient implements StudioNetClient {
   readonly signerAddress = SIGNER;
   precheckResult: unknown = null;
   precheckError: Error | null = null;
@@ -341,6 +346,8 @@ export class MemoryRepository implements SubmissionRepository {
     const now = new Date();
     const record: SubmissionRecord = Object.freeze({
       requestId: envelope.requestId,
+      network: SUBMITTER_NETWORK,
+      resolver: PINNED_STUDIONET_RESOLVER.toLowerCase(),
       envelope,
       functionName: submissionFunctionName(envelope),
       envelopeFingerprint,

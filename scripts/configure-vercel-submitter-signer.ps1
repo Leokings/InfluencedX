@@ -2,12 +2,12 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$Host.UI.RawUI.WindowTitle = 'InfluencedX Bradbury Preview Signer'
+$Host.UI.RawUI.WindowTitle = 'InfluencedX StudioNet Preview Signer'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 
-Write-Host 'InfluencedX Bradbury Preview signer setup' -ForegroundColor Cyan
+Write-Host 'InfluencedX StudioNet Preview signer setup' -ForegroundColor Cyan
 Write-Host 'Enter the encrypted keystore export password when prompted.'
 Write-Host 'The password will not echo and the submitter will remain disabled.'
 Write-Host ''

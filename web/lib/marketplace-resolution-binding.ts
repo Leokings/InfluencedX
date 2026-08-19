@@ -43,7 +43,7 @@ export type VerifiedMarketplaceCampaignBinding = Readonly<{
 }>;
 
 /**
- * Re-reads Base immediately before Bradbury dispatch. The queue envelope is
+ * Re-reads Base immediately before StudioNet dispatch. The queue envelope is
  * emitted only when the persisted marketplace record and every live onchain
  * assignment/campaign commitment agree, including the Base request-ID formula.
  */

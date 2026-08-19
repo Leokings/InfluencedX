@@ -45,9 +45,9 @@ export function MarketplaceFooter() {
       </div>
       <div><span>MARKET</span><Link href="/#campaigns">Campaigns</Link><Link href="/marketplace/create">Create campaign</Link></div>
       <div><span>PROTOCOL</span><Link href="/#proof">How it works</Link><Link href="/verify">Verification</Link></div>
-      <div className="footer-networks"><span>NETWORKS</span><a href="https://sepolia.basescan.org" target="_blank" rel="noreferrer">Base Sepolia</a><span>GenLayer Bradbury</span></div>
+      <div className="footer-networks"><span>NETWORKS</span><a href="https://sepolia.basescan.org" target="_blank" rel="noreferrer">Base Sepolia</a><span>GenLayer StudioNet</span></div>
       <div><span>LEGAL</span><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></div>
-      <p className="footer-note">INFLUENCEDX TESTNET · BASE SEPOLIA + GENLAYER BRADBURY · TEST USDC ONLY</p>
+      <p className="footer-note">INFLUENCEDX PREVIEW · BASE SEPOLIA + GENLAYER STUDIONET · TEST USDC ONLY</p>
     </footer>
   );
 }

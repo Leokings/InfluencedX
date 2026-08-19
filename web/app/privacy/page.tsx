@@ -26,7 +26,7 @@ export default function PrivacyPage() {
         <h2>WHAT THIS NOTICE COVERS</h2>
         <p>
           This notice describes the InfluencedX web application as it exists on August 11, 2026. The current build is
-          hosted on Vercel and operates only with Base Sepolia, GenLayer Bradbury, and test USDC. It is not a mainnet
+          hosted on Vercel and operates only with Base Sepolia, GenLayer StudioNet, and test USDC. It is not a mainnet
           service and should not be used for real-value transactions or sensitive personal information.
         </p>
       </section>
@@ -88,7 +88,7 @@ export default function PrivacyPage() {
           <div><strong>VERCEL</strong><p>Hosts the Next.js application and server-side testnet services. Hosting and security systems may process request metadata.</p></div>
           <div><strong>NEON POSTGRES</strong><p>Stores verification state, marketplace records, sealed relay material, sanitized metrics, and reconciliation status.</p></div>
           <div><strong>BASE SEPOLIA</strong><p>Publicly records wallet addresses, commitments, test-USDC amounts, campaign events, and transaction outcomes.</p></div>
-          <div><strong>GENLAYER BRADBURY</strong><p>Validators retrieve and interpret committed public X evidence. Requests, results, and related transaction data may be publicly observable.</p></div>
+          <div><strong>GENLAYER STUDIONET</strong><p>Validators retrieve and interpret committed public X evidence. Requests, results, and related transaction data may be publicly observable.</p></div>
         </div>
         <p>
           X, wallet software, RPC providers, block explorers, Base, GenLayer, Vercel, and Neon operate under their own
@@ -109,7 +109,7 @@ export default function PrivacyPage() {
         <div className="legal-warning">
           <strong>PUBLIC RECORD WARNING</strong>
           <p>
-            Base Sepolia and GenLayer Bradbury are public, append-only test networks. Wallet addresses, hashes,
+            Base Sepolia is a public test network and GenLayer StudioNet is a temporary hosted network. Wallet addresses, hashes,
             transaction data, and outcomes written there cannot be erased by InfluencedX. Public X posts may also remain
             available through X or third-party archives after an offchain InfluencedX copy is removed.
           </p>

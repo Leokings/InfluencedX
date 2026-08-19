@@ -1,5 +1,5 @@
 import { createClient } from 'genlayer-js';
-import { testnetBradbury } from 'genlayer-js/chains';
+import { studionet } from 'genlayer-js/chains';
 import { ExecutionResult, TransactionHashVariant, TransactionStatus } from 'genlayer-js/types';
 import { getAddress, isAddress } from 'viem';
 
@@ -95,7 +95,7 @@ function canonicalUnsignedInteger(value, label) {
 
 /**
  * The SDK's full transaction uses camel-case labels, while its simplified
- * receipt currently maps `statusName` to `status_name`. Bradbury can also
+ * receipt currently maps `statusName` to `status_name`. StudioNet can also
  * return only the numeric enum values. Normalize those supported shapes here
  * and keep lifecycle finality separate from execution success.
  */
@@ -128,7 +128,7 @@ export async function readFinalizedGenLayerResult({
   invariant(/^0x[0-9a-fA-F]{64}$/.test(txHash), 'Invalid GenLayer transaction hash');
   invariant(/^0x[0-9a-fA-F]{64}$/.test(requestId), 'Invalid GenLayer request ID');
   const client = createClient({
-    chain: testnetBradbury,
+    chain: studionet,
     ...(endpoint ? { endpoint } : {}),
   });
   const rawReceipt = wait

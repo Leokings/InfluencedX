@@ -1,5 +1,5 @@
 import { createClient } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import { ExecutionResult, TransactionHashVariant, TransactionStatus, type TransactionHash } from "genlayer-js/types";
 import {
   createPublicClient,
@@ -17,15 +17,16 @@ import {
   type Hex,
 } from "viem";
 import { baseSepolia } from "viem/chains";
-import type { RelayConfig } from "./config";
+import type { RelayConfig } from "./config.js";
 import {
   BASE_SEPOLIA_CHAIN_ID,
   escrowAbi,
   RELAY_WINDOW_SECONDS,
   receiverAbi,
-} from "./constants";
-import { RelayProblem } from "./problem";
-import type { SerializedResolutionMessage, WatcherRequest } from "./types";
+  STUDIONET_CHAIN_ID,
+} from "./constants.js";
+import { RelayProblem } from "./problem.js";
+import type { SerializedResolutionMessage, WatcherRequest } from "./types.js";
 
 const MAX_UINT32 = (1n << 32n) - 1n;
 const MAX_UINT64 = (1n << 64n) - 1n;
@@ -150,7 +151,8 @@ export async function independentlyResolveCampaign(input: {
 }
 
 async function readFinalizedSource(input: { resolver: Address; txHash: Hex; requestId: Hex; rpcUrl: string }): Promise<CoordinatorSource> {
-  const client = createClient({ chain: testnetBradbury, endpoint: input.rpcUrl });
+  if (studionet.id !== STUDIONET_CHAIN_ID) reject("The GenLayer SDK StudioNet chain ID is invalid.");
+  const client = createClient({ chain: studionet, endpoint: input.rpcUrl });
   const receipt = await client.getTransaction({ hash: input.txHash as TransactionHash }) as unknown;
   const raw = await client.readContract({ address: input.resolver, functionName: "get_result", args: [input.requestId], transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
   if (typeof raw !== "string" || raw.length === 0) reject("Finalized GenLayer result is empty.");

@@ -1,6 +1,7 @@
 export const SUBMITTER_SCHEMA_VERSION = 1 as const;
-export const SUBMITTER_STAGE = "testnet" as const;
-export const SUBMITTER_NETWORK = "testnet-bradbury" as const;
+export const SUBMITTER_STAGE = "studionet" as const;
+export const SUBMITTER_NETWORK = "studionet" as const;
+export const STUDIONET_CHAIN_ID = 61_999 as const;
 export const SUBMITTER_METHOD = "verify_ownership" as const;
 export const CAMPAIGN_SUBMITTER_METHOD = "resolve_submission" as const;
 export const METRICS_SUBMITTER_METHOD = "snapshot_metrics" as const;
@@ -9,10 +10,13 @@ export const SUBMITTER_METHODS = Object.freeze([
   CAMPAIGN_SUBMITTER_METHOD,
   METRICS_SUBMITTER_METHOD,
 ]);
-export const PINNED_BRADBURY_RESOLVER =
-  "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2" as const;
-export const BRADBURY_RPC_URL = "https://rpc-bradbury.genlayer.com" as const;
-export const QUEUE_TOPIC = "xproof-bradbury-ownership-v1" as const;
+export const PINNED_STUDIONET_RESOLVER =
+  "0x0913b5593Ff16974E2fd616cA678A4986Cb48600" as const;
+export const STUDIONET_RESOLVER_DEPLOYMENT_TX =
+  "0xc723b84f49e6842419ac926808d962c4611678b02fbb5b1b1cdba6fe94920591" as const;
+export const STUDIONET_RPC_URL = "https://studio.genlayer.com/api" as const;
+export const QUEUE_TOPIC = "influencedx-studionet-submissions-v1" as const;
+// The singleton database gate name is a persisted compatibility boundary.
 export const SIGNER_GATE = "bradbury-signer-v1" as const;
 
 export const MIN_CHALLENGE_SECONDS = 5 * 60;

@@ -1,3 +1,4 @@
+# RETIRED historical Bradbury reference. Do not deploy for InfluencedX StudioNet.
 name = "xproof-bradbury-submitter"
 main = "src/worker.mjs"
 compatibility_date = "2026-08-01"

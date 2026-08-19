@@ -47,7 +47,7 @@ function artifactFor(artifacts, key) {
 
 function validateManifest(manifest, artifacts, expectedChainId) {
   assertVerification(manifest && typeof manifest === 'object', 'deployment manifest is not an object');
-  assertVerification(manifest.schemaVersion === 2, 'deployment manifest schemaVersion must be 2');
+  assertVerification([2, 3].includes(manifest.schemaVersion), 'deployment manifest schemaVersion must be 2 or 3');
   assertVerification(manifest.chainId === expectedChainId, `manifest chainId must be ${expectedChainId}`);
 
   const addresses = {
@@ -57,6 +57,10 @@ function validateManifest(manifest, artifacts, expectedChainId) {
     treasury: checkedAddress('treasury', manifest.treasury),
     usdc: checkedAddress('usdc', manifest.usdc),
     genlayerResolver: checkedAddress('genlayerResolver', manifest.genlayerResolver),
+    initialGenlayerResolver: checkedAddress(
+      'initialGenlayerResolver',
+      manifest.schemaVersion >= 3 ? manifest.initialGenlayerResolver : manifest.genlayerResolver,
+    ),
   };
   assertVerification(sameHex(addresses.deployer, addresses.initialOwner), 'initialOwner must equal deployer');
 
@@ -65,6 +69,17 @@ function validateManifest(manifest, artifacts, expectedChainId) {
   assertVerification(
     sameHex(manifest.genlayerContract, padHex(addresses.genlayerResolver, { size: 32 })),
     'genlayerContract does not encode genlayerResolver',
+  );
+  const initialGenlayerContract = manifest.schemaVersion >= 3
+    ? manifest.initialGenlayerContract
+    : manifest.genlayerContract;
+  assertVerification(
+    isHex(initialGenlayerContract, { strict: true }) && initialGenlayerContract.length === 66,
+    'initialGenlayerContract must be bytes32',
+  );
+  assertVerification(
+    sameHex(initialGenlayerContract, padHex(addresses.initialGenlayerResolver, { size: 32 })),
+    'initialGenlayerContract does not encode initialGenlayerResolver',
   );
   assertVerification(Number.isSafeInteger(manifest.feeBps) && manifest.feeBps >= 0 && manifest.feeBps <= 1_000,
     'feeBps is invalid');
@@ -119,7 +134,41 @@ function validateManifest(manifest, artifacts, expectedChainId) {
   assertVerification(sameHex(domain?.verifyingContract, contracts.receiver.address),
     'receiver EIP-712 verifyingContract is invalid');
 
-  return { addresses, watchers, contracts, wiringTransactions, ownershipTransactions };
+  let resolverUpdate = null;
+  if (manifest.schemaVersion >= 3) {
+    const update = manifest.resolverUpdate;
+    assertVerification(update && typeof update === 'object', 'resolverUpdate is missing');
+    resolverUpdate = {
+      transactionHash: checkedHash('resolverUpdate.transactionHash', update.transactionHash),
+      blockNumber: String(update.blockNumber),
+      previousResolver: checkedAddress('resolverUpdate.previousResolver', update.previousResolver),
+      newResolver: checkedAddress('resolverUpdate.newResolver', update.newResolver),
+    };
+    assertVerification(/^\d+$/.test(resolverUpdate.blockNumber), 'resolverUpdate.blockNumber is invalid');
+    assertVerification(
+      sameHex(resolverUpdate.previousResolver, addresses.initialGenlayerResolver),
+      'resolverUpdate previousResolver differs from constructor resolver',
+    );
+    assertVerification(
+      sameHex(resolverUpdate.newResolver, addresses.genlayerResolver),
+      'resolverUpdate newResolver differs from current resolver',
+    );
+  } else {
+    assertVerification(
+      sameHex(addresses.initialGenlayerResolver, addresses.genlayerResolver),
+      'schemaVersion 2 cannot represent a resolver update',
+    );
+  }
+
+  return {
+    addresses,
+    initialGenlayerContract,
+    watchers,
+    contracts,
+    wiringTransactions,
+    ownershipTransactions,
+    resolverUpdate,
+  };
 }
 
 async function verifyDeploymentTransaction({
@@ -243,7 +292,15 @@ export async function verifyBaseSepoliaDeployment({
     `RPC chainId ${actualChainId} is not Base Sepolia (${expectedChainId})`);
   const verificationBlock = await publicClient.getBlockNumber();
 
-  const { addresses, watchers, contracts, wiringTransactions, ownershipTransactions } = validated;
+  const {
+    addresses,
+    initialGenlayerContract,
+    watchers,
+    contracts,
+    wiringTransactions,
+    ownershipTransactions,
+    resolverUpdate,
+  } = validated;
   const registryArtifact = artifacts.registry;
   const escrowArtifact = artifacts.escrow;
   const receiverArtifact = artifacts.receiver;
@@ -288,7 +345,7 @@ export async function verifyBaseSepoliaDeployment({
         addresses.initialOwner,
         contracts.registry.address,
         contracts.escrow.address,
-        manifest.genlayerContract,
+        initialGenlayerContract,
         watchers,
         BigInt(manifest.threshold),
       ],
@@ -320,6 +377,25 @@ export async function verifyBaseSepoliaDeployment({
       publicClient,
     }),
   };
+
+  const resolverUpdateEvidence = resolverUpdate
+    ? await verifyCallTransaction({
+      label: 'receiver GenLayer resolver update',
+      transactionHash: resolverUpdate.transactionHash,
+      target: contracts.receiver.address,
+      artifact: receiverArtifact,
+      functionName: 'setGenLayerContract',
+      args: [manifest.genlayerContract],
+      deployer: addresses.finalOwner,
+      publicClient,
+    })
+    : null;
+  if (resolverUpdateEvidence) {
+    assertVerification(
+      resolverUpdateEvidence.blockNumber === resolverUpdate.blockNumber,
+      'resolverUpdate block differs from manifest',
+    );
+  }
 
   const ownershipTransactionEvidence = {};
   for (const key of ['registry', 'escrow', 'receiver']) {
@@ -446,6 +522,7 @@ export async function verifyBaseSepoliaDeployment({
     contracts: contractEvidence,
     receipts: {
       wiring: wiringEvidence,
+      resolverUpdate: resolverUpdateEvidence,
       ownershipTransfers: ownershipTransactionEvidence,
     },
     ownership,

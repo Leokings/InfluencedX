@@ -1,5 +1,5 @@
 import { createAccount, createClient } from 'genlayer-js';
-import { testnetBradbury } from 'genlayer-js/chains';
+import { studionet } from 'genlayer-js/chains';
 import { ExecutionResult, TransactionStatus } from 'genlayer-js/types';
 import { getAddress } from 'viem';
 
@@ -13,7 +13,7 @@ function argument(name) {
 const privateKey = process.env.GENLAYER_RESOLVER_PRIVATE_KEY;
 if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey ?? '')) throw new Error('GENLAYER_RESOLVER_PRIVATE_KEY is required');
 const account = createAccount(privateKey);
-const client = createClient({ chain: testnetBradbury, account });
+const client = createClient({ chain: studionet, account });
 const resolver = getAddress(argument('resolver'));
 const requestId = argument('request-id').toLowerCase();
 const baseWallet = getAddress(argument('base-wallet')).toLowerCase();
@@ -35,7 +35,7 @@ const receipt = await client.waitForTransactionReceipt({
   retries: 200,
 });
 if (receipt.txExecutionResultName !== ExecutionResult.FINISHED_WITH_RETURN) {
-  throw new Error(`Bradbury execution failed: ${receipt.txExecutionResultName ?? receipt.txExecutionResult}; tx ${hash}`);
+  throw new Error(`StudioNet execution failed: ${receipt.txExecutionResultName ?? receipt.txExecutionResult}; tx ${hash}`);
 }
 const raw = await client.readContract({
   address: resolver,

@@ -6,7 +6,7 @@
       "experimentalTriggers": [
         {
           "type": "queue/v2beta",
-          "topic": "influencedx-campaign-progression-v1",
+          "topic": "influencedx-studionet-campaign-progression-v2",
           "retryAfterSeconds": 60,
           "initialDelaySeconds": 0
         }

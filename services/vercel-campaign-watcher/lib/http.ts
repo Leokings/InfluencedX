@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
-import { MAX_REQUEST_BYTES } from "./constants";
-import { WatcherProblem } from "./problem";
+import { MAX_REQUEST_BYTES } from "./constants.js";
+import { WatcherProblem } from "./problem.js";
 
 export async function readJsonBody(request: Request): Promise<unknown> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";

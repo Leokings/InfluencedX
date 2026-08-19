@@ -4,7 +4,7 @@ import { LegalDocument } from "../legal/LegalDocument";
 
 export const metadata: Metadata = {
   title: "Testnet terms · InfluencedX",
-  description: "Terms for evaluating the InfluencedX creator marketplace on Base Sepolia and GenLayer Bradbury.",
+  description: "Terms for evaluating the InfluencedX creator marketplace on Base Sepolia and GenLayer StudioNet.",
 };
 
 export default function TermsPage() {
@@ -28,7 +28,7 @@ export default function TermsPage() {
         <p>
           These terms apply to the InfluencedX web interface available on August 11, 2026. The application lets brands
           create X creator campaigns, creators apply and set their requested rate, public work be evaluated through
-          GenLayer Bradbury, and test-USDC outcomes be recorded on Base Sepolia. It is a testnet demonstration, not a
+          GenLayer StudioNet, and test-USDC outcomes be recorded on Base Sepolia. It is a test environment demonstration, not a
           mainnet marketplace, bank, escrow company, broker, employment service, or financial product.
         </p>
       </section>
@@ -77,7 +77,7 @@ export default function TermsPage() {
           </p>
         </div>
         <p>
-          Base Sepolia, GenLayer Bradbury, the test-USDC contract, escrow contracts, validators, watchers, relayers, RPC
+          Base Sepolia, GenLayer StudioNet, the test-USDC contract, escrow contracts, validators, watchers, relayers, RPC
           services, and wallets are experimental dependencies. Risks include contract defects, incorrect or
           indeterminate AI evaluation, unavailable or changed X evidence, chain reorganization, stalled finality,
           watcher disagreement, relay failure, lost keys, rate limits, service outages, and reset or discontinued test
@@ -101,7 +101,7 @@ export default function TermsPage() {
         <span>06 / THIRD-PARTY SYSTEMS</span>
         <h2>NO CONTROL OVER EXTERNAL SERVICES</h2>
         <p>
-          InfluencedX depends on Vercel, Neon, X, Base Sepolia, GenLayer Bradbury, wallet software, RPC providers, block
+          InfluencedX depends on Vercel, Neon, X, Base Sepolia, GenLayer StudioNet, wallet software, RPC providers, block
           explorers, and isolated watcher and relay services. Their availability, rules, fees, rate limits, security,
           and data practices are outside this interface&apos;s control. Links to those services are provided for convenience
           and do not guarantee their accuracy or continued availability.
@@ -113,7 +113,7 @@ export default function TermsPage() {
         <h2>PUBLIC EVIDENCE CAN REMAIN PUBLIC</h2>
         <p>
           Wallet addresses, hashes, test-USDC amounts, requests, and outcomes written to Base Sepolia or GenLayer
-          Bradbury may be publicly visible and cannot be removed by InfluencedX. Offchain X-derived evidence is subject
+          StudioNet may be publicly visible during its temporary retention window and cannot be removed by InfluencedX. Offchain X-derived evidence is subject
           to the deletion policy described in the <Link href="/privacy">Privacy Notice</Link>, but deletion cannot erase
           public-chain history or copies held by X or third parties.
         </p>

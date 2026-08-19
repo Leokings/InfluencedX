@@ -4,16 +4,21 @@ import {
   BASE_SEPOLIA_CHAIN_ID,
   BASE_SEPOLIA_ESCROW,
   BASE_SEPOLIA_RECEIVER,
-  BRADBURY_RESOLVER,
-} from "./constants";
-import { WatcherProblem } from "./problem";
+  GENLAYER_NETWORK,
+  STUDIONET_CHAIN_ID,
+  STUDIONET_RESOLVER,
+  STUDIONET_RPC_URL,
+} from "./constants.js";
+import { WatcherProblem } from "./problem.js";
 
 export type WatcherConfig = Readonly<{
   baseRpcUrl: string;
-  genlayerRpcUrl: string;
+  genlayerNetwork: typeof GENLAYER_NETWORK;
+  genlayerChainId: typeof STUDIONET_CHAIN_ID;
+  genlayerRpcUrl: typeof STUDIONET_RPC_URL;
   escrow: typeof BASE_SEPOLIA_ESCROW;
   receiver: typeof BASE_SEPOLIA_RECEIVER;
-  resolver: typeof BRADBURY_RESOLVER;
+  resolver: typeof STUDIONET_RESOLVER;
   watcherPrivateKey: `0x${string}`;
   watcherAddress: `0x${string}`;
   serviceToken: string;
@@ -31,10 +36,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WatcherConfig 
   if (required(env, "XPROOF_CAMPAIGN_WATCHER_STAGE") !== "testnet") fail("XPROOF_CAMPAIGN_WATCHER_STAGE must be testnet.");
   if (required(env, "XPROOF_BASE_CHAIN_ID") !== String(BASE_SEPOLIA_CHAIN_ID)) fail("XPROOF_BASE_CHAIN_ID must be 84532.");
   const baseRpcUrl = httpsUrl(required(env, "XPROOF_BASE_SEPOLIA_RPC_URL"), "XPROOF_BASE_SEPOLIA_RPC_URL");
+  if (required(env, "XPROOF_GENLAYER_NETWORK") !== GENLAYER_NETWORK) fail("XPROOF_GENLAYER_NETWORK must be studionet.");
+  if (required(env, "XPROOF_GENLAYER_CHAIN_ID") !== String(STUDIONET_CHAIN_ID)) fail("XPROOF_GENLAYER_CHAIN_ID must be 61999.");
   const genlayerRpcUrl = httpsUrl(required(env, "XPROOF_GENLAYER_RPC_URL"), "XPROOF_GENLAYER_RPC_URL");
+  if (genlayerRpcUrl !== STUDIONET_RPC_URL) fail("XPROOF_GENLAYER_RPC_URL must be the pinned StudioNet RPC URL.");
   pinnedAddress(required(env, "XPROOF_BASE_ESCROW"), BASE_SEPOLIA_ESCROW, "XPROOF_BASE_ESCROW");
   pinnedAddress(required(env, "XPROOF_BASE_RECEIVER"), BASE_SEPOLIA_RECEIVER, "XPROOF_BASE_RECEIVER");
-  pinnedAddress(required(env, "XPROOF_GENLAYER_RESOLVER"), BRADBURY_RESOLVER, "XPROOF_GENLAYER_RESOLVER");
+  pinnedAddress(required(env, "XPROOF_GENLAYER_RESOLVER"), STUDIONET_RESOLVER, "XPROOF_GENLAYER_RESOLVER");
 
   if (env.XPROOF_WATCHER_PRIVATE_KEYS || env.XPROOF_WATCHER_KEYSTORE || env.XPROOF_WATCHER_KEYSTORES) {
     fail("This deployment may be configured with exactly one watcher key.");
@@ -62,10 +70,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WatcherConfig 
 
   return Object.freeze({
     baseRpcUrl,
-    genlayerRpcUrl,
+    genlayerNetwork: GENLAYER_NETWORK,
+    genlayerChainId: STUDIONET_CHAIN_ID,
+    genlayerRpcUrl: STUDIONET_RPC_URL,
     escrow: BASE_SEPOLIA_ESCROW,
     receiver: BASE_SEPOLIA_RECEIVER,
-    resolver: BRADBURY_RESOLVER,
+    resolver: STUDIONET_RESOLVER,
     watcherPrivateKey: watcherPrivateKey as `0x${string}`,
     watcherAddress: getAddress(watcherAddress),
     serviceToken,
@@ -87,7 +97,7 @@ function httpsUrl(value: string, name: string): string {
 }
 
 function pinnedAddress(value: string, expected: string, name: string): void {
-  if (!isAddress(value, { strict: false }) || getAddress(value) !== getAddress(expected)) fail(`${name} must be the pinned Base Sepolia deployment address.`);
+  if (!isAddress(value, { strict: false }) || getAddress(value) !== getAddress(expected)) fail(`${name} must be the pinned deployment address.`);
 }
 
 function slug(value: string, name: string): string {

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Address } from "viem";
 import {
+  BRADBURY_NETWORK,
+  PINNED_BRADBURY_RESOLVER,
   buildOwnershipSubmissionEnvelope,
   ownershipSubmissionRequestId,
   parseSubmitterSubmission,
@@ -36,6 +38,8 @@ test("submitter responses accept only the bounded ownership lifecycle", () => {
   const envelope = envelopeFixture();
   const response = {
     requestId: envelope.requestId,
+    network: BRADBURY_NETWORK,
+    resolver: PINNED_BRADBURY_RESOLVER,
     status: "QUEUED",
     lifecycleStatus: "PENDING",
     executionResult: null,
@@ -58,6 +62,17 @@ test("submitter responses accept only the bounded ownership lifecycle", () => {
     () => parseSubmitterSubmission({ ...response, status: "ARBITRARY_CALL" }),
     /status is invalid/,
   );
+  assert.throws(
+    () => parseSubmitterSubmission({ ...response, network: "testnet-bradbury" }),
+    /not bound to StudioNet/,
+  );
+  assert.throws(
+    () => parseSubmitterSubmission({
+      ...response,
+      resolver: "0x017311b35dbB9802883bDaE7Fb0Efd7Bd77cB0b2",
+    }),
+    /StudioNet resolver/,
+  );
 });
 
 test("finalized lifecycle is not accepted without a resolver outcome", () => {
@@ -65,6 +80,8 @@ test("finalized lifecycle is not accepted without a resolver outcome", () => {
   assert.throws(
     () => parseSubmitterSubmission({
       requestId: envelope.requestId,
+      network: BRADBURY_NETWORK,
+      resolver: PINNED_BRADBURY_RESOLVER,
       status: "FINALIZED",
       lifecycleStatus: "FINALIZED",
       executionResult: "FINISHED_WITH_RETURN",

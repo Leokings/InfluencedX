@@ -1,5 +1,5 @@
-import { MAX_REQUEST_BYTES } from "./constants";
-import { RelayProblem } from "./problem";
+import { MAX_REQUEST_BYTES } from "./constants.js";
+import { RelayProblem } from "./problem.js";
 
 export async function readRequestId(request: Request): Promise<`0x${string}`> {
   const type = request.headers.get("content-type")?.toLowerCase() ?? "";

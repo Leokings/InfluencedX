@@ -1,5 +1,5 @@
 import { createClient } from "genlayer-js";
-import { testnetBradbury } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import {
   ExecutionResult,
   TransactionHashVariant,
@@ -25,7 +25,7 @@ import {
 } from "viem";
 import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-import type { WatcherConfig } from "./config";
+import type { WatcherConfig } from "./config.js";
 import {
   BASE_SEPOLIA_CHAIN_ID,
   campaignResolutionTypes,
@@ -33,8 +33,9 @@ import {
   RELAY_WINDOW_SECONDS,
   receiverAbi,
   RESOLUTION_REQUESTED_STATUS,
-} from "./constants";
-import { WatcherProblem } from "./problem";
+  STUDIONET_CHAIN_ID,
+} from "./constants.js";
+import { WatcherProblem } from "./problem.js";
 
 const DOMAIN_NAME = "XProofAttestationReceiver" as const;
 const DOMAIN_VERSION = "2" as const;
@@ -345,7 +346,8 @@ export async function readFinalizedGenLayerSource(input: {
   requestId: Hex;
   rpcUrl: string;
 }): Promise<FinalizedSource> {
-  const client = createClient({ chain: testnetBradbury, endpoint: input.rpcUrl });
+  if (studionet.id !== STUDIONET_CHAIN_ID) internal("The GenLayer SDK StudioNet chain ID is invalid.");
+  const client = createClient({ chain: studionet, endpoint: input.rpcUrl });
   const receipt = await client.getTransaction({ hash: input.txHash as TransactionHash }) as unknown;
   const raw = await client.readContract({
     address: input.resolver,

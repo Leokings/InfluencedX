@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
-import type { WatcherConfig } from "./config";
-import { WatcherProblem } from "./problem";
+import type { WatcherConfig } from "./config.js";
+import { WatcherProblem } from "./problem.js";
 
 const jwks = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 

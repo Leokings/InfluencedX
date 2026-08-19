@@ -1,6 +1,10 @@
 import { isHash, sha256, stringToHex, type Hex } from "viem";
 import {
+  BRADBURY_NETWORK,
+  PINNED_BRADBURY_RESOLVER,
   ownershipSubmissionStatuses,
+  requireStudioNetwork,
+  requireStudioResolver,
   type OwnershipSubmissionStatus,
 } from "./ownership-submission.ts";
 
@@ -54,6 +58,8 @@ export type VerifiedMetricsResult = Readonly<{
 
 export type MetricsSubmitterSubmission = Readonly<{
   requestId: Hex;
+  network: typeof BRADBURY_NETWORK;
+  resolver: typeof PINNED_BRADBURY_RESOLVER;
   functionName: typeof METRICS_BRADBURY_METHOD;
   status: Exclude<
     OwnershipSubmissionStatus,
@@ -158,6 +164,8 @@ export function parseMetricsSubmitterSubmission(value: unknown): MetricsSubmitte
   }
   return Object.freeze({
     requestId,
+    network: requireStudioNetwork(value.network),
+    resolver: requireStudioResolver(value.resolver),
     functionName: METRICS_BRADBURY_METHOD,
     status: value.status as MetricsSubmitterSubmission["status"],
     lifecycleStatus: nullableString(value.lifecycleStatus),
