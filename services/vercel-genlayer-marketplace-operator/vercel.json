@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "functions": {
+    "app/api/queues/process-marketplace-operation/route.ts": {
+      "maxDuration": 300,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "influencedx-genlayer-marketplace-ops-v1",
+          "retryAfterSeconds": 30,
+          "initialDelaySeconds": 0
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/v1/operations",
+      "destination": "/api/v1/operations"
+    },
+    {
+      "source": "/v1/operations/:operationId",
+      "destination": "/api/v1/operations/:operationId"
+    }
+  ]
+}
