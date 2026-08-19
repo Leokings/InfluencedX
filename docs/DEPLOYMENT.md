@@ -104,8 +104,10 @@ cd ..\vercel-genlayer-withdrawal-reconciler
 npm run migrate
 ```
 
-The web migration includes
-[`0009_genlayer_native_marketplace.sql`](../web/drizzle-postgres/0009_genlayer_native_marketplace.sql).
+The web migrations include
+[`0009_genlayer_native_marketplace.sql`](../web/drizzle-postgres/0009_genlayer_native_marketplace.sql)
+and the additive
+[`0010_maintenance_generation_fence.sql`](../web/drizzle-postgres/0010_maintenance_generation_fence.sql).
 Confirm every projection and uniqueness boundary is scoped by network, chain,
 contract, protocol/schema version, and onchain ID. Never rewrite historical
 Base or V1 rows into V2 rows.
@@ -186,9 +188,11 @@ Pin the StudioNet RPC, V2 address, public address, and version. Configure the
 operator/reconciler origins and distinct service tokens, but do not enable
 either caller until their disabled deployments and OIDC bindings are verified.
 
-Verify the web queue consumer is bound only to
-`influencedx-studionet-campaign-progression-v3`. The former submitter, watcher,
-Base relay, and `campaign-progression-v2` topics must not be configured for V2.
+Verify the web queue consumers are bound only to
+`influencedx-studionet-campaign-progression-v3` and
+`influencedx-studionet-maintenance-v2`. The former submitter, watcher, Base
+relay, `campaign-progression-v2`, and unfenced `maintenance-v1` topics must not
+be configured for V2.
 
 Run read-only smoke checks:
 
@@ -214,6 +218,27 @@ Use a new immutable deployment for every gate change:
 6. enable marketplace mutations.
 
 Do not enable the public alias yet.
+
+### Promote the maintenance generation
+
+Migration `0010` deliberately creates no active worker. Inventory Queue
+Observability and runtime logs, then retire every seeded pre-fence deployment;
+moving an alias does not stop its deployment-partitioned queue loop. Allow one
+visibility lease (up to ten minutes) to clear.
+
+Read the currently observed generation (`0` on first activation), move only the
+isolated native Preview alias to the new immutable deployment, and dispatch
+[`promote-native-preview.yml`](../.github/workflows/promote-native-preview.yml)
+with that exact number. The workflow is pinned to the InfluencedX native
+Preview alias and uses the encrypted
+`INFLUENCEDX_PREVIEW_CRON_SECRET`; it cannot forward the credential to a caller-
+supplied host. The route performs a database CAS, seeds a deployment-ID-bound
+message, and increments the generation exactly once.
+
+Observe at least two successful `maintenance-v2` callbacks approximately five
+minutes apart, no stale-generation rescheduling, no consumer backlog, and no
+error/fatal logs. Subsequent releases and rollbacks always promote from the
+currently observed generation; never decrement or reuse a generation.
 
 ## 8. Required isolated E2E rehearsal
 

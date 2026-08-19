@@ -12,8 +12,10 @@ receipt, or describe `EMITTED_UNCONFIRMED` as paid.
 - [ ] The live app pins StudioNet `61999`, marketplace
       `0x58D598B8323E9C1d041989DccE80E737109DE347`, protocol
       `INFLUENCEDX_MARKETPLACE_V2`, and schema `2`.
-- [ ] Web migrations through `0009_genlayer_native_marketplace.sql` and
+- [ ] Web migrations through `0010_maintenance_generation_fence.sql` and
       `npm run db:verify` pass.
+- [ ] The tested deployment owns the active maintenance generation and has two
+      consecutive successful `maintenance-v2` callbacks with no legacy loop.
 - [ ] Verification and marketplace mutation gates are enabled only on the
       tested release.
 - [ ] Marketplace operator and withdrawal reconciler are deployed, healthy,

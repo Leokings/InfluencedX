@@ -1,0 +1,61 @@
+name: Promote GenLayer Preview maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_generation:
+        description: Observed active maintenance generation (0 for first activation)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: influencedx-native-preview-maintenance-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote fenced maintenance generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate generation precondition
+        env:
+          EXPECTED_GENERATION: ${{ inputs.expected_generation }}
+        run: |
+          if ! [[ "$EXPECTED_GENERATION" =~ ^(0|[1-9][0-9]{0,14})$ ]]; then
+            echo "expected_generation must be a canonical non-negative integer" >&2
+            exit 1
+          fi
+
+      - name: Promote and seed isolated Preview
+        env:
+          CRON_SECRET: ${{ secrets.INFLUENCEDX_PREVIEW_CRON_SECRET }}
+          EXPECTED_GENERATION: ${{ inputs.expected_generation }}
+        run: |
+          if [ "${#CRON_SECRET}" -lt 32 ]; then
+            echo "INFLUENCEDX_PREVIEW_CRON_SECRET is missing or too short" >&2
+            exit 1
+          fi
+          response="$(curl --silent --show-error --fail-with-body \
+            --request POST \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "x-influencedx-maintenance-generation: ${EXPECTED_GENERATION}" \
+            --header "Content-Type: application/json" \
+            --data '{}' \
+            https://influencedx-native-preview.vercel.app/api/internal/campaign-progression)"
+          RESPONSE="$response" node -e '
+            const value = JSON.parse(process.env.RESPONSE ?? "null");
+            if (!value?.activation?.active || !Number.isSafeInteger(value.activation.generation)) {
+              throw new Error("Promotion response did not prove an active generation");
+            }
+            console.log(JSON.stringify({
+              active: value.activation.active,
+              promoted: value.activation.promoted,
+              generation: value.activation.generation,
+              deploymentId: value.heartbeat?.deploymentId ?? null,
+              slot: value.heartbeat?.slot ?? null,
+            }));
+          '
