@@ -10,6 +10,7 @@ import { nextGenLayerResolutionProgression } from "../lib/marketplace-genlayer-a
 import {
   assertFinalizedOwnershipTiming,
   projectIdentityActiveAt,
+  resolveFarcasterCastHashFromUrl,
   resolveFarcasterFidByUsername,
   validateStoredActivationTiming,
 } from "../lib/marketplace-genlayer-activation.ts";
@@ -192,6 +193,141 @@ test("Farcaster FID lookup rejects missing, malformed, mismatched, or confusable
       fetchImpl: async () => { throw new Error("fetch must not run"); },
     }),
     (error: unknown) => (error as { code?: string }).code === "INVALID_FARCASTER_USERNAME",
+  );
+});
+
+test("resolves an ENS-slug Farcaster cast URL to its exact FID-bound protocol hash", async () => {
+  const exactHash = `0x029f7cce${"ab".repeat(16)}`;
+  const resolved = await resolveFarcasterCastHashFromUrl(
+    "https://farcaster.xyz/dwr.eth/0x029F7CCE?ref=share",
+    { expectedUsername: "dwr", expectedFid: "3" },
+    {
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        assert.equal(url.origin, "https://client.farcaster.xyz");
+        assert.equal(url.pathname, "/v2/user-cast");
+        assert.equal(url.searchParams.get("username"), "dwr.eth");
+        assert.equal(url.searchParams.get("hashPrefix"), "0x029f7cce");
+        assert.equal(init?.method, "GET");
+        assert.equal(init?.cache, "no-store");
+        assert.equal(init?.redirect, "error");
+        assert.equal(new Headers(init?.headers).get("accept-encoding"), "identity");
+        return new Response(JSON.stringify({
+          result: {
+            cast: {
+              hash: exactHash.toUpperCase().replace(/^0X/, "0x"),
+              author: { fid: 3, username: "dwr.eth" },
+              timestamp: 1_701_182_672_000,
+            },
+          },
+        }), { headers: { "Content-Type": "application/json" } });
+      },
+    },
+  );
+  assert.equal(resolved, exactHash);
+});
+
+test("resolves short and full Farcaster conversation URLs through the pinned fname", async () => {
+  const exactHash = `0x029f7cce${"cd".repeat(16)}`;
+  const seenPrefixes: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    assert.equal(url.searchParams.get("username"), "dwr");
+    const prefix = url.searchParams.get("hashPrefix");
+    assert.ok(prefix);
+    seenPrefixes.push(prefix);
+    return new Response(JSON.stringify({
+      result: {
+        cast: {
+          hash: exactHash,
+          author: { fid: "3", username: "DWR" },
+        },
+      },
+    }), { headers: { "Content-Type": "application/json" } });
+  };
+
+  assert.equal(
+    await resolveFarcasterCastHashFromUrl(
+      "https://www.farcaster.xyz/~/conversations/0x029f7cce/",
+      { expectedUsername: "dwr", expectedFid: 3 },
+      { fetchImpl },
+    ),
+    exactHash,
+  );
+  assert.equal(
+    await resolveFarcasterCastHashFromUrl(
+      `https://farcaster.xyz/~/conversations/${exactHash}`,
+      { expectedUsername: "dwr", expectedFid: "3" },
+      { fetchImpl },
+    ),
+    exactHash,
+  );
+  assert.deepEqual(seenPrefixes, ["0x029f7cce", exactHash]);
+});
+
+test("Farcaster cast URL resolution rejects unsafe URLs and unbound lookup results", async () => {
+  const binding = { expectedUsername: "dwr", expectedFid: "3" };
+  for (const value of [
+    "http://farcaster.xyz/dwr/0x029f7cce",
+    "https://farcaster.xyz.evil.example/dwr/0x029f7cce",
+    "https://user@farcaster.xyz/dwr/0x029f7cce",
+    "https://farcaster.xyz:443/dwr/0x029f7cce",
+    "https://farcaster.xyz:444/dwr/0x029f7cce",
+    "https://farcaster.xyz/dwr/0x029f7cc",
+  ]) {
+    await assert.rejects(
+      () => resolveFarcasterCastHashFromUrl(value, binding, {
+        fetchImpl: async () => { throw new Error("fetch must not run"); },
+      }),
+      (error: unknown) =>
+        (error as { code?: string }).code === "INVALID_FARCASTER_CAST_URL",
+    );
+  }
+
+  await assert.rejects(
+    () => resolveFarcasterCastHashFromUrl(
+      "https://farcaster.xyz/dwr/0x029f7cce",
+      binding,
+      { fetchImpl: async () => new Response("", { status: 404 }) },
+    ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "FARCASTER_CAST_NOT_FOUND",
+  );
+  await assert.rejects(
+    () => resolveFarcasterCastHashFromUrl(
+      "https://farcaster.xyz/dwr.eth/0x029f7cce",
+      binding,
+      {
+        fetchImpl: async () => new Response(JSON.stringify({
+          result: {
+            cast: {
+              hash: `0x029f7cce${"ef".repeat(16)}`,
+              author: { fid: 4, username: "mallory" },
+            },
+          },
+        }), { headers: { "Content-Type": "application/json" } }),
+      },
+    ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "FARCASTER_CAST_NOT_FOUND",
+  );
+  await assert.rejects(
+    () => resolveFarcasterCastHashFromUrl(
+      "https://farcaster.xyz/dwr/0x029f7cce",
+      binding,
+      {
+        fetchImpl: async () => new Response(JSON.stringify({
+          result: {
+            cast: {
+              hash: `0xdeadbeef${"ef".repeat(16)}`,
+              author: { fid: 3, username: "dwr" },
+            },
+          },
+        }), { headers: { "Content-Type": "application/json" } }),
+      },
+    ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "FARCASTER_CAST_LOOKUP_UNAVAILABLE",
   );
 });
 
@@ -1444,7 +1580,11 @@ test("identity verification API exposes one bundled challenge and one bundled ac
   assert.doesNotMatch(challengeRoute, /"farcasterFid"|body\.farcasterFid/);
   assert.match(challengeRoute, /issueIdentityBundleChallenge/);
   assert.match(activationRoute, /prepareGenLayerIdentityBundleActivation/);
-  assert.match(activationRoute, /\["requestId", "verificationPostUrl", "castHash"\]/);
+  assert.match(
+    activationRoute,
+    /\[\s*"requestId",\s*"verificationPostUrl",\s*"farcasterCastUrl",?\s*\]/,
+  );
+  assert.doesNotMatch(activationRoute, /body\.castHash/);
   assert.doesNotMatch(activationRoute, /body\.source/);
   assert.match(submittedRoute, /\["preparedId", "txHash"\]/);
   assert.match(submittedRoute, /bindGenLayerIdentityBundleActivationSubmission/);

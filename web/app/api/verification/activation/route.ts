@@ -18,7 +18,11 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
-    assertExactJsonKeys(body, ["requestId", "verificationPostUrl", "castHash"]);
+    assertExactJsonKeys(body, [
+      "requestId",
+      "verificationPostUrl",
+      "farcasterCastUrl",
+    ]);
     const session = readWalletSession(request);
     if (!session || !isAuthenticatedWalletSession(session)) {
       throw new ApiProblem(401, "WALLET_AUTHENTICATION_REQUIRED", "Prove control of your wallet before preparing activation.");
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
       session,
       requestId,
       verificationPostUrl: body.verificationPostUrl,
-      castHash: body.castHash,
+      farcasterCastUrl: body.farcasterCastUrl,
     }), { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return apiError(error);

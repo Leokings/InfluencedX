@@ -15,6 +15,7 @@ import {
   hydrateArgs,
   validatePlan,
 } from "../app/marketplace/marketplace-transaction.ts";
+import { farcasterCastUrlForHash } from "../app/verify/farcaster-cast-url.ts";
 import { shouldRejectVerificationResponse } from "../app/verify/verification-api-client.ts";
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle } from "../app/verify/verification-recovery.ts";
 import { MarketplaceApiError, marketplaceErrorMessage } from "../app/marketplace/marketplace-api.ts";
@@ -210,6 +211,16 @@ test("identity recovery accepts only the exact server-bound tuple", () => {
   assert.equal(parseBoundIdentityBundleRecovery({ requestId, preparedId, txHash: "0x12" }, requestId), null);
 });
 
+test("rehydrates a stored Farcaster proof as an official cast URL", () => {
+  const hash = `0x${"AB".repeat(20)}`;
+  assert.equal(
+    farcasterCastUrlForHash(` ${hash} `),
+    `https://farcaster.xyz/~/conversations/${hash.toLowerCase()}`,
+  );
+  assert.equal(farcasterCastUrlForHash("0x1234"), null);
+  assert.equal(farcasterCastUrlForHash(null), null);
+});
+
 test("verification client keeps pending recovery when a 202 carries an API error", () => {
   assert.equal(shouldRejectVerificationResponse(202, {
     error: { code: "GENLAYER_FINALITY_PENDING", message: "Not finalized." },
@@ -321,9 +332,19 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.doesNotMatch(source, /name="farcasterFid"|parseFarcasterFid|farcasterFid:\s*parseFarcasterFid/);
   assert.match(source, /farcasterFid: result\.farcasterChallenge\.fid/);
   assert.match(source, /\/api\/verification\/activation/);
-  assert.match(source, /requestId: request\.id, verificationPostUrl: postUrl\.trim\(\), castHash/);
+  assert.match(source, /requestId: request\.id, verificationPostUrl: postUrl\.trim\(\), farcasterCastUrl: normalizedFarcasterCastUrl/);
+  assert.match(source, /FARCASTER CAST URL/);
+  const castUrlField = source.match(/<label[^>]*>\s*<span>FARCASTER CAST URL<\/span>[\s\S]*?<\/label>/)?.[0];
+  assert.ok(castUrlField);
+  assert.match(castUrlField, /name="farcasterCastUrl"/);
+  assert.match(castUrlField, /type="url"/);
+  assert.doesNotMatch(castUrlField, /\bpattern=/);
+  assert.doesNotMatch(source, /FARCASTER CAST HASH|INVALID_FARCASTER_CAST_HASH|name="castHash"|normalizeCastHash/);
+  assert.match(source, /INVALID_FARCASTER_CAST_URL: "Paste the full Farcaster cast URL\."/);
+  assert.match(source, /FARCASTER_CAST_LOOKUP_UNAVAILABLE: "Farcaster is temporarily unavailable\. Retry\."/);
   assert.match(source, /expectedFunctionName: "activate_identity_bundle"/);
   assert.match(source, /VERIFY BOTH · 1 TRANSACTION/);
+  assert.match(source, /expired \|\| terminalOutcome \? "START AGAIN"/);
   assert.equal(source.match(/1 TRANSACTION/g)?.length, 1);
   assert.doesNotMatch(source, /Pinned to this wallet|ONE WALLET TRANSACTION|NO SOCIAL PASSWORDS/);
   assert.match(source, /\/api\/verification\/activation\/submitted/);
@@ -332,6 +353,13 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.match(source, /Retry with the same two posts/);
   assert.match(source, /broadcastMarketplaceTransaction/);
   assert.match(source, /preparedId: value\.preparedId, txHash: value\.txHash/);
+  const activation = source.slice(
+    source.indexOf("async function activateBundle"),
+    source.indexOf("async function confirmActivation"),
+  );
+  const recoveryBranch = activation.indexOf("if (recovery)");
+  const castUrlRead = activation.indexOf("farcasterCastUrl.trim()");
+  assert.ok(recoveryBranch >= 0 && castUrlRead > recoveryBranch);
   assert.doesNotMatch(source, /\/api\/verification\/(?:x-challenge|farcaster-challenge)/);
   assert.doesNotMatch(source, /expectedFunctionName: "activate_(?:creator|farcaster_creator)"/);
   assert.doesNotMatch(source, /\/api\/verification\/(intent|submit)/);

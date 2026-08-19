@@ -58,7 +58,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const FARCASTER_HASH = /^0x[0-9a-f]{40}$/;
 const FARCASTER_USERNAME_PROOF_ENDPOINT =
   "https://fnames.farcaster.xyz/transfers/current";
+const FARCASTER_CAST_LOOKUP_ENDPOINT =
+  "https://client.farcaster.xyz/v2/user-cast";
 const MAX_FARCASTER_USERNAME_PROOF_BYTES = 8_192;
+const MAX_FARCASTER_CAST_LOOKUP_BYTES = 64 * 1_024;
 
 type VerificationRow = typeof verificationRequests.$inferSelect;
 type ActivationEnvelope = Readonly<{
@@ -256,7 +259,11 @@ export async function resolveFarcasterFidByUsername(
     throw invalidFarcasterProof();
   }
 
-  const text = await readBoundedFarcasterProofBody(response);
+  const text = await readBoundedFarcasterResponseBody(
+    response,
+    MAX_FARCASTER_USERNAME_PROOF_BYTES,
+    invalidFarcasterProof,
+  );
 
   let proof: unknown;
   try {
@@ -291,6 +298,171 @@ export async function resolveFarcasterFidByUsername(
     throw invalidFarcasterProof();
   }
   return fid;
+}
+
+type ParsedFarcasterCastUrl = Readonly<{
+  hashPrefix: string;
+  lookupUsername: string | null;
+}>;
+
+export async function resolveFarcasterCastHashFromUrl(
+  value: unknown,
+  binding: {
+    expectedUsername: unknown;
+    expectedFid: unknown;
+  },
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<string> {
+  const expectedUsername = normalizeFarcasterUsername(binding.expectedUsername);
+  const expectedFid = protocolDecimal(binding.expectedFid);
+  if (!expectedFid) {
+    throw problem(
+      503,
+      "FARCASTER_IDENTITY_STATE_INVALID",
+      "The pinned Farcaster identity could not be verified.",
+    );
+  }
+  const parsed = parseFarcasterCastUrl(value);
+
+  const endpoint = new URL(FARCASTER_CAST_LOOKUP_ENDPOINT);
+  // A share slug may be an ENS name rather than the cast author's pinned fname.
+  // Use it only to locate the cast; the response is bound below to the stable FID
+  // resolved when the challenge was issued. Conversation URLs have no slug, so
+  // the pinned fname is the lookup key.
+  endpoint.searchParams.set(
+    "username",
+    parsed.lookupUsername ?? expectedUsername,
+  );
+  endpoint.searchParams.set("hashPrefix", parsed.hashPrefix);
+  let response: Response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "identity",
+      },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
+    });
+  } catch {
+    throw farcasterCastLookupUnavailable();
+  }
+  if ([400, 404, 410].includes(response.status)) {
+    throw farcasterCastNotFound();
+  }
+  if (!response.ok) throw farcasterCastLookupUnavailable();
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const declaredLength = Number(response.headers.get("content-length") ?? "0");
+  if (
+    !contentType.includes("application/json") ||
+    (Number.isFinite(declaredLength) &&
+      declaredLength > MAX_FARCASTER_CAST_LOOKUP_BYTES)
+  ) {
+    throw farcasterCastLookupUnavailable();
+  }
+  const text = await readBoundedFarcasterResponseBody(
+    response,
+    MAX_FARCASTER_CAST_LOOKUP_BYTES,
+    farcasterCastLookupUnavailable,
+  );
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text) as unknown;
+  } catch {
+    throw farcasterCastLookupUnavailable();
+  }
+  const result = plain(payload) && plain(payload.result) ? payload.result : null;
+  const cast = result && plain(result.cast) ? result.cast : null;
+  const author = cast && plain(cast.author) ? cast.author : null;
+  const castHash =
+    cast && typeof cast.hash === "string" ? cast.hash.toLowerCase() : "";
+  if (
+    !FARCASTER_HASH.test(castHash) ||
+    !castHash.startsWith(parsed.hashPrefix) ||
+    !author
+  ) {
+    throw farcasterCastLookupUnavailable();
+  }
+
+  // FIDs are stable; presentation usernames can legitimately differ from the
+  // challenged fname (for example, an ENS-style primary username).
+  if (protocolDecimal(author.fid) !== expectedFid) {
+    throw farcasterCastNotFound();
+  }
+  return castHash;
+}
+
+function parseFarcasterCastUrl(value: unknown): ParsedFarcasterCastUrl {
+  if (typeof value !== "string" || value.length > 512) {
+    throw invalidFarcasterCastUrl();
+  }
+  const candidate = value.trim();
+  const authority = candidate.match(/^https:\/\/([^/?#]+)/i)?.[1]?.toLowerCase();
+  if (!authority || !["farcaster.xyz", "www.farcaster.xyz"].includes(authority)) {
+    throw invalidFarcasterCastUrl();
+  }
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw invalidFarcasterCastUrl();
+  }
+  if (
+    url.protocol !== "https:" ||
+    !["farcaster.xyz", "www.farcaster.xyz"].includes(url.hostname.toLowerCase()) ||
+    url.username ||
+    url.password ||
+    url.port
+  ) {
+    throw invalidFarcasterCastUrl();
+  }
+
+  const conversation = url.pathname.match(
+    /^\/~\/conversations\/(0x[0-9a-fA-F]{8,40})\/?$/,
+  );
+  if (conversation) {
+    return Object.freeze({
+      hashPrefix: conversation[1].toLowerCase(),
+      lookupUsername: null,
+    });
+  }
+  const share = url.pathname.match(
+    /^\/([A-Za-z0-9][A-Za-z0-9.-]{0,63})\/(0x[0-9a-fA-F]{8,40})\/?$/,
+  );
+  if (!share) throw invalidFarcasterCastUrl();
+  return Object.freeze({
+    hashPrefix: share[2].toLowerCase(),
+    lookupUsername: share[1].toLowerCase(),
+  });
+}
+
+function invalidFarcasterCastUrl(): ApiProblem {
+  return problem(
+    400,
+    "INVALID_FARCASTER_CAST_URL",
+    "Enter the HTTPS farcaster.xyz URL for the published challenge cast.",
+  );
+}
+
+function farcasterCastNotFound(): ApiProblem {
+  return problem(
+    400,
+    "FARCASTER_CAST_NOT_FOUND",
+    "The Farcaster cast could not be found for the challenged identity.",
+  );
+}
+
+function farcasterCastLookupUnavailable(): ApiProblem {
+  return problem(
+    503,
+    "FARCASTER_CAST_LOOKUP_UNAVAILABLE",
+    "Farcaster cast lookup is temporarily unavailable.",
+  );
 }
 
 export async function issueFarcasterChallenge(input: {
@@ -362,7 +534,7 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
   session: AuthenticatedWalletSession;
   requestId: string;
   verificationPostUrl: unknown;
-  castHash: unknown;
+  farcasterCastUrl: unknown;
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -390,9 +562,16 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
       "Create both identity challenges before preparing activation.",
     );
   }
+  const farcasterCastHash = await resolveFarcasterCastHashFromUrl(
+    input.farcasterCastUrl,
+    {
+      expectedUsername: row.farcasterUsername,
+      expectedFid: row.farcasterFid,
+    },
+  );
   const envelope = prepareIdentityBundleEnvelope(row, {
     verificationPostUrl: input.verificationPostUrl,
-    castHash: input.castHash,
+    castHash: farcasterCastHash,
     nowMs,
   });
   if (
@@ -1986,8 +2165,12 @@ function validFarcasterTransferSignature(value: unknown): boolean {
   return typeof value === "string" && /^0x[0-9a-fA-F]{130}$/.test(value);
 }
 
-async function readBoundedFarcasterProofBody(response: Response): Promise<string> {
-  if (!response.body) throw invalidFarcasterProof();
+async function readBoundedFarcasterResponseBody(
+  response: Response,
+  maximumBytes: number,
+  invalidResponse: () => ApiProblem,
+): Promise<string> {
+  if (!response.body) throw invalidResponse();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -1996,15 +2179,15 @@ async function readBoundedFarcasterProofBody(response: Response): Promise<string
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_FARCASTER_USERNAME_PROOF_BYTES) {
+      if (total > maximumBytes) {
         await reader.cancel();
-        throw invalidFarcasterProof();
+        throw invalidResponse();
       }
       chunks.push(value);
     }
   } catch (error) {
     if (error instanceof ApiProblem) throw error;
-    throw invalidFarcasterProof();
+    throw invalidResponse();
   } finally {
     reader.releaseLock();
   }
@@ -2017,7 +2200,7 @@ async function readBoundedFarcasterProofBody(response: Response): Promise<string
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
-    throw invalidFarcasterProof();
+    throw invalidResponse();
   }
 }
 

@@ -12,6 +12,7 @@ import {
   studioNetExplorerLink,
 } from "../marketplace/marketplace-types";
 import { selectVerificationWallet } from "@/lib/verification-wallet";
+import { farcasterCastUrlForHash } from "./farcaster-cast-url";
 import { shouldRejectVerificationResponse } from "./verification-api-client";
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle, type BoundIdentityBundleRecovery } from "./verification-recovery";
 
@@ -117,7 +118,7 @@ export default function VerifyFlow() {
   const [handle, setHandle] = useState("");
   const [postUrl, setPostUrl] = useState("");
   const [farcasterUsername, setFarcasterUsername] = useState("");
-  const [farcasterCastHash, setFarcasterCastHash] = useState("");
+  const [farcasterCastUrl, setFarcasterCastUrl] = useState("");
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,7 +167,7 @@ export default function VerifyFlow() {
         }
         setRequest(result.request);
         setWallet(selectedWallet);
-        hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterCastHash });
+        hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterCastUrl });
         if (result.request?.genlayerOutcome === "UNDETERMINED" && result.request.genlayerRetryable) setNotice("Retry with the same two posts.");
       })
       .catch((statusError: unknown) => {
@@ -209,7 +210,7 @@ export default function VerifyFlow() {
       setRequest(result.request);
       setWalletChallenge(result.walletChallenge);
       if (result.request.id !== request?.id) {
-        setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastHash("");
+        setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastUrl("");
       }
       setNotice(result.walletChallenge ? "Sign the message." : "Wallet ready.");
     } catch (connectError) {
@@ -270,7 +271,7 @@ export default function VerifyFlow() {
       setHandle(result.xChallenge.handle);
       setFarcasterUsername(result.farcasterChallenge.username);
       setPostUrl("");
-      setFarcasterCastHash("");
+      setFarcasterCastUrl("");
       setNotice("Post both messages.");
     } catch (challengeError) {
       setError(readError(challengeError, "Could not create the challenges."));
@@ -293,12 +294,13 @@ export default function VerifyFlow() {
         await confirmActivation(recovery);
         return;
       }
-      const castHash = normalizeCastHash(farcasterCastHash);
+      const normalizedFarcasterCastUrl = farcasterCastUrl.trim();
       if (!postUrl.trim()) throw new Error("Paste the public X post URL.");
+      if (!normalizedFarcasterCastUrl) throw new Error("Paste the public Farcaster cast URL.");
       setNotice("Checking both posts…");
       const prepared = await api<PreparedActivation>(
         "/api/verification/activation",
-        requestBody({ requestId: request.id, verificationPostUrl: postUrl.trim(), castHash }),
+        requestBody({ requestId: request.id, verificationPostUrl: postUrl.trim(), farcasterCastUrl: normalizedFarcasterCastUrl }),
       );
       if (prepared.request) setRequest(prepared.request);
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, effectiveWallet, {
@@ -423,7 +425,7 @@ export default function VerifyFlow() {
               </div>
               <div className="proof-inputs">
                 <label className="verify-field"><span>X POST URL</span><input inputMode="url" name="postUrl" onChange={(event) => setPostUrl(event.target.value)} placeholder="https://x.com/handle/status/…" required type="url" value={postUrl} /></label>
-                <label className="verify-field"><span>FARCASTER CAST HASH</span><input autoComplete="off" name="castHash" onChange={(event) => setFarcasterCastHash(event.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder={`0x${"a".repeat(40)}`} required type="text" value={farcasterCastHash} /></label>
+                <label className="verify-field"><span>FARCASTER CAST URL</span><input autoComplete="off" inputMode="url" name="farcasterCastUrl" onChange={(event) => setFarcasterCastUrl(event.target.value)} placeholder="https://farcaster.xyz/username/0x…" required type="url" value={farcasterCastUrl} /></label>
               </div>
               <button className="button verify-primary" type="submit" disabled={Boolean(busy)}>{busy === "activation" ? "VERIFYING…" : retryableUndetermined ? "RETRY BOTH →" : "VERIFY BOTH · 1 TRANSACTION →"}</button>
               <a className="verify-funding-link" href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">NEED TEST GEN? ↗</a>
@@ -460,12 +462,13 @@ function hydrateFields(request: VerificationRequest | null, setters: {
   setHandle(value: string): void;
   setPostUrl(value: string): void;
   setFarcasterUsername(value: string): void;
-  setFarcasterCastHash(value: string): void;
+  setFarcasterCastUrl(value: string): void;
 }) {
   if (request?.handle) setters.setHandle(request.handle);
   if (request?.normalizedVerificationPostUrl) setters.setPostUrl(request.normalizedVerificationPostUrl);
   if (request?.farcasterUsername) setters.setFarcasterUsername(request.farcasterUsername);
-  if (request?.farcasterCastHash) setters.setFarcasterCastHash(request.farcasterCastHash);
+  const farcasterCastUrl = farcasterCastUrlForHash(request?.farcasterCastHash);
+  if (farcasterCastUrl) setters.setFarcasterCastUrl(farcasterCastUrl);
 }
 
 async function currentWallet(): Promise<string | null> {
@@ -544,12 +547,6 @@ function normalizeFarcasterUsername(value: string): string {
   return candidate.toLowerCase();
 }
 
-function normalizeCastHash(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^0x[0-9a-f]{40}$/.test(normalized)) throw new Error("Paste the full cast hash: 0x + 40 characters.");
-  return normalized;
-}
-
 function shorten(value: string | null, start = 7, end = 5): string {
   if (!value || value.length <= start + end + 1) return value ?? "—";
   return `${value.slice(0, start)}…${value.slice(-end)}`;
@@ -582,8 +579,9 @@ function errorMessage(body: ApiErrorBody, status: number, fallback: string): str
     INVALID_X_POST_URL: "Paste the full public X post URL.",
     X_POST_NOT_FOUND: "Make the X post public, then retry.",
     X_PROOF_MISMATCH: "The X post must contain the exact challenge text.",
-    INVALID_FARCASTER_CAST_HASH: "Paste the full cast hash: 0x + 40 characters.",
+    INVALID_FARCASTER_CAST_URL: "Paste the full Farcaster cast URL.",
     FARCASTER_CAST_NOT_FOUND: "Make the Farcaster cast public, then retry.",
+    FARCASTER_CAST_LOOKUP_UNAVAILABLE: "Farcaster is temporarily unavailable. Retry.",
     FARCASTER_PROOF_MISMATCH: "The cast must contain the exact challenge text.",
     CHALLENGE_EXPIRED: "Challenge expired. Start again.",
     SESSION_WALLET_MISMATCH: "Switch to the wallet used for this run.",

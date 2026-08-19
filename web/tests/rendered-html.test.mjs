@@ -60,6 +60,7 @@ test("server-renders the concise bundled identity flow without claiming verifica
   assert.match(html, /BOTH\./);
   assert.match(html, /Link X \+ Farcaster to one wallet/);
   assert.doesNotMatch(html, /Pinned to this wallet|ONE WALLET TRANSACTION|NO SOCIAL PASSWORDS/);
+  assert.doesNotMatch(html, /FARCASTER FID|FARCASTER CAST HASH/);
   assert.doesNotMatch(html, /BASE|USDC|VERIFICATION COMPLETE/i);
 });
 
