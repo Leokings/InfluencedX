@@ -117,7 +117,6 @@ export default function VerifyFlow() {
   const [handle, setHandle] = useState("");
   const [postUrl, setPostUrl] = useState("");
   const [farcasterUsername, setFarcasterUsername] = useState("");
-  const [farcasterFid, setFarcasterFid] = useState("");
   const [farcasterCastHash, setFarcasterCastHash] = useState("");
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -167,7 +166,7 @@ export default function VerifyFlow() {
         }
         setRequest(result.request);
         setWallet(selectedWallet);
-        hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterFid, setFarcasterCastHash });
+        hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterCastHash });
         if (result.request?.genlayerOutcome === "UNDETERMINED" && result.request.genlayerRetryable) setNotice("Retry with the same two posts.");
       })
       .catch((statusError: unknown) => {
@@ -252,7 +251,6 @@ export default function VerifyFlow() {
           requestId: request.id,
           handle: normalizeXHandle(handle),
           farcasterUsername: normalizeFarcasterUsername(farcasterUsername),
-          farcasterFid: parseFarcasterFid(farcasterFid),
         }),
       );
       setRequest({
@@ -271,7 +269,6 @@ export default function VerifyFlow() {
       });
       setHandle(result.xChallenge.handle);
       setFarcasterUsername(result.farcasterChallenge.username);
-      setFarcasterFid(String(result.farcasterChallenge.fid));
       setPostUrl("");
       setFarcasterCastHash("");
       setNotice("Post both messages.");
@@ -409,7 +406,6 @@ export default function VerifyFlow() {
               <div className="identity-grid">
                 <label className="verify-field"><span>X HANDLE</span><input autoComplete="off" maxLength={16} name="handle" onChange={(event) => setHandle(event.target.value)} placeholder="@handle" required value={handle} /></label>
                 <label className="verify-field"><span>FARCASTER USERNAME</span><input autoComplete="off" maxLength={16} name="farcasterUsername" onChange={(event) => setFarcasterUsername(event.target.value)} pattern="[a-z0-9][a-z0-9-]{0,15}" placeholder="username" required value={farcasterUsername} /></label>
-                <label className="verify-field"><span>FARCASTER FID</span><input autoComplete="off" inputMode="numeric" name="farcasterFid" onChange={(event) => setFarcasterFid(event.target.value)} pattern="[1-9][0-9]*" placeholder="12345" required value={farcasterFid} /></label>
               </div>
               <label className="consent-row"><input checked={consent} onChange={(event) => setConsent(event.target.checked)} type="checkbox" /><span>Verify these public accounts.</span></label>
               <button className="button verify-primary" type="submit" disabled={!consent || Boolean(busy)}>{busy === "identity-challenge" ? "CREATING…" : "CREATE BOTH CHALLENGES →"}</button>
@@ -464,13 +460,11 @@ function hydrateFields(request: VerificationRequest | null, setters: {
   setHandle(value: string): void;
   setPostUrl(value: string): void;
   setFarcasterUsername(value: string): void;
-  setFarcasterFid(value: string): void;
   setFarcasterCastHash(value: string): void;
 }) {
   if (request?.handle) setters.setHandle(request.handle);
   if (request?.normalizedVerificationPostUrl) setters.setPostUrl(request.normalizedVerificationPostUrl);
   if (request?.farcasterUsername) setters.setFarcasterUsername(request.farcasterUsername);
-  if (request?.farcasterFid !== null && request?.farcasterFid !== undefined) setters.setFarcasterFid(String(request.farcasterFid));
   if (request?.farcasterCastHash) setters.setFarcasterCastHash(request.farcasterCastHash);
 }
 
@@ -545,16 +539,9 @@ function normalizeXHandle(value: string): string {
 }
 
 function normalizeFarcasterUsername(value: string): string {
-  const normalized = value.trim().replace(/^@/, "").toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(normalized)) throw new Error("Enter a valid Farcaster username.");
-  return normalized;
-}
-
-function parseFarcasterFid(value: string): string {
-  const normalized = value.trim();
-  if (!/^[1-9][0-9]*$/.test(normalized)) throw new Error("Enter a valid Farcaster FID.");
-  if (normalized.length > 78 || BigInt(normalized) >= 1n << 256n) throw new Error("Farcaster FID is too large.");
-  return normalized;
+  const candidate = value.trim().replace(/^@/, "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,15}$/.test(candidate)) throw new Error("Enter a valid Farcaster username.");
+  return candidate.toLowerCase();
 }
 
 function normalizeCastHash(value: string): string {

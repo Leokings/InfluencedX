@@ -10,6 +10,7 @@ import { nextGenLayerResolutionProgression } from "../lib/marketplace-genlayer-a
 import {
   assertFinalizedOwnershipTiming,
   projectIdentityActiveAt,
+  resolveFarcasterFidByUsername,
   validateStoredActivationTiming,
 } from "../lib/marketplace-genlayer-activation.ts";
 import {
@@ -107,6 +108,90 @@ test("StudioNet RPC calls preserve the deployed checksum address", () => {
   assert.equal(
     marketplaceRpcContractAddress(),
     "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
+  );
+});
+
+test("resolves the canonical Farcaster FID from the username proof server-side", async () => {
+  const fid = await resolveFarcasterFidByUsername("@DWR", {
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      assert.equal(url.origin, "https://fnames.farcaster.xyz");
+      assert.equal(url.pathname, "/transfers/current");
+      assert.equal(url.searchParams.get("name"), "dwr");
+      assert.equal(init?.method, "GET");
+      assert.equal(init?.cache, "no-store");
+      assert.equal(init?.redirect, "error");
+      assert.equal(new Headers(init?.headers).get("accept-encoding"), "identity");
+      return new Response(JSON.stringify({
+        transfer: {
+          to: 3,
+          username: "dwr",
+          owner: "0x1111111111111111111111111111111111111111",
+          server_signature: `0x${"ab".repeat(65)}`,
+          timestamp: 1_700_000_000,
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  assert.equal(fid, "3");
+});
+
+test("Farcaster FID lookup rejects missing, malformed, mismatched, or confusable proofs", async () => {
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("missing", {
+      fetchImpl: async () => new Response("", { status: 404 }),
+    }),
+    (error: unknown) => (error as { code?: string }).code === "FARCASTER_USERNAME_NOT_FOUND",
+  );
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("alice", {
+      fetchImpl: async () => new Response(JSON.stringify({
+        transfer: {
+          to: 1,
+          username: "mallory",
+          owner: "0x1111111111111111111111111111111111111111",
+          server_signature: `0x${"ab".repeat(65)}`,
+          timestamp: 1_700_000_000,
+        },
+      }), { headers: { "Content-Type": "application/json" } }),
+    }),
+    (error: unknown) => (error as { code?: string }).code === "FARCASTER_IDENTITY_LOOKUP_INVALID",
+  );
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("alice", {
+      fetchImpl: async () => new Response(JSON.stringify({
+        transfer: {
+          to: 1,
+          username: "alice",
+          owner: "0x1111111111111111111111111111111111111111",
+          server_signature: `0x${"ab".repeat(64)}`,
+          timestamp: 1_700_000_000,
+        },
+      }), { headers: { "Content-Type": "application/json" } }),
+    }),
+    (error: unknown) => (error as { code?: string }).code === "FARCASTER_IDENTITY_LOOKUP_INVALID",
+  );
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("alice", {
+      fetchImpl: async () => new Response("<html>not a proof</html>", {
+        headers: { "Content-Type": "text/html" },
+      }),
+    }),
+    (error: unknown) => (error as { code?: string }).code === "FARCASTER_IDENTITY_LOOKUP_INVALID",
+  );
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("alice", {
+      fetchImpl: async () => new Response("x".repeat(8_193), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    }),
+    (error: unknown) => (error as { code?: string }).code === "FARCASTER_IDENTITY_LOOKUP_INVALID",
+  );
+  await assert.rejects(
+    () => resolveFarcasterFidByUsername("Kevin", {
+      fetchImpl: async () => { throw new Error("fetch must not run"); },
+    }),
+    (error: unknown) => (error as { code?: string }).code === "INVALID_FARCASTER_USERNAME",
   );
 });
 
@@ -1353,9 +1438,10 @@ test("identity verification API exposes one bundled challenge and one bundled ac
       "utf8",
     ),
   ]);
-  for (const field of ["requestId", "handle", "farcasterUsername", "farcasterFid"]) {
+  for (const field of ["requestId", "handle", "farcasterUsername"]) {
     assert.match(challengeRoute, new RegExp(`"${field}"`));
   }
+  assert.doesNotMatch(challengeRoute, /"farcasterFid"|body\.farcasterFid/);
   assert.match(challengeRoute, /issueIdentityBundleChallenge/);
   assert.match(activationRoute, /prepareGenLayerIdentityBundleActivation/);
   assert.match(activationRoute, /\["requestId", "verificationPostUrl", "castHash"\]/);

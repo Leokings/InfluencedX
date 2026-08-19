@@ -21,7 +21,6 @@ export async function POST(request: Request) {
       "requestId",
       "handle",
       "farcasterUsername",
-      "farcasterFid",
     ]);
     const session = readWalletSession(request);
     if (!session || !isAuthenticatedWalletSession(session)) {
@@ -43,7 +42,6 @@ export async function POST(request: Request) {
         requestId,
         handle: body.handle,
         farcasterUsername: body.farcasterUsername,
-        farcasterFid: body.farcasterFid,
       }),
       { headers: { "Cache-Control": "private, no-store" } },
     );

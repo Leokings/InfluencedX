@@ -314,6 +314,12 @@ test("resolution UI shows deterministic contract checks without a generated narr
 test("X and Farcaster verification prepare both proofs and submit one pinned bundle transaction", async () => {
   const source = await readFile(new URL("../app/verify/VerifyFlow.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/verification\/identity-challenge/);
+  assert.match(
+    source,
+    /requestBody\(\{\s*requestId: request\.id,\s*handle: normalizeXHandle\(handle\),\s*farcasterUsername: normalizeFarcasterUsername\(farcasterUsername\),\s*\}\)/,
+  );
+  assert.doesNotMatch(source, /name="farcasterFid"|parseFarcasterFid|farcasterFid:\s*parseFarcasterFid/);
+  assert.match(source, /farcasterFid: result\.farcasterChallenge\.fid/);
   assert.match(source, /\/api\/verification\/activation/);
   assert.match(source, /requestId: request\.id, verificationPostUrl: postUrl\.trim\(\), castHash/);
   assert.match(source, /expectedFunctionName: "activate_identity_bundle"/);

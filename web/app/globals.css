@@ -1523,10 +1523,6 @@ footer > div > a:hover { color: var(--red); }
   gap: 0 16px;
 }
 
-.identity-grid .verify-field:last-child {
-  grid-column: 1 / -1;
-}
-
 .bundle-proofs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3207,7 +3203,6 @@ footer > div > a:hover { color: var(--red); }
   .identity-grid,
   .proof-inputs,
   .bundle-proofs { grid-template-columns: 1fr; }
-  .identity-grid .verify-field:last-child { grid-column: auto; }
   .resolution-board > div { align-items: flex-start; flex-direction: column; gap: 8px; padding: 15px; }
   .resolution-board strong { text-align: left; }
   .request-commitment { align-items: flex-start; flex-direction: column; }

@@ -56,6 +56,9 @@ import type { AuthenticatedWalletSession } from "./wallet-session.ts";
 const TX_HASH = /^0x[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FARCASTER_HASH = /^0x[0-9a-f]{40}$/;
+const FARCASTER_USERNAME_PROOF_ENDPOINT =
+  "https://fnames.farcaster.xyz/transfers/current";
+const MAX_FARCASTER_USERNAME_PROOF_BYTES = 8_192;
 
 type VerificationRow = typeof verificationRequests.$inferSelect;
 type ActivationEnvelope = Readonly<{
@@ -80,7 +83,6 @@ export async function issueIdentityBundleChallenge(input: {
   requestId: string;
   handle: unknown;
   farcasterUsername: unknown;
-  farcasterFid: unknown;
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -105,7 +107,7 @@ export async function issueIdentityBundleChallenge(input: {
     throw problem(400, "INVALID_X_HANDLE", "Enter a valid X handle.");
   }
   const farcasterUsername = normalizeFarcasterUsername(input.farcasterUsername);
-  const farcasterFid = positiveDecimal(input.farcasterFid, "farcasterFid");
+  const farcasterFid = await resolveFarcasterFidByUsername(farcasterUsername);
   const expiresAt = nowMs + X_CHALLENGE_TTL_MS;
   const credentialExpiresAt = nowMs + CREDENTIAL_TTL_MS;
   const xChallenge = `APV2-${makeRandomBase64Url(18)}`;
@@ -169,6 +171,16 @@ export async function issueIdentityBundleChallenge(input: {
     .returning();
   if (!updated) stateChanged();
   const request = await requireProjection(input.session.subject, row.id, nowMs);
+  if (
+    request.handle !== handle ||
+    request.tweetText !== tweetText ||
+    request.farcasterUsername !== farcasterUsername ||
+    String(request.farcasterFid ?? "") !== farcasterFid ||
+    request.farcasterCastText !== castText ||
+    request.updatedAt !== new Date(updated.updatedAt).toISOString()
+  ) {
+    stateChanged();
+  }
   return Object.freeze({
     request,
     xChallenge: Object.freeze({
@@ -187,6 +199,98 @@ export async function issueIdentityBundleChallenge(input: {
       credentialExpiresAt: new Date(credentialExpiresAt).toISOString(),
     }),
   });
+}
+
+export async function resolveFarcasterFidByUsername(
+  value: unknown,
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<string> {
+  const username = normalizeFarcasterUsername(value);
+  const endpoint = new URL(FARCASTER_USERNAME_PROOF_ENDPOINT);
+  endpoint.searchParams.set("name", username);
+
+  let response: Response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "identity",
+      },
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
+    });
+  } catch {
+    throw problem(
+      503,
+      "FARCASTER_IDENTITY_LOOKUP_UNAVAILABLE",
+      "Farcaster identity lookup is temporarily unavailable.",
+    );
+  }
+
+  if (response.status === 404 || response.status === 410) {
+    throw problem(
+      400,
+      "FARCASTER_USERNAME_NOT_FOUND",
+      "That Farcaster username was not found.",
+    );
+  }
+  if (!response.ok) {
+    throw problem(
+      503,
+      "FARCASTER_IDENTITY_LOOKUP_UNAVAILABLE",
+      "Farcaster identity lookup is temporarily unavailable.",
+    );
+  }
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const declaredLength = Number(response.headers.get("content-length") ?? "0");
+  if (
+    !contentType.includes("application/json") ||
+    (Number.isFinite(declaredLength) &&
+      declaredLength > MAX_FARCASTER_USERNAME_PROOF_BYTES)
+  ) {
+    throw invalidFarcasterProof();
+  }
+
+  const text = await readBoundedFarcasterProofBody(response);
+
+  let proof: unknown;
+  try {
+    proof = JSON.parse(text) as unknown;
+  } catch {
+    throw invalidFarcasterProof();
+  }
+  if (!plain(proof)) throw invalidFarcasterProof();
+
+  const transfer = plain(proof.transfer) ? proof.transfer : null;
+  if (
+    transfer &&
+    transfer.username === username &&
+    (transfer.to === 0 || transfer.to === "0")
+  ) {
+    throw problem(
+      400,
+      "FARCASTER_USERNAME_NOT_FOUND",
+      "That Farcaster username was not found.",
+    );
+  }
+  const fid = protocolDecimal(transfer?.to);
+  if (
+    !transfer ||
+    transfer.username !== username ||
+    !fid ||
+    typeof transfer.owner !== "string" ||
+    !/^0x[0-9a-fA-F]{40}$/.test(transfer.owner) ||
+    !validFarcasterTransferSignature(transfer.server_signature) ||
+    !protocolDecimal(transfer.timestamp)
+  ) {
+    throw invalidFarcasterProof();
+  }
+  return fid;
 }
 
 export async function issueFarcasterChallenge(input: {
@@ -1861,11 +1965,68 @@ function storedXPost(row: VerificationRow) {
 
 function normalizeFarcasterUsername(value: unknown): string {
   if (typeof value !== "string") throw problem(400, "INVALID_FARCASTER_USERNAME", "username is required.");
-  const username = value.trim().replace(/^@/, "").toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(username)) {
+  const candidate = value.trim().replace(/^@/, "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,15}$/.test(candidate)) {
     throw problem(400, "INVALID_FARCASTER_USERNAME", "username must be a Farcaster fname.");
   }
-  return username;
+  return candidate.toLowerCase();
+}
+
+function protocolDecimal(value: unknown): string | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  }
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/.test(value)) {
+    return null;
+  }
+  return BigInt(value) <= (1n << 64n) - 1n ? value : null;
+}
+
+function validFarcasterTransferSignature(value: unknown): boolean {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{130}$/.test(value);
+}
+
+async function readBoundedFarcasterProofBody(response: Response): Promise<string> {
+  if (!response.body) throw invalidFarcasterProof();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_FARCASTER_USERNAME_PROOF_BYTES) {
+        await reader.cancel();
+        throw invalidFarcasterProof();
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof ApiProblem) throw error;
+    throw invalidFarcasterProof();
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw invalidFarcasterProof();
+  }
+}
+
+function invalidFarcasterProof(): ApiProblem {
+  return problem(
+    503,
+    "FARCASTER_IDENTITY_LOOKUP_INVALID",
+    "Farcaster identity lookup returned an invalid response.",
+  );
 }
 
 function positiveDecimal(value: unknown, field: string): string {
