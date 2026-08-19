@@ -67,6 +67,6 @@ test("operator configuration is disabled by default and pins the V2 checksum RPC
   const config = loadConfig(validEnv());
   assert.equal(config.chainId, 61_999);
   assert.equal(config.contractAddress, configFixture().contractAddress);
-  assert.equal(config.rpcContractAddress, "0x17eB37A3578E21662F4D654b245238dF520663Fa");
+  assert.equal(config.rpcContractAddress, "0x58D598B8323E9C1d041989DccE80E737109DE347");
   assert.throws(() => loadConfig(validEnv({ INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS: `0x${"0".repeat(40)}` })));
 });

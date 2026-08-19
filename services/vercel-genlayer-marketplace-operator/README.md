@@ -8,7 +8,13 @@ An isolated, disabled-by-default StudioNet service for three permissionless mark
 
 It cannot accept a target, method, arbitrary argument array, or native value from a caller. The target is the configured marketplace contract, the method is selected from the fixed allowlist, arguments are derived from a strict request shape, and the only write adapter hard-codes `value: 0n`.
 
-The service is address- and protocol-driven for the fresh marketplace v2 deployment. It deliberately does **not** pin or operate the current v1 contract. Do not enable it until the Farcaster/content-source and seven-day-upgrade-timelock v2 contract has a final StudioNet address and ABI.
+The service is address- and protocol-driven for Marketplace V2, deployed on
+StudioNet at `0x58D598B8323E9C1d041989DccE80E737109DE347` with protocol
+`INFLUENCEDX_MARKETPLACE_V2` and storage schema `2`. It deliberately does
+**not** operate retired V1 at `0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11`.
+Keep it disabled until the exact address, ABI, live `get_config()`, database
+migration, queue, signer separation, and authorized caller deployment have all
+been verified.
 
 ## Security boundary
 
@@ -40,9 +46,9 @@ All variables are required when enabled:
 | `INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE` | `studionet` |
 | `INFLUENCEDX_GENLAYER_NETWORK` | `studionet` |
 | `INFLUENCEDX_GENLAYER_CHAIN_ID` | `61999` |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | Fresh v2 marketplace address; non-zero lower/upper input is normalized to lower case. |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL` | Exact v2 `get_config().protocol_version` value. |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION` | Exact v2 `get_config().storage_schema_version`. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | `0x58D598B8323E9C1d041989DccE80E737109DE347`; non-zero lower/upper input is normalized to lower case. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL` | `INFLUENCEDX_MARKETPLACE_V2`, matching live `get_config().protocol_version`. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION` | `2`, matching live `get_config().storage_schema_version`. |
 | `GENLAYER_MARKETPLACE_OPERATOR_PRIVATE_KEY` | Dedicated zero-fund StudioNet operator key. Never reuse an owner/governance key. |
 | `DATABASE_URL` | Private PostgreSQL connection URL. |
 | `INFLUENCEDX_OPERATOR_SERVICE_TOKEN` | Independent random 32-byte hex token. |
