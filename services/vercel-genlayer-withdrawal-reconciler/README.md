@@ -8,7 +8,8 @@ confirm_withdrawal(withdrawal_id, evidence_hash), value = 0
 
 The chain boundary remains literal-pinned to StudioNet chain `61999`, protocol
 `INFLUENCEDX_MARKETPLACE_V2`, storage schema `2`, contract
-`0x58D598B8323E9C1d041989DccE80E737109DE347`, and withdrawal confirmer
+`0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4` (finalized deployment transaction
+`0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2`), and withdrawal confirmer
 `0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8`. The configured confirmer,
 private-key-derived signer, and live `get_config().withdrawal_confirmer` must
 match exactly on every chain precheck.
@@ -82,7 +83,7 @@ Do not deploy from the repository root. Create a separate Vercel project with th
 1. Keep `INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false`.
 2. Create a dedicated private PostgreSQL database/schema and set `DATABASE_URL`.
 3. Run `npm ci` and `npm run migrate` against that database. The migrations
-   fail closed if rows from the retired contract or owner-authorized signer
+   fail closed if any rows from a retired contract or owner-authorized signer
    boundary exist; use a fresh database or explicitly archive them after manual
    reconciliation.
 4. Configure every exact variable from `.env.example`. The private key must

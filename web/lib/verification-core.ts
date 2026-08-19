@@ -183,12 +183,10 @@ export function parseVerificationPostUrl(value: unknown): ParsedVerificationPost
     !allowedHosts.has(hostname) ||
     url.username ||
     url.password ||
-    url.port ||
-    url.search ||
-    url.hash
+    url.port
   ) {
     throw new Error(
-      "Use the canonical HTTPS x.com or twitter.com post URL without query parameters.",
+      "Use an HTTPS x.com or twitter.com post URL.",
     );
   }
 

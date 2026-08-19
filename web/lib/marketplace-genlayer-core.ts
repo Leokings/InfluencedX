@@ -88,6 +88,24 @@ export type GenLayerOwnershipResult = Readonly<{
   checks: Readonly<Record<string, boolean>>;
 }>;
 
+export type GenLayerIdentityBundleResult = Readonly<{
+  requestId: string;
+  wallet: string;
+  kind: "IDENTITY_BUNDLE";
+  xRequestId: string;
+  farcasterRequestId: string;
+  xOutcome: GenLayerOwnershipOutcome;
+  farcasterOutcome: GenLayerOwnershipOutcome;
+  verifiedAtEpoch: number;
+  outcome: GenLayerOwnershipOutcome;
+}>;
+
+export type GenLayerRejectedBundleOwnershipResult = GenLayerOwnershipResult &
+  Readonly<{
+    bundleRequestId: string;
+    evidenceOutcome: GenLayerOwnershipOutcome;
+  }>;
+
 export type GenLayerApplicationState = Readonly<{
   applicationId: string;
   campaignId: string;
@@ -333,6 +351,19 @@ export function deriveFarcasterOwnershipRequestId(input: {
   );
 }
 
+export function deriveIdentityBundleRequestId(input: {
+  wallet: string;
+  xRequestId: string;
+  farcasterRequestId: string;
+}): string {
+  return domainHash(
+    "influencedx-identity-bundle-v1",
+    normalizeMarketplaceAddress(input.wallet, "wallet"),
+    normalizeMarketplaceHash(input.xRequestId, "xRequestId"),
+    normalizeMarketplaceHash(input.farcasterRequestId, "farcasterRequestId"),
+  );
+}
+
 export function deriveResolutionRequestId(input: {
   assignmentId: string;
   agreementHash: string;
@@ -522,6 +553,107 @@ export function parseOwnershipResult(
     throw new Error("ownership result binding is invalid.");
   }
   return Object.freeze(result);
+}
+
+export function parseIdentityBundleResult(
+  value: unknown,
+  expected: Readonly<{
+    requestId: string;
+    wallet: string;
+    xRequestId: string;
+    farcasterRequestId: string;
+  }>,
+): GenLayerIdentityBundleResult {
+  const row = record(value, "identity bundle result");
+  const fields = [
+    "request_id",
+    "wallet",
+    "kind",
+    "x_request_id",
+    "farcaster_request_id",
+    "x_outcome",
+    "farcaster_outcome",
+    "verified_at_epoch",
+    "outcome",
+  ];
+  if (Object.keys(row).sort().join(",") !== fields.sort().join(",")) {
+    throw new Error("identity bundle result fields are invalid.");
+  }
+  const outcomes = ["VERIFIED", "REJECTED", "UNDETERMINED"] as const;
+  const xOutcome = stringEnum(row.x_outcome, "identity bundle X outcome", outcomes);
+  const farcasterOutcome = stringEnum(
+    row.farcaster_outcome,
+    "identity bundle Farcaster outcome",
+    outcomes,
+  );
+  const outcome = stringEnum(row.outcome, "identity bundle outcome", outcomes);
+  const expectedOutcome: GenLayerOwnershipOutcome =
+    xOutcome === "VERIFIED" && farcasterOutcome === "VERIFIED"
+      ? "VERIFIED"
+      : xOutcome === "UNDETERMINED" || farcasterOutcome === "UNDETERMINED"
+        ? "UNDETERMINED"
+        : "REJECTED";
+  const result = {
+    requestId: hashField(row, "request_id"),
+    wallet: addressField(row, "wallet"),
+    kind: textField(row, "kind", 1, 32),
+    xRequestId: hashField(row, "x_request_id"),
+    farcasterRequestId: hashField(row, "farcaster_request_id"),
+    xOutcome,
+    farcasterOutcome,
+    verifiedAtEpoch: integerField(row, "verified_at_epoch"),
+    outcome,
+  };
+  if (
+    result.kind !== "IDENTITY_BUNDLE" ||
+    result.requestId !== normalizeMarketplaceHash(expected.requestId, "requestId") ||
+    result.wallet !== normalizeMarketplaceAddress(expected.wallet, "wallet") ||
+    result.xRequestId !== normalizeMarketplaceHash(expected.xRequestId, "xRequestId") ||
+    result.farcasterRequestId !== normalizeMarketplaceHash(
+      expected.farcasterRequestId,
+      "farcasterRequestId",
+    ) ||
+    result.outcome !== expectedOutcome
+  ) {
+    throw new Error("identity bundle result binding is invalid.");
+  }
+  return Object.freeze(result as GenLayerIdentityBundleResult);
+}
+
+export function parseRejectedBundleOwnershipResult(
+  value: unknown,
+  expected: Parameters<typeof parseOwnershipResult>[1] &
+    Readonly<{
+      bundleRequestId: string;
+      evidenceOutcome: GenLayerOwnershipOutcome;
+    }>,
+): GenLayerRejectedBundleOwnershipResult {
+  const row = record(value, "rejected bundle ownership result");
+  if (
+    !Object.prototype.hasOwnProperty.call(row, "bundle_request_id") ||
+    !Object.prototype.hasOwnProperty.call(row, "evidence_outcome")
+  ) {
+    throw new Error("rejected bundle ownership result fields are invalid.");
+  }
+  const bundleRequestId = hashField(row, "bundle_request_id");
+  const evidenceOutcome = stringEnum(
+    row.evidence_outcome,
+    "bundle evidence outcome",
+    ["VERIFIED", "REJECTED", "UNDETERMINED"] as const,
+  );
+  const base = { ...row };
+  delete base.bundle_request_id;
+  delete base.evidence_outcome;
+  const parsed = parseOwnershipResult(base, expected);
+  if (
+    parsed.outcome !== "REJECTED" ||
+    bundleRequestId !==
+      normalizeMarketplaceHash(expected.bundleRequestId, "bundleRequestId") ||
+    evidenceOutcome !== expected.evidenceOutcome
+  ) {
+    throw new Error("rejected bundle ownership result binding is invalid.");
+  }
+  return Object.freeze({ ...parsed, bundleRequestId, evidenceOutcome });
 }
 
 export function ownershipOutcomeAllowsRetry(

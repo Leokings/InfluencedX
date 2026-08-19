@@ -16,11 +16,11 @@ export const MARKETPLACE_NATIVE_SYMBOL = "GEN" as const;
 export const MARKETPLACE_NATIVE_DECIMALS = 18 as const;
 export const DEFAULT_STUDIONET_RPC_URL = "https://studio.genlayer.com/api";
 export const MARKETPLACE_V2_STUDIONET_ADDRESS =
-  "0x58d598b8323e9c1d041989dcce80e737109de347" as const;
+  "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4" as const;
 export const MARKETPLACE_V2_STUDIONET_RPC_ADDRESS =
-  "0x58D598B8323E9C1d041989DccE80E737109DE347" as const;
+  "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4" as const;
 export const MARKETPLACE_V2_DEPLOYMENT_TX =
-  "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a" as const;
+  "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2" as const;
 export const MARKETPLACE_GENLAYER_ARG_TYPES = [
   "string",
   "bool",

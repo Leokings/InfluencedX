@@ -5,8 +5,10 @@ export const RECONCILER_STAGE = "studionet" as const;
 export const RECONCILER_NETWORK = "studionet" as const;
 export const STUDIONET_CHAIN_ID = 61_999 as const;
 export const STUDIONET_RPC_URL = "https://studio.genlayer.com/api" as const;
-export const MARKETPLACE_ADDRESS = "0x58d598b8323e9c1d041989dcce80e737109de347" as const;
-export const MARKETPLACE_RPC_ADDRESS = "0x58D598B8323E9C1d041989DccE80E737109DE347" as const;
+export const MARKETPLACE_ADDRESS = "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4" as const;
+export const MARKETPLACE_RPC_ADDRESS = "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4" as const;
+export const MARKETPLACE_DEPLOYMENT_TX_HASH =
+  "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2" as const;
 export const MARKETPLACE_WITHDRAWAL_CONFIRMER = "0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8" as const;
 export const MARKETPLACE_PROTOCOL = "INFLUENCEDX_MARKETPLACE_V2" as const;
 export const MARKETPLACE_SCHEMA_VERSION = 2 as const;

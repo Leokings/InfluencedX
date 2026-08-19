@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { abi } from "genlayer-js";
@@ -24,11 +25,14 @@ import {
   deriveCampaignId,
   deriveCampaignTermsHash,
   deriveFarcasterOwnershipRequestId,
+  deriveIdentityBundleRequestId,
   deriveProjectionId,
   deriveResolutionRequestId,
   normalizeContractText,
   parseCampaignState,
   parseOwnershipResult,
+  parseIdentityBundleResult,
+  parseRejectedBundleOwnershipResult,
   ownershipOutcomeAllowsRetry,
   type GenLayerAssignmentState,
   type GenLayerCampaignState,
@@ -88,7 +92,7 @@ const txHash = `0x${"33".repeat(32)}`;
 const campaignId = `0x${"44".repeat(32)}`;
 const assignmentId = `0x${"45".repeat(32)}`;
 const requestId = `0x${"46".repeat(32)}`;
-const marketplaceAddress = "0x58d598b8323e9c1d041989dcce80e737109de347";
+const marketplaceAddress = "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4";
 const creator = "0x5555555555555555555555555555555555555555";
 const maintenanceDeploymentId = "dpl_7Gw5ZMBpQA8h9GF832KGp7nwbuh3";
 const nextMaintenanceDeploymentId = "dpl_8Hx6ANCqRB9i0HG943LHq8oxcvi4";
@@ -102,7 +106,7 @@ const maintenanceContext: MarketplaceMaintenanceDeploymentContext = {
 test("StudioNet RPC calls preserve the deployed checksum address", () => {
   assert.equal(
     marketplaceRpcContractAddress(),
-    "0x58D598B8323E9C1d041989DccE80E737109DE347",
+    "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4",
   );
 });
 
@@ -367,6 +371,103 @@ test("Farcaster ownership and source-bound resolution IDs match V2 domains", () 
   );
 });
 
+test("identity bundle IDs and final result parsing bind both source requests", () => {
+  const xRequestId = `0x${"12".repeat(32)}`;
+  const farcasterRequestId = `0x${"34".repeat(32)}`;
+  const expectedBundleId = `0x${createHash("sha256")
+    .update(
+      [
+        "influencedx-identity-bundle-v1",
+        brand,
+        xRequestId,
+        farcasterRequestId,
+      ].join("|"),
+    )
+    .digest("hex")}`;
+  assert.equal(
+    deriveIdentityBundleRequestId({ wallet: brand, xRequestId, farcasterRequestId }),
+    expectedBundleId,
+  );
+  const raw = {
+    request_id: expectedBundleId,
+    wallet: brand,
+    kind: "IDENTITY_BUNDLE",
+    x_request_id: xRequestId,
+    farcaster_request_id: farcasterRequestId,
+    x_outcome: "VERIFIED",
+    farcaster_outcome: "VERIFIED",
+    verified_at_epoch: 1_800_000_030,
+    outcome: "VERIFIED",
+  };
+  assert.equal(
+    parseIdentityBundleResult(raw, {
+      requestId: expectedBundleId,
+      wallet: brand,
+      xRequestId,
+      farcasterRequestId,
+    }).outcome,
+    "VERIFIED",
+  );
+  assert.throws(() =>
+    parseIdentityBundleResult(
+      { ...raw, farcaster_request_id: `0x${"35".repeat(32)}` },
+      {
+        requestId: expectedBundleId,
+        wallet: brand,
+        xRequestId,
+        farcasterRequestId,
+      },
+    ),
+  );
+});
+
+test("rejected bundle child results preserve evidence outcome without activating a source", () => {
+  const bundleRequestId = `0x${"71".repeat(32)}`;
+  const childRequestId = `0x${"72".repeat(32)}`;
+  const expected = {
+    requestId: childRequestId,
+    wallet: brand,
+    source: "X" as const,
+    handle: "creator",
+    contentId: "1900000000000000000",
+    issuedAtEpoch: 1_800_000_000,
+    expiresAtEpoch: 1_800_000_900,
+    profileExpiresAtEpoch: 1_802_592_000,
+  };
+  const parsed = parseRejectedBundleOwnershipResult(
+    {
+      request_id: childRequestId,
+      wallet: brand,
+      source: "X",
+      handle: "creator",
+      x_user_id: "123456",
+      external_user_id: "123456",
+      identity_hash: `0x${"73".repeat(32)}`,
+      post_id: expected.contentId,
+      issued_at_epoch: expected.issuedAtEpoch,
+      expires_at_epoch: expected.expiresAtEpoch,
+      profile_expires_at_epoch: expected.profileExpiresAtEpoch,
+      verified_at_epoch: expected.issuedAtEpoch + 30,
+      outcome: "REJECTED",
+      evidence_outcome: "VERIFIED",
+      bundle_request_id: bundleRequestId,
+      author_match: true,
+      post_id_match: true,
+      protocol_match: true,
+      challenge_match: true,
+      wallet_match: true,
+      issued_at_match: true,
+      expires_at_match: true,
+      profile_expires_at_match: true,
+      publication_in_window: true,
+    },
+    { ...expected, bundleRequestId, evidenceOutcome: "VERIFIED" },
+  );
+  assert.equal(parsed.outcome, "REJECTED");
+  assert.equal(parsed.evidenceOutcome, "VERIFIED");
+  assert.equal(parsed.bundleRequestId, bundleRequestId);
+});
+
 test("ownership result projection distinguishes VERIFIED, REJECTED, and retryable UNDETERMINED", async () => {
   const expected = {
     requestId: `0x${"81".repeat(32)}`,
@@ -417,12 +518,14 @@ test("ownership result projection distinguishes VERIFIED, REJECTED, and retryabl
 });
 
 test("retryable identity activation forces a fresh finalized transaction and assignment retries advance request IDs", async () => {
-  const [activation, repository] = await Promise.all([
+  const [activation, repository, journal] = await Promise.all([
     readFile(new URL("../lib/marketplace-genlayer-activation.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-journal.ts", import.meta.url), "utf8"),
   ]);
   assert.match(activation, /reuseFinalized: row\.genlayerOutcome !== "UNDETERMINED"/);
   assert.match(repository, /input\.reuseFinalized[\s\S]*"FINALIZED"/);
+  assert.match(journal, /ACTIVATE_IDENTITY_BUNDLE[\s\S]*reconcileGenLayerCreatorActivationJournal/);
   assert.deepEqual(
     nextGenLayerResolutionProgression({
       assignment: {
@@ -1172,6 +1275,143 @@ test("0010 adds an empty, environment-scoped maintenance generation fence", asyn
   assert.match(seedRoute, /x-influencedx-maintenance-generation/);
   assert.match(seedRoute, /promoteMarketplaceMaintenanceGeneration/);
   assert.doesNotMatch(seedRoute, /runGenLayerMaintenanceBatch/);
+});
+
+test("0011 releases legacy identity locks and journals atomic bundle child IDs", async () => {
+  const migration = await readFile(
+    new URL(
+      "../drizzle-postgres/0011_identity_bundle_activation.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /"x_ownership_request_id" text/);
+  assert.match(migration, /"farcaster_ownership_request_id" text/);
+  assert.match(migration, /verification_requests_identity_bundle_pair/);
+  assert.match(migration, /ACTIVATE_IDENTITY_BUNDLE/);
+  assert.match(
+    migration,
+    /UPDATE "verification_requests"[\s\S]*"status" = 'EXPIRED'[\s\S]*"active_owner_user_id" = NULL[\s\S]*"active_wallet" = NULL/,
+  );
+  for (const ephemeral of [
+    "wallet_nonce",
+    "wallet_message",
+    "x_challenge",
+    "tweet_text",
+    "farcaster_challenge",
+    "farcaster_cast_text",
+  ]) {
+    assert.match(migration, new RegExp(`"${ephemeral}" = NULL`));
+  }
+  assert.match(
+    migration,
+    /WHERE "x_ownership_request_id" IS NULL[\s\S]*"farcaster_ownership_request_id" IS NULL[\s\S]*"status" <> 'EXPIRED'/,
+  );
+  assert.match(
+    migration,
+    /UPDATE "marketplace_genlayer_transactions"[\s\S]*"status" = 'NETWORK_TERMINATED'[\s\S]*'IDENTITY_BUNDLE_CUTOVER'[\s\S]*"operation" = 'ACTIVATE_CREATOR'/,
+  );
+  assert.match(migration, /marketplace_genlayer_transactions_operation[\s\S]*NOT VALID/);
+  assert.match(
+    migration,
+    /VALIDATE CONSTRAINT "marketplace_genlayer_transactions_operation"/,
+  );
+  assert.doesNotMatch(
+    migration,
+    /ADD CONSTRAINT "marketplace_genlayer_transactions_operation"[\s\S]*IN \([\s\S]*'ACTIVATE_CREATOR'/,
+  );
+  assert.doesNotMatch(migration, /\bDELETE\b/i);
+  assert.doesNotMatch(
+    migration,
+    /"(?:activation_prepared_id|activation_tx_hash|finalized_request_id)" = NULL/,
+  );
+});
+
+test("identity verification API exposes one bundled challenge and one bundled activation", async () => {
+  const [challengeRoute, activationRoute, submittedRoute, xRoute, farcasterRoute] = await Promise.all([
+    readFile(
+      new URL("../app/api/verification/identity-challenge/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/api/verification/activation/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../app/api/verification/activation/submitted/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/api/verification/x-challenge/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/api/verification/farcaster-challenge/route.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  for (const field of ["requestId", "handle", "farcasterUsername", "farcasterFid"]) {
+    assert.match(challengeRoute, new RegExp(`"${field}"`));
+  }
+  assert.match(challengeRoute, /issueIdentityBundleChallenge/);
+  assert.match(activationRoute, /prepareGenLayerIdentityBundleActivation/);
+  assert.match(activationRoute, /\["requestId", "verificationPostUrl", "castHash"\]/);
+  assert.doesNotMatch(activationRoute, /body\.source/);
+  assert.match(submittedRoute, /\["preparedId", "txHash"\]/);
+  assert.match(submittedRoute, /bindGenLayerIdentityBundleActivationSubmission/);
+  assert.match(xRoute, /IDENTITY_BUNDLE_REQUIRED/);
+  assert.match(farcasterRoute, /IDENTITY_BUNDLE_REQUIRED/);
+  assert.match(xRoute, /status: 410/);
+  assert.match(farcasterRoute, /status: 410/);
+});
+
+test("post-submit recovery binds the exact bundle hash before hosted reconciliation", async () => {
+  const [activation, repository] = await Promise.all([
+    readFile(
+      new URL("../lib/marketplace-genlayer-activation.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  const start = activation.indexOf(
+    "export async function bindGenLayerIdentityBundleActivationSubmission",
+  );
+  const end = activation.indexOf("async function confirmLegacy", start);
+  assert.ok(start >= 0 && end > start);
+  const binding = activation.slice(start, end);
+  assert.match(binding, /storedIdentityBundleEnvelope\(row, prepared\)/);
+  assert.match(binding, /assertPreparedActivation/);
+  assert.match(binding, /bindGenLayerTransactionHash\(\{/);
+  assert.match(binding, /bound\.transactionHash !== transactionHash/);
+  const bindStart = repository.indexOf(
+    "export async function bindGenLayerTransactionHash",
+  );
+  const bindEnd = repository.indexOf(
+    "export async function recordGenLayerTransactionStatus",
+    bindStart,
+  );
+  const journalBind = repository.slice(bindStart, bindEnd);
+  assert.match(journalBind, /status: "SUBMITTED"/);
+  assert.match(journalBind, /nextReconcileAt: nowMs \+ 60_000/);
+  assert.match(journalBind, /seedGenLayerJournalMaintenance\(nowMs\)/);
+  const recoveryStart = activation.indexOf("async function activationRecoveryForRequest");
+  const recoveryEnd = activation.indexOf("function storedXPost", recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart);
+  const recovery = activation.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /prepared\.operation !== "ACTIVATE_IDENTITY_BUNDLE"/);
+  assert.match(recovery, /prepared\.actorWallet !== request\.wallet/);
+  assert.match(recovery, /prepared\.onchainEntityId !== request\.finalizedRequestId/);
+  assert.match(recovery, /prepared\.contractAddress !== marketplaceContractAddress\(\)\.toLowerCase\(\)/);
+  assert.match(recovery, /requestId: request\.id/);
+  assert.match(recovery, /preparedId: prepared\.preparedId/);
+  assert.match(recovery, /txHash: prepared\.transactionHash/);
+  assert.doesNotMatch(recovery, /prepared\.args|Challenge|challenge/);
 });
 
 test("database verifier requires the complete native projection and activation schema", async () => {

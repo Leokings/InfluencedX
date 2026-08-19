@@ -6,6 +6,7 @@ import {
   validateQueueMessage,
   validateReconciliationRequest,
 } from "../lib/envelope";
+import { MARKETPLACE_DEPLOYMENT_TX_HASH } from "../lib/constants";
 import { configFixture, validEnv, WITHDRAWAL_CONFIRMER, WITHDRAWAL_ID } from "./helpers";
 
 const loadTestConfig = (env = validEnv()) => loadConfig(env, () => WITHDRAWAL_CONFIRMER);
@@ -35,8 +36,12 @@ test("queue messages cannot smuggle proof, method, value, or recipient", () => {
 });
 
 test("configuration is disabled by default and every chain boundary is literal-pinned", () => {
-  assert.equal(loadTestConfig().contractAddress, "0x58d598b8323e9c1d041989dcce80e737109de347");
-  assert.equal(loadTestConfig().rpcContractAddress, "0x58D598B8323E9C1d041989DccE80E737109DE347");
+  assert.equal(loadTestConfig().contractAddress, "0xeaceba807a7a4dc370f3b5a8e45539596b8551b4");
+  assert.equal(loadTestConfig().rpcContractAddress, "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4");
+  assert.equal(
+    MARKETPLACE_DEPLOYMENT_TX_HASH,
+    "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2",
+  );
   assert.equal(loadTestConfig().contractWithdrawalConfirmer, WITHDRAWAL_CONFIRMER);
   for (const patch of [
     { INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED: "false" },

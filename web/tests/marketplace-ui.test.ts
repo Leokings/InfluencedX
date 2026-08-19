@@ -15,6 +15,8 @@ import {
   hydrateArgs,
   validatePlan,
 } from "../app/marketplace/marketplace-transaction.ts";
+import { shouldRejectVerificationResponse } from "../app/verify/verification-api-client.ts";
+import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle } from "../app/verify/verification-recovery.ts";
 import { MarketplaceApiError, marketplaceErrorMessage } from "../app/marketplace/marketplace-api.ts";
 import {
   classifyCreatorMetrics,
@@ -48,8 +50,8 @@ test("uses the live StudioNet explorer route shapes", () => {
   const address = `0x${"34".repeat(20)}`;
   assert.equal(studioNetExplorerLink("tx", transactionHash), `https://explorer-studio.genlayer.com/tx/${transactionHash}`);
   assert.equal(studioNetExplorerLink("address", address), `https://explorer-studio.genlayer.com/address/${address}`);
-  assert.equal(STUDIONET_MARKETPLACE_ADDRESS, "0x58D598B8323E9C1d041989DccE80E737109DE347");
-  assert.equal(STUDIONET_MARKETPLACE_DEPLOYMENT_TX, "0x899c619e51775eed7c442ddb1c6f1fa8073a25005681935d3dda763aef2fc24a");
+  assert.equal(STUDIONET_MARKETPLACE_ADDRESS, "0xEaCeBa807a7A4dc370f3B5a8e45539596b8551b4");
+  assert.equal(STUDIONET_MARKETPLACE_DEPLOYMENT_TX, "0x8881290fcbe992a222995fccc0f2994e3752bd4e4aad35e6d25628e3c6df21d2");
 });
 
 test("adds wallet recovery guidance only to wallet-session conflicts", () => {
@@ -153,6 +155,68 @@ test("wallet signing pins the V2 contract, method schema, and GEN value", () => 
   const campaignTypes = ["string", "string", "string", "string", "string", "string", "string", "bool", "u256", "u256", "u256", "u256", "u256", "u256"] as const;
   assert.doesNotThrow(() => validatePlan({ ...base, functionName: "create_campaign", args: campaignArgs, argTypes: campaignTypes, value: "1" } as never, contract));
   assert.throws(() => validatePlan({ ...base, functionName: "create_campaign", args: campaignArgs, argTypes: campaignTypes, value: "2" } as never, contract), /committed budget/);
+
+  const bundleTypes = [
+    "string", "string", "string", "string", "string", "u256", "u256", "u256",
+    "string", "string", "u256", "string", "string", "u256", "u256", "u256",
+  ] as const;
+  const bundleArgs = bundleTypes.map((type) => type === "u256" ? "1" : "x");
+  const bundle = { ...base, functionName: "activate_identity_bundle", args: bundleArgs, argTypes: bundleTypes };
+  assert.doesNotThrow(() => validatePlan(bundle as never, contract, "activate_identity_bundle", "0"));
+  const invalidBundleTypes = [...bundleTypes];
+  invalidBundleTypes[0] = "u256";
+  assert.throws(
+    () => validatePlan({ ...bundle, argTypes: invalidBundleTypes } as never, contract, "activate_identity_bundle", "0"),
+    /argument schema is not authorized/,
+  );
+  assert.throws(
+    () => validatePlan({ ...bundle, value: "1" } as never, contract, "activate_identity_bundle", "0"),
+    /expected marketplace action/,
+  );
+});
+
+test("identity recovery keeps only the active unfinished bundle for this server request", () => {
+  const recovery = { requestId: "request-a" };
+  const active = {
+    id: "request-a",
+    status: "X_CHALLENGE_ISSUED",
+    identityBundleReady: true,
+    tweetText: "x proof",
+    farcasterCastText: "farcaster proof",
+    genlayerOutcome: null,
+    genlayerRetryable: null,
+  };
+  assert.equal(recoveryMatchesActiveBundle(recovery, active), true);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, genlayerOutcome: "UNDETERMINED", genlayerRetryable: true }), true);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, id: "request-b" }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, status: "EXPIRED" }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, identityBundleReady: false, farcasterCastText: null }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, genlayerOutcome: "VERIFIED" }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, genlayerOutcome: "REJECTED" }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, { ...active, genlayerOutcome: "UNDETERMINED", genlayerRetryable: false }), false);
+  assert.equal(recoveryMatchesActiveBundle(recovery, null), false);
+});
+
+test("identity recovery accepts only the exact server-bound tuple", () => {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const preparedId = "22222222-2222-4222-8222-222222222222";
+  const txHash = `0x${"AB".repeat(32)}`;
+  assert.deepEqual(
+    parseBoundIdentityBundleRecovery({ requestId, preparedId, txHash }, requestId),
+    { requestId, preparedId, txHash: txHash.toLowerCase() },
+  );
+  assert.equal(parseBoundIdentityBundleRecovery({ requestId, preparedId, txHash }, "33333333-3333-4333-8333-333333333333"), null);
+  assert.equal(parseBoundIdentityBundleRecovery({ requestId, preparedId, txHash, source: "X" }, requestId), null);
+  assert.equal(parseBoundIdentityBundleRecovery({ requestId, preparedId, txHash: "0x12" }, requestId), null);
+});
+
+test("verification client keeps pending recovery when a 202 carries an API error", () => {
+  assert.equal(shouldRejectVerificationResponse(202, {
+    error: { code: "GENLAYER_FINALITY_PENDING", message: "Not finalized." },
+  }), true);
+  assert.equal(shouldRejectVerificationResponse(202, { accepted: true }), false);
+  assert.equal(shouldRejectVerificationResponse(409, {}), true);
+  assert.equal(shouldRejectVerificationResponse(200, { request: {} }), false);
 });
 
 test("deduplicates creator metric requests and caps the client fetch pool", () => {
@@ -247,22 +311,30 @@ test("resolution UI shows deterministic contract checks without a generated narr
   assert.doesNotMatch(source, /application\.(?:reasoning|narrative)/);
 });
 
-test("X and Farcaster verification use source-specific challenges and direct user-signed V2 activations", async () => {
+test("X and Farcaster verification prepare both proofs and submit one pinned bundle transaction", async () => {
   const source = await readFile(new URL("../app/verify/VerifyFlow.tsx", import.meta.url), "utf8");
-  assert.match(source, /\/api\/verification\/x-challenge/);
-  assert.match(source, /\/api\/verification\/farcaster-challenge/);
+  assert.match(source, /\/api\/verification\/identity-challenge/);
   assert.match(source, /\/api\/verification\/activation/);
-  assert.match(source, /source, castHash:/);
-  assert.match(source, /source, verificationPostUrl:/);
-  assert.match(source, /activate_farcaster_creator/);
-  assert.match(source, /activate_creator/);
+  assert.match(source, /requestId: request\.id, verificationPostUrl: postUrl\.trim\(\), castHash/);
+  assert.match(source, /expectedFunctionName: "activate_identity_bundle"/);
+  assert.match(source, /VERIFY BOTH · 1 TRANSACTION/);
+  assert.equal(source.match(/1 TRANSACTION/g)?.length, 1);
+  assert.doesNotMatch(source, /Pinned to this wallet|ONE WALLET TRANSACTION|NO SOCIAL PASSWORDS/);
+  assert.match(source, /\/api\/verification\/activation\/submitted/);
+  assert.match(source, /onSubmitted: async \(hash\)/);
   assert.match(source, /genlayerOutcome === "UNDETERMINED"/);
-  assert.match(source, /RETRY .* ACTIVATION/);
-  assert.match(source, /Do not publish again/);
+  assert.match(source, /Retry with the same two posts/);
   assert.match(source, /broadcastMarketplaceTransaction/);
   assert.match(source, /preparedId: value\.preparedId, txHash: value\.txHash/);
+  assert.doesNotMatch(source, /\/api\/verification\/(?:x-challenge|farcaster-challenge)/);
+  assert.doesNotMatch(source, /expectedFunctionName: "activate_(?:creator|farcaster_creator)"/);
   assert.doesNotMatch(source, /\/api\/verification\/(intent|submit)/);
   assert.doesNotMatch(source, /BASE RELAY|BASE SEPOLIA/);
+
+  const transactionSource = await readFile(new URL("../app/marketplace/marketplace-transaction.ts", import.meta.url), "utf8");
+  assert.match(transactionSource, /await options\.onSubmitted\?\.\(hash\)/);
+  assert.ok(transactionSource.indexOf("await options.onSubmitted?.(hash)") < transactionSource.indexOf("waitForTransactionReceipt"));
+  assert.doesNotMatch(transactionSource, /activate_creator|activate_farcaster_creator/);
 });
 
 test("V2 marketplace UI binds campaigns and content IDs to X or Farcaster", async () => {

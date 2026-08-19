@@ -6,14 +6,21 @@ const migration = [
   await readFile(new URL("../migrations/0001_withdrawal_reconciler.sql", import.meta.url), "utf8"),
   await readFile(new URL("../migrations/0002_withdrawal_confirmer_role.sql", import.meta.url), "utf8"),
   await readFile(new URL("../migrations/0003_fresh_marketplace_address.sql", import.meta.url), "utf8"),
+  await readFile(new URL("../migrations/0004_identity_bundle_marketplace_address.sql", import.meta.url), "utf8"),
 ].join("\n");
+const identityBundleCutover = await readFile(
+  new URL("../migrations/0004_identity_bundle_marketplace_address.sql", import.meta.url),
+  "utf8",
+);
 const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8")) as Record<string, unknown>;
 const clientSource = await readFile(new URL("../lib/studionet-client.ts", import.meta.url), "utf8");
 const serviceSource = await readFile(new URL("../lib/operation-service.ts", import.meta.url), "utf8");
 
 test("database constraints bind the exact deployment, confirmer role, zero value, and permanent broadcast fence", () => {
   assert.match(migration, /chain_id = 61999/);
-  assert.match(migration, /0x58d598b8323e9c1d041989dcce80e737109de347/);
+  assert.match(identityBundleCutover, /WHERE contract_address = '0x58d598b8323e9c1d041989dcce80e737109de347'/);
+  assert.match(identityBundleCutover, /CHECK \(contract_address = '0xeaceba807a7a4dc370f3b5a8e45539596b8551b4'\)/);
+  assert.match(identityBundleCutover, /RAISE EXCEPTION/);
   assert.match(migration, /withdrawal_confirmer/);
   assert.match(migration, /0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8/);
   assert.match(migration, /influencedx-withdrawal-confirmer-signer-v1/);

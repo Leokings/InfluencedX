@@ -3,9 +3,8 @@ import type { Metadata } from "next";
 import VerifyFlow from "./VerifyFlow";
 
 export const metadata: Metadata = {
-  title: "Verify your creator identity | InfluencedX",
-  description:
-    "Bind a public X or Farcaster creator identity to a StudioNet wallet with a one-time proof finalized on GenLayer.",
+  title: "Verify X + Farcaster | InfluencedX",
+  description: "Verify X and Farcaster together in one GenLayer transaction.",
 };
 
 export default function VerifyPage() {

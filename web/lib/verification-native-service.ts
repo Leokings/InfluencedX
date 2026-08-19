@@ -38,7 +38,11 @@ export type NativeVerificationProjection = Readonly<{
   farcasterCastHash: string | null;
   farcasterChallengeIssuedAt: string | null;
   farcasterChallengeExpiresAt: string | null;
+  identityBundleReady: boolean;
+  xOwnershipRequestId: string | null;
+  farcasterOwnershipRequestId: string | null;
   finalizedRequestId: string | null;
+  activationPreparedId: string | null;
   activationTxHash: string | null;
   genlayerTxHash: string | null;
   genlayerOutcome: string | null;
@@ -318,7 +322,16 @@ function projection(row: VerificationRow): NativeVerificationProjection {
     farcasterCastHash: row.farcasterCastHash,
     farcasterChallengeIssuedAt: iso(row.farcasterChallengeIssuedAt),
     farcasterChallengeExpiresAt: iso(row.farcasterChallengeExpiresAt),
+    identityBundleReady: Boolean(
+      row.tweetText &&
+      row.xChallenge &&
+      row.farcasterCastText &&
+      row.farcasterChallenge,
+    ),
+    xOwnershipRequestId: row.xOwnershipRequestId,
+    farcasterOwnershipRequestId: row.farcasterOwnershipRequestId,
     finalizedRequestId: row.finalizedRequestId,
+    activationPreparedId: row.activationPreparedId,
     activationTxHash: row.activationTxHash,
     genlayerTxHash: row.genlayerTxHash,
     genlayerOutcome: row.genlayerOutcome,

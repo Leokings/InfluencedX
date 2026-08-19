@@ -255,6 +255,8 @@ export const postgresVerificationRequests = pgTable(
     activationPreparedId: text("activation_prepared_id"),
     activationTxHash: text("activation_tx_hash"),
     activationConfirmedAt: epochMs("activation_confirmed_at"),
+    xOwnershipRequestId: text("x_ownership_request_id"),
+    farcasterOwnershipRequestId: text("farcaster_ownership_request_id"),
 
     normalizedVerificationPostUrl: text("normalized_verification_post_url"),
     verificationPostId: text("verification_post_id"),
@@ -375,6 +377,14 @@ export const postgresVerificationRequests = pgTable(
     check(
       "verification_requests_submission_outcome",
       sql`${table.genlayerOutcome} is null or ${table.genlayerOutcome} in ('VERIFIED', 'REJECTED', 'UNDETERMINED')`,
+    ),
+    check(
+      "verification_requests_identity_bundle_pair",
+      sql`(${table.xOwnershipRequestId} is null) = (${table.farcasterOwnershipRequestId} is null)`,
+    ),
+    check(
+      "verification_requests_identity_bundle_hashes",
+      sql`(${table.xOwnershipRequestId} is null or ${table.xOwnershipRequestId} ~ '^0x[0-9a-f]{64}$') and (${table.farcasterOwnershipRequestId} is null or ${table.farcasterOwnershipRequestId} ~ '^0x[0-9a-f]{64}$')`,
     ),
     check(
       "verification_requests_sealed_evidence_pair",
@@ -951,6 +961,7 @@ export type MarketplaceGenLayerTransactionStatus =
 
 export const marketplaceGenLayerOperations = [
   "ACTIVATE_CREATOR",
+  "ACTIVATE_IDENTITY_BUNDLE",
   "CREATE_CAMPAIGN",
   "APPLY",
   "WITHDRAW_APPLICATION",
@@ -1494,7 +1505,7 @@ export const marketplaceGenLayerTransactions = pgTable(
     ),
     check(
       "marketplace_genlayer_transactions_operation",
-      sql`${table.operation} in ('ACTIVATE_CREATOR', 'CREATE_CAMPAIGN', 'APPLY', 'WITHDRAW_APPLICATION', 'SELECT_CREATOR', 'ACCEPT_ASSIGNMENT', 'DECLINE_ASSIGNMENT', 'SUBMIT_EVIDENCE', 'RESOLVE_ASSIGNMENT', 'EXPIRE_ASSIGNMENT', 'REFUND_UNALLOCATED', 'CANCEL_CAMPAIGN', 'FINALIZE_CAMPAIGN', 'REFUND_UNDETERMINED', 'REQUEST_WITHDRAWAL', 'EXECUTE_WITHDRAWAL', 'RECAPITALIZE_FAILED_WITHDRAWAL')`,
+      sql`${table.operation} in ('ACTIVATE_IDENTITY_BUNDLE', 'CREATE_CAMPAIGN', 'APPLY', 'WITHDRAW_APPLICATION', 'SELECT_CREATOR', 'ACCEPT_ASSIGNMENT', 'DECLINE_ASSIGNMENT', 'SUBMIT_EVIDENCE', 'RESOLVE_ASSIGNMENT', 'EXPIRE_ASSIGNMENT', 'REFUND_UNALLOCATED', 'CANCEL_CAMPAIGN', 'FINALIZE_CAMPAIGN', 'REFUND_UNDETERMINED', 'REQUEST_WITHDRAWAL', 'EXECUTE_WITHDRAWAL', 'RECAPITALIZE_FAILED_WITHDRAWAL')`,
     ),
     check(
       "marketplace_genlayer_transactions_addresses",

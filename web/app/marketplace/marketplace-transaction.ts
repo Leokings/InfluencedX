@@ -18,8 +18,10 @@ type GenLayerTransactionPlan = Readonly<{
 type PlanArgType = GenLayerTransactionPlan["argTypes"][number];
 
 const USER_MARKETPLACE_CALLS: Readonly<Record<string, readonly PlanArgType[]>> = {
-  activate_creator: ["string", "string", "string", "string", "u256", "u256", "u256"],
-  activate_farcaster_creator: ["string", "string", "u256", "string", "string", "u256", "u256", "u256"],
+  activate_identity_bundle: [
+    "string", "string", "string", "string", "string", "u256", "u256", "u256",
+    "string", "string", "u256", "string", "string", "u256", "u256", "u256",
+  ],
   create_campaign: [
     "string", "string", "string", "string", "string", "string", "string", "bool",
     "u256", "u256", "u256", "u256", "u256", "u256",
@@ -50,7 +52,7 @@ export async function broadcastMarketplaceTransaction(
   options: Readonly<{
     expectedFunctionName: UserMarketplaceFunctionName;
     expectedValue: string;
-    onSubmitted?: (hash: `0x${string}`) => void;
+    onSubmitted?: (hash: `0x${string}`) => void | Promise<void>;
     onStage?: (stage: GenLayerTransactionStage) => void;
   }>,
 ): Promise<`0x${string}`> {
@@ -89,7 +91,7 @@ export async function broadcastMarketplaceTransaction(
     value,
   }) as `0x${string}`;
   if (!/^0x[\da-f]{64}$/i.test(hash)) throw new Error("StudioNet returned an invalid transaction hash.");
-  options.onSubmitted?.(hash);
+  await options.onSubmitted?.(hash);
   options.onStage?.("submitted");
   options.onStage?.("finality");
 

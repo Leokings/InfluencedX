@@ -51,16 +51,15 @@ async function render(pathname = "/", headers = {}) {
   });
 }
 
-test("server-renders the source-keyed identity flow without claiming verification", async () => {
+test("server-renders the concise bundled identity flow without claiming verification", async () => {
   const response = await render("/verify");
   assert.equal(response.status, 200);
 
   const html = await response.text();
-  assert.match(html, /PROVE/);
-  assert.match(html, /YOUR ID\./);
-  assert.match(html, /public X or Farcaster account/);
-  assert.match(html, /SECURITY GATE/);
-  assert.match(html, /source-keyed GenLayer identity/);
+  assert.match(html, /VERIFY/);
+  assert.match(html, /BOTH\./);
+  assert.match(html, /Link X \+ Farcaster to one wallet/);
+  assert.doesNotMatch(html, /Pinned to this wallet|ONE WALLET TRANSACTION|NO SOCIAL PASSWORDS/);
   assert.doesNotMatch(html, /BASE|USDC|VERIFICATION COMPLETE/i);
 });
 

@@ -169,7 +169,10 @@ export async function dispatchGenLayerJournalClaim(
 
   const session = journalSession(row.actorWallet, nowMs);
   const body = { preparedId: row.preparedId, txHash: row.transactionHash };
-  if (row.operation === "ACTIVATE_CREATOR") {
+  if (
+    row.operation === "ACTIVATE_CREATOR" ||
+    row.operation === "ACTIVATE_IDENTITY_BUNDLE"
+  ) {
     await reconcileGenLayerCreatorActivationJournal({
       preparedId: row.preparedId,
       transactionHash: row.transactionHash,

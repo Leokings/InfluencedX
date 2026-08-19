@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hashlib
 import json
@@ -21,6 +22,7 @@ FARCASTER_USERNAME = "creator-one"
 FARCASTER_FID = 12345
 FARCASTER_OWNERSHIP_CAST = "0x" + "12" * 20
 FARCASTER_SUBMISSION_CAST = "0x" + "34" * 20
+FARCASTER_EIP712_SIGNATURE = "0x" + "ab" * 65
 APPLICATION_DEADLINE = NOW + 3_600
 SELECTION_DEADLINE = NOW + 7_200
 SUBMISSION_DEADLINE = NOW + 10_800
@@ -127,6 +129,7 @@ def mock_farcaster_cast(
     fid=FARCASTER_FID,
     proof_status=200,
     cast_status=200,
+    proof_signature=FARCASTER_EIP712_SIGNATURE,
 ):
     direct_vm.mock_web(
         rf".*hub\.pinata\.cloud/v1/userNameProofByName\?name={username}.*",
@@ -136,7 +139,7 @@ def mock_farcaster_cast(
                 "timestamp": published_at,
                 "name": username,
                 "owner": "0x" + "56" * 20,
-                "signature": "test-signature",
+                "signature": proof_signature,
                 "fid": fid,
                 "type": "USERNAME_TYPE_FNAME",
             }) if proof_status == 200 else "",
@@ -165,11 +168,19 @@ def mock_farcaster_cast(
 
 
 def activate_creator(direct_vm, contract, creator):
-    direct_vm.sender = as_address(creator)
-    direct_vm.value = 0
-    mock_profile(direct_vm)
-    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(creator))
-    request_id = contract.compute_ownership_request_id(
+    _, x_request_id, _ = activate_identity_bundle(direct_vm, contract, creator)
+    return x_request_id
+
+
+def activate_farcaster_creator(direct_vm, contract, creator):
+    _, _, farcaster_request_id = activate_identity_bundle(
+        direct_vm, contract, creator
+    )
+    return farcaster_request_id
+
+
+def identity_bundle_ids(contract, creator):
+    x_request_id = contract.compute_ownership_request_id(
         as_address(creator),
         HANDLE,
         OWNERSHIP_POST_ID,
@@ -178,43 +189,156 @@ def activate_creator(direct_vm, contract, creator):
         EXPIRES_AT,
         PROFILE_EXPIRES_AT,
     )
-    contract.activate_creator(
-        request_id,
-        HANDLE,
-        OWNERSHIP_POST_ID,
+    farcaster_request_id = contract.compute_farcaster_ownership_request_id(
+        as_address(creator),
+        FARCASTER_USERNAME,
+        FARCASTER_FID,
+        FARCASTER_OWNERSHIP_CAST,
         CHALLENGE,
         ISSUED_AT,
         EXPIRES_AT,
         PROFILE_EXPIRES_AT,
     )
-    return request_id
+    bundle_request_id = contract.compute_identity_bundle_request_id(
+        as_address(creator),
+        x_request_id,
+        farcaster_request_id,
+    )
+    return bundle_request_id, x_request_id, farcaster_request_id
 
 
-def activate_farcaster_creator(direct_vm, contract, creator):
-    wallet = address_text(creator)
-    text = (
-        f"InfluencedX identity w={wallet} n={CHALLENGE} "
+def mock_identity_bundle(direct_vm, creator, *, proof_signature=FARCASTER_EIP712_SIGNATURE):
+    mock_profile(direct_vm)
+    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(creator))
+    farcaster_text = (
+        f"InfluencedX identity w={address_text(creator)} n={CHALLENGE} "
         f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
     )
     mock_farcaster_cast(
         direct_vm,
         FARCASTER_OWNERSHIP_CAST,
-        text,
+        farcaster_text,
         NOW - 60,
+        proof_signature=proof_signature,
     )
-    request_id = contract.compute_farcaster_ownership_request_id(
-        as_address(creator),
-        FARCASTER_USERNAME,
-        FARCASTER_FID,
-        FARCASTER_OWNERSHIP_CAST,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
+
+
+def activate_identity_bundle(
+    direct_vm,
+    contract,
+    creator,
+    *,
+    proof_signature=FARCASTER_EIP712_SIGNATURE,
+):
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, creator
+    )
+    mock_identity_bundle(
+        direct_vm,
+        creator,
+        proof_signature=proof_signature,
     )
     direct_vm.sender = as_address(creator)
-    contract.activate_farcaster_creator(
-        request_id,
+    direct_vm.value = 0
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+    return bundle_request_id, x_request_id, farcaster_request_id
+
+
+def activate_custom_identity_bundle(
+    direct_vm,
+    contract,
+    creator,
+    *,
+    x_handle=HANDLE,
+    x_user_id=X_USER_ID,
+    x_post_id=OWNERSHIP_POST_ID,
+    farcaster_username=FARCASTER_USERNAME,
+    farcaster_fid=FARCASTER_FID,
+    farcaster_cast=FARCASTER_OWNERSHIP_CAST,
+    proof_signature=FARCASTER_EIP712_SIGNATURE,
+    x_profile_expires_at=PROFILE_EXPIRES_AT,
+    farcaster_profile_expires_at=PROFILE_EXPIRES_AT,
+):
+    mock_profile(direct_vm, handle=x_handle, user_id=x_user_id)
+    mock_post(
+        direct_vm,
+        x_post_id,
+        (
+            f"XProof v2 w={address_text(creator)} n={CHALLENGE} "
+            f"i={ISSUED_AT} e={EXPIRES_AT} c={x_profile_expires_at}"
+        ),
+        handle=x_handle,
+    )
+    mock_farcaster_cast(
+        direct_vm,
+        farcaster_cast,
+        (
+            f"InfluencedX identity w={address_text(creator)} n={CHALLENGE} "
+            f"i={ISSUED_AT} e={EXPIRES_AT} c={farcaster_profile_expires_at}"
+        ),
+        NOW - 30,
+        username=farcaster_username,
+        fid=farcaster_fid,
+        proof_signature=proof_signature,
+    )
+    x_request_id = contract.compute_ownership_request_id(
+        as_address(creator),
+        x_handle,
+        x_post_id,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        x_profile_expires_at,
+    )
+    farcaster_request_id = contract.compute_farcaster_ownership_request_id(
+        as_address(creator),
+        farcaster_username,
+        farcaster_fid,
+        farcaster_cast,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        farcaster_profile_expires_at,
+    )
+    bundle_request_id = contract.compute_identity_bundle_request_id(
+        as_address(creator), x_request_id, farcaster_request_id
+    )
+    direct_vm.sender = as_address(creator)
+    direct_vm.value = 0
+    contract.activate_identity_bundle(
+        bundle_request_id,
+        x_request_id,
+        x_handle,
+        x_post_id,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        x_profile_expires_at,
+        farcaster_request_id,
+        farcaster_username,
+        farcaster_fid,
+        farcaster_cast,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        farcaster_profile_expires_at,
+    )
+    return bundle_request_id, x_request_id, farcaster_request_id
+
+
+def write_identity_bundle(contract, bundle_request_id, x_request_id, farcaster_request_id):
+    contract.activate_identity_bundle(
+        bundle_request_id,
+        x_request_id,
+        HANDLE,
+        OWNERSHIP_POST_ID,
+        CHALLENGE,
+        ISSUED_AT,
+        EXPIRES_AT,
+        PROFILE_EXPIRES_AT,
+        farcaster_request_id,
         FARCASTER_USERNAME,
         FARCASTER_FID,
         FARCASTER_OWNERSHIP_CAST,
@@ -223,7 +347,6 @@ def activate_farcaster_creator(direct_vm, contract, creator):
         EXPIRES_AT,
         PROFILE_EXPIRES_AT,
     )
-    return request_id
 
 
 def campaign_args(max_retries=2, budget=BUDGET, nonce="campaign-nonce-0001", source="X"):
@@ -378,6 +501,9 @@ def test_contract_has_pinned_runner_and_gen_native_config(direct_vm, direct_depl
     assert "latest" not in first_line and "test" not in first_line
     assert 'gl.message_raw["datetime"]' in source
     assert "datetime.datetime.now" not in source
+    assert "def activate_creator(" not in source
+    assert "def activate_farcaster_creator(" not in source
+    assert "def activate_identity_bundle(" in source
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
     config = contract.get_config()
     assert config["protocol_version"] == "INFLUENCEDX_MARKETPLACE_V2"
@@ -398,22 +524,257 @@ def test_creator_activation_is_caller_bound_and_expires(direct_vm, direct_deploy
     assert profile["wallet"] == address_text(direct_alice)
     assert contract.get_ownership_result(request_id)["outcome"] == "VERIFIED"
 
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
     direct_vm.sender = as_address(direct_bob)
-    mock_profile(direct_vm)
-    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(direct_alice))
     with direct_vm.expect_revert("caller-bound envelope"):
-        contract.activate_creator(
-            request_id,
-            HANDLE,
-            OWNERSHIP_POST_ID,
-            CHALLENGE,
-            ISSUED_AT,
-            EXPIRES_AT,
-            PROFILE_EXPIRES_AT,
+        write_identity_bundle(
+            contract, bundle_request_id, x_request_id, farcaster_request_id
         )
 
     direct_vm.warp("2027-02-01T00:00:00Z")
     assert contract.get_profile(as_address(direct_alice))["active"] is False
+
+
+def test_marketplace_requires_both_bundle_identities_to_remain_active(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(
+        direct_vm, direct_deploy, direct_owner, direct_bob
+    )
+    activate_custom_identity_bundle(
+        direct_vm,
+        contract,
+        direct_alice,
+        farcaster_profile_expires_at=NOW + 24 * 60 * 60,
+    )
+    campaign_id = create_campaign(direct_vm, contract, direct_bob)
+    direct_vm.warp("2027-01-02T00:00:01Z")
+    profile = contract.get_profile(as_address(direct_alice))
+    assert profile["active"] is False
+    assert profile["active_sources"] == ["X"]
+    with direct_vm.expect_revert("both be active"):
+        apply(direct_vm, contract, campaign_id, direct_alice)
+
+
+def test_identity_bundle_hash_and_atomic_activation_are_frozen(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    expected_bundle = "0x" + hashlib.sha256(
+        (
+            "influencedx-identity-bundle-v1|"
+            + address_text(direct_alice)
+            + "|"
+            + x_request_id
+            + "|"
+            + farcaster_request_id
+        ).encode("utf-8")
+    ).hexdigest()
+    assert bundle_request_id == expected_bundle
+    assert len(FARCASTER_EIP712_SIGNATURE) == 132
+
+    activate_identity_bundle(direct_vm, contract, direct_alice)
+    bundle_result = contract.get_ownership_result(bundle_request_id)
+    assert bundle_result == {
+        "request_id": bundle_request_id,
+        "wallet": address_text(direct_alice),
+        "kind": "IDENTITY_BUNDLE",
+        "x_request_id": x_request_id,
+        "farcaster_request_id": farcaster_request_id,
+        "x_outcome": "VERIFIED",
+        "farcaster_outcome": "VERIFIED",
+        "verified_at_epoch": NOW,
+        "outcome": "VERIFIED",
+    }
+    assert contract.get_ownership_result(x_request_id)["outcome"] == "VERIFIED"
+    assert contract.get_ownership_result(farcaster_request_id)["outcome"] == "VERIFIED"
+    assert contract.get_identity(as_address(direct_alice), "X")["active"] is True
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["active"] is True
+    profile = contract.get_profile(as_address(direct_alice))
+    assert profile["active_sources"] == ["X", "FARCASTER"]
+    assert contract.get_counts()["profile_count"] == 1
+    assert contract.get_counts()["identity_count"] == 2
+
+    with direct_vm.expect_revert("already used"):
+        write_identity_bundle(
+            contract, bundle_request_id, x_request_id, farcaster_request_id
+        )
+
+
+def test_identity_bundle_accepts_65_byte_hex_and_live_hub_base64_signature_shapes(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    assert len(FARCASTER_EIP712_SIGNATURE) == 2 + 65 * 2
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_identity_bundle(direct_vm, contract, direct_alice)
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["active"] is True
+
+    base64_signature = base64.b64encode(b"\x01" * 65).decode("ascii")
+    assert len(base64_signature) == 88 and base64_signature.endswith("=")
+    direct_vm.clear_mocks()
+    activate_custom_identity_bundle(
+        direct_vm,
+        contract,
+        direct_bob,
+        x_handle="creatorbob",
+        x_user_id="9999999999",
+        x_post_id=snowflake_at(NOW - 20),
+        farcaster_username="creator-bob",
+        farcaster_fid=FARCASTER_FID + 1,
+        farcaster_cast="0x" + "15" * 20,
+        proof_signature=base64_signature,
+    )
+    assert contract.get_identity(
+        as_address(direct_bob), "FARCASTER"
+    )["active"] is True
+
+
+def test_identity_bundle_malformed_signature_is_retryable_without_partial_activation(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    malformed_130_character_signature = "0x" + "ab" * 64
+    assert len(malformed_130_character_signature) == 130
+    mock_identity_bundle(
+        direct_vm,
+        direct_alice,
+        proof_signature=malformed_130_character_signature,
+    )
+    direct_vm.sender = as_address(direct_alice)
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+    result = contract.get_ownership_result(bundle_request_id)
+    assert result["x_outcome"] == "VERIFIED"
+    assert result["farcaster_outcome"] == "UNDETERMINED"
+    assert result["outcome"] == "UNDETERMINED"
+    assert contract.get_ownership_result(x_request_id) == {}
+    assert contract.get_ownership_result(farcaster_request_id) == {}
+    assert contract.get_identity(as_address(direct_alice), "X")["exists"] is False
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["exists"] is False
+    assert contract.get_counts()["identity_count"] == 0
+
+    direct_vm.clear_mocks()
+    mock_identity_bundle(direct_vm, direct_alice)
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+    assert contract.get_ownership_result(bundle_request_id)["outcome"] == "VERIFIED"
+    assert contract.get_profile(as_address(direct_alice))["active_sources"] == [
+        "X", "FARCASTER"
+    ]
+
+
+def test_identity_bundle_rejection_consumes_requests_without_activating_either_source(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    mock_profile(direct_vm)
+    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(direct_alice))
+    wrong_wallet_text = (
+        f"InfluencedX identity w={address_text(direct_bob)} n={CHALLENGE} "
+        f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
+    )
+    mock_farcaster_cast(
+        direct_vm,
+        FARCASTER_OWNERSHIP_CAST,
+        wrong_wallet_text,
+        NOW - 60,
+    )
+    direct_vm.sender = as_address(direct_alice)
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+    result = contract.get_ownership_result(bundle_request_id)
+    assert result["x_outcome"] == "VERIFIED"
+    assert result["farcaster_outcome"] == "REJECTED"
+    assert result["outcome"] == "REJECTED"
+    x_result = contract.get_ownership_result(x_request_id)
+    farcaster_result = contract.get_ownership_result(farcaster_request_id)
+    assert x_result["outcome"] == "REJECTED"
+    assert x_result["evidence_outcome"] == "VERIFIED"
+    assert x_result["bundle_request_id"] == bundle_request_id
+    assert farcaster_result["outcome"] == "REJECTED"
+    assert farcaster_result["evidence_outcome"] == "REJECTED"
+    assert contract.get_identity(as_address(direct_alice), "X")["exists"] is False
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["exists"] is False
+    assert contract.get_counts()["profile_count"] == 0
+    assert contract.get_counts()["identity_count"] == 0
+
+
+def test_identity_bundle_is_caller_bound(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    direct_vm.sender = as_address(direct_bob)
+    with direct_vm.expect_revert("X request ID does not match caller-bound envelope"):
+        write_identity_bundle(
+            contract, bundle_request_id, x_request_id, farcaster_request_id
+        )
+
+
+def test_identity_bundle_preflights_both_stable_bindings_before_any_activation(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    activate_farcaster_creator(direct_vm, contract, direct_bob)
+    direct_vm.clear_mocks()
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
+    )
+    mock_identity_bundle(direct_vm, direct_alice)
+    direct_vm.sender = as_address(direct_alice)
+    with direct_vm.expect_revert("identity is already bound to another wallet"):
+        write_identity_bundle(
+            contract, bundle_request_id, x_request_id, farcaster_request_id
+        )
+    assert contract.get_identity(as_address(direct_alice), "X")["exists"] is False
+    assert contract.get_identity(as_address(direct_alice), "FARCASTER")["exists"] is False
+    assert contract.get_ownership_result(bundle_request_id) == {}
+    assert contract.get_ownership_result(x_request_id) == {}
+    assert contract.get_ownership_result(farcaster_request_id) == {}
 
 
 def test_identity_renewal_allows_handle_change_but_rejects_stable_id_change(
@@ -430,31 +791,13 @@ def test_identity_renewal_allows_handle_change_but_rejects_stable_id_change(
     renamed_handle = "xdevrenamed"
     renewal_post = snowflake_at(NOW - 30)
     direct_vm.clear_mocks()
-    mock_profile(direct_vm, handle=renamed_handle, user_id=X_USER_ID)
-    mock_post(
+    activate_custom_identity_bundle(
         direct_vm,
-        renewal_post,
-        ownership_text(direct_alice),
-        handle=renamed_handle,
-    )
-    renewal_request = contract.compute_ownership_request_id(
-        as_address(direct_alice),
-        renamed_handle,
-        renewal_post,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
-    )
-    direct_vm.sender = as_address(direct_alice)
-    contract.activate_creator(
-        renewal_request,
-        renamed_handle,
-        renewal_post,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
+        contract,
+        direct_alice,
+        x_handle=renamed_handle,
+        x_post_id=renewal_post,
+        farcaster_cast="0x" + "15" * 20,
     )
     renewed = contract.get_identity(as_address(direct_alice), "X")
     assert renewed["handle"] == renamed_handle
@@ -463,31 +806,15 @@ def test_identity_renewal_allows_handle_change_but_rejects_stable_id_change(
 
     replacement_post = snowflake_at(NOW - 15)
     direct_vm.clear_mocks()
-    mock_profile(direct_vm, handle=renamed_handle, user_id="9999999999")
-    mock_post(
-        direct_vm,
-        replacement_post,
-        ownership_text(direct_alice),
-        handle=renamed_handle,
-    )
-    replacement_request = contract.compute_ownership_request_id(
-        as_address(direct_alice),
-        renamed_handle,
-        replacement_post,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
-    )
     with direct_vm.expect_revert("stable identity cannot change"):
-        contract.activate_creator(
-            replacement_request,
-            renamed_handle,
-            replacement_post,
-            CHALLENGE,
-            ISSUED_AT,
-            EXPIRES_AT,
-            PROFILE_EXPIRES_AT,
+        activate_custom_identity_bundle(
+            direct_vm,
+            contract,
+            direct_alice,
+            x_handle=renamed_handle,
+            x_user_id="9999999999",
+            x_post_id=replacement_post,
+            farcaster_cast="0x" + "16" * 20,
         )
     unchanged = contract.get_identity(as_address(direct_alice), "X")
     assert unchanged["external_user_id"] == X_USER_ID
@@ -506,7 +833,9 @@ def test_farcaster_identity_and_campaign_freeze_stable_fid(
     identity = contract.get_identity(as_address(direct_alice), "FARCASTER")
     assert identity["active"] is True
     assert identity["external_user_id"] == str(FARCASTER_FID)
-    assert contract.get_profile(as_address(direct_alice))["active_sources"] == ["FARCASTER"]
+    assert contract.get_profile(as_address(direct_alice))["active_sources"] == [
+        "X", "FARCASTER"
+    ]
 
     campaign_id = create_campaign(
         direct_vm,
@@ -535,43 +864,16 @@ def test_farcaster_renewal_allows_username_change_but_rejects_stable_fid_change(
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
     activate_farcaster_creator(direct_vm, contract, direct_alice)
     original = contract.get_identity(as_address(direct_alice), "FARCASTER")
-    wallet = address_text(direct_alice)
-    text = (
-        f"InfluencedX identity w={wallet} n={CHALLENGE} "
-        f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
-    )
-
     renamed_username = "creator-renamed"
     renewal_cast = "0x" + "13" * 20
     direct_vm.clear_mocks()
-    mock_farcaster_cast(
+    activate_custom_identity_bundle(
         direct_vm,
-        renewal_cast,
-        text,
-        NOW - 30,
-        username=renamed_username,
-        fid=FARCASTER_FID,
-    )
-    renewal_request = contract.compute_farcaster_ownership_request_id(
-        as_address(direct_alice),
-        renamed_username,
-        FARCASTER_FID,
-        renewal_cast,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
-    )
-    direct_vm.sender = as_address(direct_alice)
-    contract.activate_farcaster_creator(
-        renewal_request,
-        renamed_username,
-        FARCASTER_FID,
-        renewal_cast,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
+        contract,
+        direct_alice,
+        x_post_id=snowflake_at(NOW - 25),
+        farcaster_username=renamed_username,
+        farcaster_cast=renewal_cast,
     )
     renewed = contract.get_identity(as_address(direct_alice), "FARCASTER")
     assert renewed["handle"] == renamed_username
@@ -581,34 +883,15 @@ def test_farcaster_renewal_allows_username_change_but_rejects_stable_fid_change(
     replacement_fid = FARCASTER_FID + 1
     replacement_cast = "0x" + "14" * 20
     direct_vm.clear_mocks()
-    mock_farcaster_cast(
-        direct_vm,
-        replacement_cast,
-        text,
-        NOW - 15,
-        username=renamed_username,
-        fid=replacement_fid,
-    )
-    replacement_request = contract.compute_farcaster_ownership_request_id(
-        as_address(direct_alice),
-        renamed_username,
-        replacement_fid,
-        replacement_cast,
-        CHALLENGE,
-        ISSUED_AT,
-        EXPIRES_AT,
-        PROFILE_EXPIRES_AT,
-    )
     with direct_vm.expect_revert("stable identity cannot change"):
-        contract.activate_farcaster_creator(
-            replacement_request,
-            renamed_username,
-            replacement_fid,
-            replacement_cast,
-            CHALLENGE,
-            ISSUED_AT,
-            EXPIRES_AT,
-            PROFILE_EXPIRES_AT,
+        activate_custom_identity_bundle(
+            direct_vm,
+            contract,
+            direct_alice,
+            x_post_id=snowflake_at(NOW - 10),
+            farcaster_username=renamed_username,
+            farcaster_fid=replacement_fid,
+            farcaster_cast=replacement_cast,
         )
     unchanged = contract.get_identity(as_address(direct_alice), "FARCASTER")
     assert unchanged["external_user_id"] == str(FARCASTER_FID)
@@ -727,32 +1010,36 @@ def test_seven_day_upgrade_delay_is_hash_bound_and_pause_gated(
 
 def test_undetermined_ownership_request_can_retry_but_terminal_result_cannot(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
-    direct_vm.sender = as_address(direct_alice)
-    request_id = contract.compute_ownership_request_id(
-        as_address(direct_alice), HANDLE, OWNERSHIP_POST_ID, CHALLENGE,
-        ISSUED_AT, EXPIRES_AT, PROFILE_EXPIRES_AT,
+    bundle_request_id, x_request_id, farcaster_request_id = identity_bundle_ids(
+        contract, direct_alice
     )
+    direct_vm.sender = as_address(direct_alice)
     direct_vm.mock_web(rf".*x\.com/{HANDLE}$", {"status": 429, "body": ""})
     mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(direct_alice), status=429)
-    contract.activate_creator(
-        request_id, HANDLE, OWNERSHIP_POST_ID, CHALLENGE,
-        ISSUED_AT, EXPIRES_AT, PROFILE_EXPIRES_AT,
+    mock_farcaster_cast(
+        direct_vm,
+        FARCASTER_OWNERSHIP_CAST,
+        (
+            f"InfluencedX identity w={address_text(direct_alice)} n={CHALLENGE} "
+            f"i={ISSUED_AT} e={EXPIRES_AT} c={PROFILE_EXPIRES_AT}"
+        ),
+        NOW - 60,
     )
-    assert contract.get_ownership_result(request_id)["outcome"] == "UNDETERMINED"
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
+    )
+    assert contract.get_ownership_result(bundle_request_id)["outcome"] == "UNDETERMINED"
     assert contract.get_profile(as_address(direct_alice))["exists"] is False
 
     direct_vm.clear_mocks()
-    mock_profile(direct_vm)
-    mock_post(direct_vm, OWNERSHIP_POST_ID, ownership_text(direct_alice))
-    contract.activate_creator(
-        request_id, HANDLE, OWNERSHIP_POST_ID, CHALLENGE,
-        ISSUED_AT, EXPIRES_AT, PROFILE_EXPIRES_AT,
+    mock_identity_bundle(direct_vm, direct_alice)
+    write_identity_bundle(
+        contract, bundle_request_id, x_request_id, farcaster_request_id
     )
-    assert contract.get_ownership_result(request_id)["outcome"] == "VERIFIED"
+    assert contract.get_ownership_result(bundle_request_id)["outcome"] == "VERIFIED"
     with direct_vm.expect_revert("already used"):
-        contract.activate_creator(
-            request_id, HANDLE, OWNERSHIP_POST_ID, CHALLENGE,
-            ISSUED_AT, EXPIRES_AT, PROFILE_EXPIRES_AT,
+        write_identity_bundle(
+            contract, bundle_request_id, x_request_id, farcaster_request_id
         )
 
 

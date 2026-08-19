@@ -19,6 +19,7 @@ ERROR_LLM = "[LLM_ERROR]"
 OWNERSHIP_DOMAIN = "xproof-x-ownership-v2"
 FARCASTER_OWNERSHIP_DOMAIN = "influencedx-farcaster-ownership-v1"
 FARCASTER_IDENTITY_DOMAIN = "influencedx-farcaster-identity-v1"
+IDENTITY_BUNDLE_DOMAIN = "influencedx-identity-bundle-v1"
 CAMPAIGN_DOMAIN = "influencedx-campaign-v2"
 APPLICATION_DOMAIN = "influencedx-application-v1"
 ASSIGNMENT_DOMAIN = "influencedx-assignment-v1"
@@ -178,6 +179,18 @@ def _validate_farcaster_cast_hash(value: str) -> str:
     if re.fullmatch(r"0x[0-9a-f]{40}", normalized) is None:
         _expected("FARCASTER_CAST_HASH", "Invalid Farcaster cast hash")
     return normalized
+
+
+def _valid_farcaster_proof_signature(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    # Farcaster username proofs contain a 65-byte EIP-712 signature. Hub JSON
+    # implementations expose those bytes either as 0x-prefixed hex (132 total
+    # characters) or as padded standard base64 (88 total characters).
+    return (
+        re.fullmatch(r"0x[0-9a-fA-F]{130}", value) is not None
+        or re.fullmatch(r"[A-Za-z0-9+/]{87}=", value) is not None
+    )
 
 
 def _validate_content_id(source: str, value: str) -> str:
@@ -391,6 +404,9 @@ def _extract_farcaster(
     proof_schema_valid = not require_username_proof or (
         isinstance(proof, dict)
         and isinstance(proof.get("name"), str)
+        and isinstance(proof.get("owner"), str)
+        and re.fullmatch(r"0x[0-9a-fA-F]{40}", str(proof.get("owner", ""))) is not None
+        and _valid_farcaster_proof_signature(proof.get("signature"))
         and _safe_int(proof.get("fid", 0)) > 0
         and isinstance(proof.get("type"), str)
     )
@@ -576,6 +592,19 @@ def _farcaster_ownership_request_id(
         str(issued_at_epoch),
         str(expires_at_epoch),
         str(profile_expires_at_epoch),
+    )))
+
+
+def _identity_bundle_request_id(
+    wallet: str,
+    x_request_id: str,
+    farcaster_request_id: str,
+) -> str:
+    return _sha256_text("|".join((
+        IDENTITY_BUNDLE_DOMAIN,
+        wallet,
+        x_request_id,
+        farcaster_request_id,
     )))
 
 
@@ -803,36 +832,59 @@ class InfluencedXMarketplace(gl.Contract):
     def _require_profile(self, account: Address, source: str) -> dict:
         wallet = _address_text(account)
         normalized_source = _normalize_source(source)
-        raw = self.identities.get(_identity_key(wallet, normalized_source), "")
-        if len(raw) == 0:
-            _expected("PROFILE_REQUIRED", f"An active {normalized_source} creator identity is required")
-        profile = json.loads(raw)
-        if profile["status"] != PROFILE_ACTIVE or _now_epoch() > int(profile["expires_at_epoch"]):
-            _expected("PROFILE_EXPIRED", "Creator profile is expired")
-        return profile
+        identities = {}
+        now = _now_epoch()
+        for required_source in (SOURCE_X, SOURCE_FARCASTER):
+            raw = self.identities.get(
+                _identity_key(wallet, required_source), ""
+            )
+            if len(raw) == 0:
+                _expected(
+                    "IDENTITY_BUNDLE_REQUIRED",
+                    "Active X and Farcaster identities are required",
+                )
+            identity = json.loads(raw)
+            if (
+                identity["status"] != PROFILE_ACTIVE
+                or now > int(identity["expires_at_epoch"])
+            ):
+                _expected(
+                    "IDENTITY_BUNDLE_EXPIRED",
+                    "X and Farcaster identities must both be active",
+                )
+            identities[required_source] = identity
+        return identities[normalized_source]
 
-    def _store_identity(self, wallet: str, source: str, identity: dict) -> None:
+    def _validate_identity_binding(self, wallet: str, source: str, identity: dict) -> None:
         stable_id = str(identity["external_user_id"])
         handle = str(identity["handle"])
-        identity_hash = str(identity["identity_hash"])
         identity_key = _identity_key(wallet, source)
+        stable_key = _source_unique_key(source, stable_id)
+        handle_key = _source_unique_key(source, handle)
         prior_identity_raw = self.identities.get(identity_key, "")
-        is_new_identity = len(prior_identity_raw) == 0
-        if not is_new_identity:
+        if len(prior_identity_raw) != 0:
             prior_identity = json.loads(prior_identity_raw)
             if str(prior_identity.get("external_user_id", "")) != stable_id:
                 _expected(
                     "STABLE_ID_CHANGED",
                     f"{source} stable identity cannot change for this wallet",
                 )
-        stable_key = _source_unique_key(source, stable_id)
-        handle_key = _source_unique_key(source, handle)
         bound_wallet = self.identity_wallet.get(stable_key, "")
         if len(bound_wallet) != 0 and bound_wallet != wallet:
             _expected("IDENTITY_BOUND", f"{source} identity is already bound to another wallet")
         handle_wallet = self.handle_wallet.get(handle_key, "")
         if len(handle_wallet) != 0 and handle_wallet != wallet:
             _expected("HANDLE_BOUND", f"{source} handle is already bound to another wallet")
+
+    def _store_identity(self, wallet: str, source: str, identity: dict) -> None:
+        self._validate_identity_binding(wallet, source, identity)
+        stable_id = str(identity["external_user_id"])
+        handle = str(identity["handle"])
+        identity_key = _identity_key(wallet, source)
+        stable_key = _source_unique_key(source, stable_id)
+        handle_key = _source_unique_key(source, handle)
+        prior_identity_raw = self.identities.get(identity_key, "")
+        is_new_identity = len(prior_identity_raw) == 0
         is_new_wallet = len(self.profiles.get(wallet, "")) == 0
         if not is_new_identity:
             prior_identity = json.loads(prior_identity_raw)
@@ -853,6 +905,207 @@ class InfluencedXMarketplace(gl.Contract):
             self.identity_count = u256(int(self.identity_count) + 1)
         if is_new_wallet:
             self.profile_count = u256(int(self.profile_count) + 1)
+
+    def _require_replayable_ownership_request(self, request_id: str) -> None:
+        prior_result_raw = self.ownership_results.get(request_id, "")
+        if len(prior_result_raw) == 0:
+            return
+        prior_result = json.loads(prior_result_raw)
+        if prior_result.get("outcome") != OUTCOME_UNDETERMINED:
+            _expected("OWNERSHIP_REPLAY", "Ownership request was already used")
+
+    def _validate_ownership_window(
+        self,
+        issued: int,
+        expires: int,
+        profile_expires: int,
+        now: int,
+    ) -> None:
+        if issued <= 0 or issued > now or expires - issued < MIN_CHALLENGE_SECONDS:
+            _expected("CHALLENGE_WINDOW", "Invalid ownership challenge window")
+        if expires - issued > MAX_CHALLENGE_SECONDS or now > expires:
+            _expected("CHALLENGE_EXPIRED", "Ownership challenge is expired")
+        if profile_expires <= now or profile_expires - issued < MIN_PROFILE_SECONDS:
+            _expected("PROFILE_EXPIRY", "Invalid profile expiry")
+        if profile_expires - issued > MAX_PROFILE_SECONDS:
+            _expected("PROFILE_EXPIRY", "Profile expiry exceeds the maximum")
+
+    def _evaluate_x_ownership(
+        self,
+        supplied_request: str,
+        wallet: str,
+        handle: str,
+        post: str,
+        code: str,
+        issued: int,
+        expires: int,
+        profile_expires: int,
+        now: int,
+    ) -> dict:
+        published_at = _post_epoch(post)
+
+        def leader_fn() -> dict:
+            evidence = _extract_post(handle, post)
+            profile = _extract_profile(handle)
+            x_user_id = str(profile.get("x_user_id", ""))
+            text = str(evidence.get("text", ""))
+            protocol_match = re.search(r"(?<!\S)XProof v2(?=\s)", text, re.IGNORECASE) is not None
+            matches = {
+                "author_match": bool(evidence["author_match"]),
+                "post_id_match": bool(evidence["post_id_match"]),
+                "protocol_match": protocol_match,
+                "challenge_match": _has_exact_token(text, "n", code),
+                "wallet_match": _has_exact_token(text, "w", wallet, True),
+                "issued_at_match": _has_exact_token(text, "i", str(issued)),
+                "expires_at_match": _has_exact_token(text, "e", str(expires)),
+                "profile_expires_at_match": _has_exact_token(text, "c", str(profile_expires)),
+                "publication_in_window": issued <= published_at <= expires,
+            }
+            if evidence["transient"] or profile.get("outcome") == OUTCOME_UNDETERMINED:
+                outcome = OUTCOME_UNDETERMINED
+            elif (
+                profile.get("outcome") == OUTCOME_VERIFIED
+                and len(x_user_id) > 0
+                and (evidence["direct_ok"] or evidence["oembed_ok"])
+                and all(matches.values())
+            ):
+                outcome = OUTCOME_VERIFIED
+            else:
+                outcome = OUTCOME_REJECTED
+            return {
+                "request_id": supplied_request,
+                "wallet": wallet,
+                "source": SOURCE_X,
+                "handle": handle,
+                "x_user_id": x_user_id,
+                "external_user_id": x_user_id,
+                "identity_hash": _sha256_text("x-user-id:" + x_user_id) if len(x_user_id) else ZERO_HASH,
+                "post_id": post,
+                "issued_at_epoch": issued,
+                "expires_at_epoch": expires,
+                "profile_expires_at_epoch": profile_expires,
+                "verified_at_epoch": now,
+                "outcome": outcome,
+                **matches,
+            }
+
+        def validator_fn(leaders_res) -> bool:
+            if not isinstance(leaders_res, gl.vm.Return):
+                return _handle_leader_error(leaders_res, leader_fn)
+            own = leader_fn()
+            proposed = leaders_res.calldata
+            fields = (
+                "request_id", "wallet", "source", "handle", "x_user_id",
+                "external_user_id", "identity_hash", "post_id",
+                "issued_at_epoch", "expires_at_epoch", "profile_expires_at_epoch",
+                "verified_at_epoch", "author_match", "post_id_match", "protocol_match",
+                "challenge_match", "wallet_match", "issued_at_match", "expires_at_match",
+                "profile_expires_at_match", "publication_in_window", "outcome",
+            )
+            return all(proposed.get(field) == own.get(field) for field in fields)
+
+        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+
+    def _evaluate_farcaster_ownership(
+        self,
+        supplied_request: str,
+        wallet: str,
+        username: str,
+        stable_fid: int,
+        cast: str,
+        code: str,
+        issued: int,
+        expires: int,
+        profile_expires: int,
+        now: int,
+    ) -> dict:
+        def leader_fn() -> dict:
+            evidence = _extract_farcaster(username, stable_fid, cast)
+            text = str(evidence.get("text", ""))
+            published_at = int(evidence.get("published_at_epoch", 0))
+            matches = {
+                "username_match": bool(evidence.get("username_match", False)),
+                "fid_match": bool(evidence.get("fid_match", False)),
+                "cast_hash_match": bool(evidence.get("cast_hash_match", False)),
+                "protocol_match": re.search(
+                    r"(?<!\S)InfluencedX identity(?=\s)", text, re.IGNORECASE
+                ) is not None,
+                "challenge_match": _has_exact_token(text, "n", code),
+                "wallet_match": _has_exact_token(text, "w", wallet, True),
+                "issued_at_match": _has_exact_token(text, "i", str(issued)),
+                "expires_at_match": _has_exact_token(text, "e", str(expires)),
+                "profile_expires_at_match": _has_exact_token(text, "c", str(profile_expires)),
+                "publication_in_window": issued <= published_at <= expires,
+            }
+            if bool(evidence.get("transient", False)):
+                outcome = OUTCOME_UNDETERMINED
+            elif all(matches.values()):
+                outcome = OUTCOME_VERIFIED
+            else:
+                outcome = OUTCOME_REJECTED
+            return {
+                "request_id": supplied_request,
+                "wallet": wallet,
+                "source": SOURCE_FARCASTER,
+                "handle": username,
+                "fid": stable_fid,
+                "external_user_id": str(stable_fid),
+                "identity_hash": _sha256_text(
+                    FARCASTER_IDENTITY_DOMAIN + "|" + str(stable_fid)
+                ),
+                "post_id": cast,
+                "issued_at_epoch": issued,
+                "expires_at_epoch": expires,
+                "profile_expires_at_epoch": profile_expires,
+                "verified_at_epoch": now,
+                "outcome": outcome,
+                **matches,
+            }
+
+        def validator_fn(leaders_res) -> bool:
+            if not isinstance(leaders_res, gl.vm.Return):
+                return _handle_leader_error(leaders_res, leader_fn)
+            proposed = leaders_res.calldata
+            own = leader_fn()
+            fields = (
+                "request_id", "wallet", "source", "handle", "fid", "external_user_id",
+                "identity_hash", "post_id", "issued_at_epoch", "expires_at_epoch",
+                "profile_expires_at_epoch", "verified_at_epoch", "username_match",
+                "fid_match", "cast_hash_match", "protocol_match", "challenge_match",
+                "wallet_match", "issued_at_match", "expires_at_match",
+                "profile_expires_at_match", "publication_in_window", "outcome",
+            )
+            return all(proposed.get(field) == own.get(field) for field in fields)
+
+        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+
+    def _x_identity(self, result: dict) -> dict:
+        return {
+            "wallet": result["wallet"],
+            "source": SOURCE_X,
+            "handle": result["handle"],
+            "x_user_id": result["x_user_id"],
+            "external_user_id": result["external_user_id"],
+            "identity_hash": result["identity_hash"],
+            "status": PROFILE_ACTIVE,
+            "verified_at_epoch": result["verified_at_epoch"],
+            "expires_at_epoch": result["profile_expires_at_epoch"],
+            "ownership_request_id": result["request_id"],
+        }
+
+    def _farcaster_identity(self, result: dict) -> dict:
+        return {
+            "wallet": result["wallet"],
+            "source": SOURCE_FARCASTER,
+            "handle": result["handle"],
+            "fid": result["fid"],
+            "external_user_id": result["external_user_id"],
+            "identity_hash": result["identity_hash"],
+            "status": PROFILE_ACTIVE,
+            "verified_at_epoch": result["verified_at_epoch"],
+            "expires_at_epoch": result["profile_expires_at_epoch"],
+            "ownership_request_id": result["request_id"],
+        }
 
     def _require_campaign(self, campaign_id: str) -> tuple[str, dict]:
         normalized = _validate_hash(campaign_id, "campaign_id")
@@ -947,251 +1200,136 @@ class InfluencedXMarketplace(gl.Contract):
         self.assignments[assignment_id] = _canonical(assignment)
 
     @gl.public.write
-    def activate_creator(
+    def activate_identity_bundle(
         self,
-        request_id: str,
-        expected_handle: str,
-        post_id: str,
-        challenge: str,
-        issued_at_epoch: u256,
-        expires_at_epoch: u256,
-        profile_expires_at_epoch: u256,
+        bundle_request_id: str,
+        x_request_id: str,
+        expected_x_handle: str,
+        x_post_id: str,
+        x_challenge: str,
+        x_issued_at_epoch: u256,
+        x_expires_at_epoch: u256,
+        x_profile_expires_at_epoch: u256,
+        farcaster_request_id: str,
+        expected_farcaster_username: str,
+        farcaster_fid: u256,
+        farcaster_cast_hash: str,
+        farcaster_challenge: str,
+        farcaster_issued_at_epoch: u256,
+        farcaster_expires_at_epoch: u256,
+        farcaster_profile_expires_at_epoch: u256,
     ) -> None:
         self._require_zero_value()
         self._require_not_paused()
         wallet = _address_text(gl.message.sender_address)
-        handle = _normalize_handle(expected_handle)
-        post = _validate_post_id(post_id)
-        code = _validate_challenge(challenge)
-        issued = int(issued_at_epoch)
-        expires = int(expires_at_epoch)
-        profile_expires = int(profile_expires_at_epoch)
-        expected_request = _ownership_request_id(
-            wallet, handle, post, code, issued, expires, profile_expires
+
+        handle = _normalize_handle(expected_x_handle)
+        x_post = _validate_post_id(x_post_id)
+        x_code = _validate_challenge(x_challenge)
+        x_issued = int(x_issued_at_epoch)
+        x_expires = int(x_expires_at_epoch)
+        x_profile_expires = int(x_profile_expires_at_epoch)
+        supplied_x_request = _validate_hash(x_request_id, "x_request_id")
+        expected_x_request = _ownership_request_id(
+            wallet, handle, x_post, x_code,
+            x_issued, x_expires, x_profile_expires,
         )
-        supplied_request = _validate_hash(request_id, "request_id")
-        if supplied_request != expected_request:
-            _expected("OWNERSHIP_BINDING", "Request ID does not match caller-bound envelope")
-        prior_result_raw = self.ownership_results.get(supplied_request, "")
-        if len(prior_result_raw) != 0:
-            prior_result = json.loads(prior_result_raw)
-            if prior_result.get("outcome") != OUTCOME_UNDETERMINED:
-                _expected("OWNERSHIP_REPLAY", "Ownership request was already used")
-        now = _now_epoch()
-        if issued <= 0 or issued > now or expires - issued < MIN_CHALLENGE_SECONDS:
-            _expected("CHALLENGE_WINDOW", "Invalid ownership challenge window")
-        if expires - issued > MAX_CHALLENGE_SECONDS or now > expires:
-            _expected("CHALLENGE_EXPIRED", "Ownership challenge is expired")
-        if profile_expires <= now or profile_expires - issued < MIN_PROFILE_SECONDS:
-            _expected("PROFILE_EXPIRY", "Invalid profile expiry")
-        if profile_expires - issued > MAX_PROFILE_SECONDS:
-            _expected("PROFILE_EXPIRY", "Profile expiry exceeds the maximum")
-        published_at = _post_epoch(post)
+        if supplied_x_request != expected_x_request:
+            _expected("OWNERSHIP_BINDING", "X request ID does not match caller-bound envelope")
 
-        def leader_fn() -> dict:
-            evidence = _extract_post(handle, post)
-            profile = _extract_profile(handle)
-            x_user_id = str(profile.get("x_user_id", ""))
-            text = str(evidence.get("text", ""))
-            protocol_match = re.search(r"(?<!\S)XProof v2(?=\s)", text, re.IGNORECASE) is not None
-            matches = {
-                "author_match": bool(evidence["author_match"]),
-                "post_id_match": bool(evidence["post_id_match"]),
-                "protocol_match": protocol_match,
-                "challenge_match": _has_exact_token(text, "n", code),
-                "wallet_match": _has_exact_token(text, "w", wallet, True),
-                "issued_at_match": _has_exact_token(text, "i", str(issued)),
-                "expires_at_match": _has_exact_token(text, "e", str(expires)),
-                "profile_expires_at_match": _has_exact_token(text, "c", str(profile_expires)),
-                "publication_in_window": issued <= published_at <= expires,
-            }
-            if evidence["transient"] or profile.get("outcome") == OUTCOME_UNDETERMINED:
-                outcome = OUTCOME_UNDETERMINED
-            elif (
-                profile.get("outcome") == OUTCOME_VERIFIED
-                and len(x_user_id) > 0
-                and (evidence["direct_ok"] or evidence["oembed_ok"])
-                and all(matches.values())
-            ):
-                outcome = OUTCOME_VERIFIED
-            else:
-                outcome = OUTCOME_REJECTED
-            return {
-                "request_id": supplied_request,
-                "wallet": wallet,
-                "source": SOURCE_X,
-                "handle": handle,
-                "x_user_id": x_user_id,
-                "external_user_id": x_user_id,
-                "identity_hash": _sha256_text("x-user-id:" + x_user_id) if len(x_user_id) else ZERO_HASH,
-                "post_id": post,
-                "issued_at_epoch": issued,
-                "expires_at_epoch": expires,
-                "profile_expires_at_epoch": profile_expires,
-                "verified_at_epoch": now,
-                "outcome": outcome,
-                **matches,
-            }
-
-        def validator_fn(leaders_res) -> bool:
-            if not isinstance(leaders_res, gl.vm.Return):
-                return _handle_leader_error(leaders_res, leader_fn)
-            own = leader_fn()
-            proposed = leaders_res.calldata
-            fields = (
-                "request_id", "wallet", "source", "handle", "x_user_id",
-                "external_user_id", "identity_hash", "post_id",
-                "issued_at_epoch", "expires_at_epoch", "profile_expires_at_epoch",
-                "verified_at_epoch",
-                "author_match", "post_id_match", "protocol_match", "challenge_match",
-                "wallet_match", "issued_at_match", "expires_at_match",
-                "profile_expires_at_match", "publication_in_window", "outcome",
-            )
-            return all(proposed.get(field) == own.get(field) for field in fields)
-
-        result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        self.ownership_results[supplied_request] = _canonical(result)
-        if result["outcome"] != OUTCOME_VERIFIED:
-            return
-        self._store_identity(wallet, SOURCE_X, {
-            "wallet": wallet,
-            "source": SOURCE_X,
-            "handle": handle,
-            "x_user_id": result["x_user_id"],
-            "external_user_id": result["external_user_id"],
-            "identity_hash": result["identity_hash"],
-            "status": PROFILE_ACTIVE,
-            "verified_at_epoch": now,
-            "expires_at_epoch": profile_expires,
-            "ownership_request_id": supplied_request,
-        })
-
-    @gl.public.write
-    def activate_farcaster_creator(
-        self,
-        request_id: str,
-        expected_username: str,
-        fid: u256,
-        cast_hash: str,
-        challenge: str,
-        issued_at_epoch: u256,
-        expires_at_epoch: u256,
-        profile_expires_at_epoch: u256,
-    ) -> None:
-        self._require_zero_value()
-        self._require_not_paused()
-        wallet = _address_text(gl.message.sender_address)
-        username = _normalize_farcaster_username(expected_username)
-        stable_fid = int(fid)
+        username = _normalize_farcaster_username(expected_farcaster_username)
+        stable_fid = int(farcaster_fid)
         if stable_fid <= 0:
             _expected("FARCASTER_FID", "Farcaster FID must be positive")
-        cast = _validate_farcaster_cast_hash(cast_hash)
-        code = _validate_challenge(challenge)
-        issued = int(issued_at_epoch)
-        expires = int(expires_at_epoch)
-        profile_expires = int(profile_expires_at_epoch)
-        supplied_request = _validate_hash(request_id, "request_id")
-        expected_request = _farcaster_ownership_request_id(
-            wallet,
-            username,
-            stable_fid,
-            cast,
-            code,
-            issued,
-            expires,
-            profile_expires,
+        cast = _validate_farcaster_cast_hash(farcaster_cast_hash)
+        farcaster_code = _validate_challenge(farcaster_challenge)
+        farcaster_issued = int(farcaster_issued_at_epoch)
+        farcaster_expires = int(farcaster_expires_at_epoch)
+        farcaster_profile_expires = int(farcaster_profile_expires_at_epoch)
+        supplied_farcaster_request = _validate_hash(
+            farcaster_request_id, "farcaster_request_id"
         )
-        if supplied_request != expected_request:
-            _expected("OWNERSHIP_BINDING", "Farcaster request ID does not match caller-bound envelope")
-        prior_result_raw = self.ownership_results.get(supplied_request, "")
-        if len(prior_result_raw) != 0:
-            prior_result = json.loads(prior_result_raw)
-            if prior_result.get("outcome") != OUTCOME_UNDETERMINED:
-                _expected("OWNERSHIP_REPLAY", "Ownership request was already used")
-        now = _now_epoch()
-        if issued <= 0 or issued > now or expires - issued < MIN_CHALLENGE_SECONDS:
-            _expected("CHALLENGE_WINDOW", "Invalid ownership challenge window")
-        if expires - issued > MAX_CHALLENGE_SECONDS or now > expires:
-            _expected("CHALLENGE_EXPIRED", "Ownership challenge is expired")
-        if profile_expires <= now or profile_expires - issued < MIN_PROFILE_SECONDS:
-            _expected("PROFILE_EXPIRY", "Invalid profile expiry")
-        if profile_expires - issued > MAX_PROFILE_SECONDS:
-            _expected("PROFILE_EXPIRY", "Profile expiry exceeds the maximum")
-
-        def leader_fn() -> dict:
-            evidence = _extract_farcaster(username, stable_fid, cast)
-            text = str(evidence.get("text", ""))
-            published_at = int(evidence.get("published_at_epoch", 0))
-            matches = {
-                "username_match": bool(evidence.get("username_match", False)),
-                "fid_match": bool(evidence.get("fid_match", False)),
-                "cast_hash_match": bool(evidence.get("cast_hash_match", False)),
-                "protocol_match": re.search(
-                    r"(?<!\S)InfluencedX identity(?=\s)", text, re.IGNORECASE
-                ) is not None,
-                "challenge_match": _has_exact_token(text, "n", code),
-                "wallet_match": _has_exact_token(text, "w", wallet, True),
-                "issued_at_match": _has_exact_token(text, "i", str(issued)),
-                "expires_at_match": _has_exact_token(text, "e", str(expires)),
-                "profile_expires_at_match": _has_exact_token(text, "c", str(profile_expires)),
-                "publication_in_window": issued <= published_at <= expires,
-            }
-            if bool(evidence.get("transient", False)):
-                outcome = OUTCOME_UNDETERMINED
-            elif all(matches.values()):
-                outcome = OUTCOME_VERIFIED
-            else:
-                outcome = OUTCOME_REJECTED
-            return {
-                "request_id": supplied_request,
-                "wallet": wallet,
-                "source": SOURCE_FARCASTER,
-                "handle": username,
-                "fid": stable_fid,
-                "external_user_id": str(stable_fid),
-                "identity_hash": _sha256_text(
-                    FARCASTER_IDENTITY_DOMAIN + "|" + str(stable_fid)
-                ),
-                "post_id": cast,
-                "issued_at_epoch": issued,
-                "expires_at_epoch": expires,
-                "profile_expires_at_epoch": profile_expires,
-                "verified_at_epoch": now,
-                "outcome": outcome,
-                **matches,
-            }
-
-        def validator_fn(leaders_res) -> bool:
-            if not isinstance(leaders_res, gl.vm.Return):
-                return _handle_leader_error(leaders_res, leader_fn)
-            proposed = leaders_res.calldata
-            own = leader_fn()
-            fields = (
-                "request_id", "wallet", "source", "handle", "fid", "external_user_id",
-                "identity_hash", "post_id", "issued_at_epoch", "expires_at_epoch",
-                "profile_expires_at_epoch", "verified_at_epoch", "username_match",
-                "fid_match", "cast_hash_match", "protocol_match", "challenge_match",
-                "wallet_match", "issued_at_match", "expires_at_match",
-                "profile_expires_at_match", "publication_in_window", "outcome",
+        expected_farcaster_request = _farcaster_ownership_request_id(
+            wallet, username, stable_fid, cast, farcaster_code,
+            farcaster_issued, farcaster_expires, farcaster_profile_expires,
+        )
+        if supplied_farcaster_request != expected_farcaster_request:
+            _expected(
+                "OWNERSHIP_BINDING",
+                "Farcaster request ID does not match caller-bound envelope",
             )
-            return all(proposed.get(field) == own.get(field) for field in fields)
 
-        result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        self.ownership_results[supplied_request] = _canonical(result)
-        if result["outcome"] != OUTCOME_VERIFIED:
-            return
-        self._store_identity(wallet, SOURCE_FARCASTER, {
+        supplied_bundle = _validate_hash(bundle_request_id, "bundle_request_id")
+        expected_bundle = _identity_bundle_request_id(
+            wallet, supplied_x_request, supplied_farcaster_request
+        )
+        if supplied_bundle != expected_bundle:
+            _expected("OWNERSHIP_BINDING", "Bundle request ID does not match caller-bound requests")
+
+        self._require_replayable_ownership_request(supplied_bundle)
+        self._require_replayable_ownership_request(supplied_x_request)
+        self._require_replayable_ownership_request(supplied_farcaster_request)
+        now = _now_epoch()
+        self._validate_ownership_window(x_issued, x_expires, x_profile_expires, now)
+        self._validate_ownership_window(
+            farcaster_issued, farcaster_expires, farcaster_profile_expires, now
+        )
+
+        x_result = self._evaluate_x_ownership(
+            supplied_x_request, wallet, handle, x_post, x_code,
+            x_issued, x_expires, x_profile_expires, now,
+        )
+        farcaster_result = self._evaluate_farcaster_ownership(
+            supplied_farcaster_request, wallet, username, stable_fid, cast,
+            farcaster_code, farcaster_issued, farcaster_expires,
+            farcaster_profile_expires, now,
+        )
+        x_outcome = str(x_result["outcome"])
+        farcaster_outcome = str(farcaster_result["outcome"])
+        if x_outcome == OUTCOME_VERIFIED and farcaster_outcome == OUTCOME_VERIFIED:
+            bundle_outcome = OUTCOME_VERIFIED
+        elif OUTCOME_UNDETERMINED in (x_outcome, farcaster_outcome):
+            bundle_outcome = OUTCOME_UNDETERMINED
+        else:
+            bundle_outcome = OUTCOME_REJECTED
+        bundle_result = {
+            "request_id": supplied_bundle,
             "wallet": wallet,
-            "source": SOURCE_FARCASTER,
-            "handle": username,
-            "fid": stable_fid,
-            "external_user_id": str(stable_fid),
-            "identity_hash": result["identity_hash"],
-            "status": PROFILE_ACTIVE,
+            "kind": "IDENTITY_BUNDLE",
+            "x_request_id": supplied_x_request,
+            "farcaster_request_id": supplied_farcaster_request,
+            "x_outcome": x_outcome,
+            "farcaster_outcome": farcaster_outcome,
             "verified_at_epoch": now,
-            "expires_at_epoch": profile_expires,
-            "ownership_request_id": supplied_request,
-        })
+            "outcome": bundle_outcome,
+        }
+        if bundle_outcome == OUTCOME_UNDETERMINED:
+            self.ownership_results[supplied_bundle] = _canonical(bundle_result)
+            return
+
+        # A final bundle consumes both source requests. A rejected bundle marks
+        # both source requests rejected while preserving each evidence outcome;
+        # callers cannot mistake a source-level VERIFIED result for activation.
+        if bundle_outcome != OUTCOME_VERIFIED:
+            x_result["evidence_outcome"] = x_outcome
+            x_result["bundle_request_id"] = supplied_bundle
+            x_result["outcome"] = OUTCOME_REJECTED
+            farcaster_result["evidence_outcome"] = farcaster_outcome
+            farcaster_result["bundle_request_id"] = supplied_bundle
+            farcaster_result["outcome"] = OUTCOME_REJECTED
+            self.ownership_results[supplied_bundle] = _canonical(bundle_result)
+            self.ownership_results[supplied_x_request] = _canonical(x_result)
+            self.ownership_results[supplied_farcaster_request] = _canonical(farcaster_result)
+            return
+        x_identity = self._x_identity(x_result)
+        farcaster_identity = self._farcaster_identity(farcaster_result)
+        self._validate_identity_binding(wallet, SOURCE_X, x_identity)
+        self._validate_identity_binding(wallet, SOURCE_FARCASTER, farcaster_identity)
+        self.ownership_results[supplied_bundle] = _canonical(bundle_result)
+        self.ownership_results[supplied_x_request] = _canonical(x_result)
+        self.ownership_results[supplied_farcaster_request] = _canonical(farcaster_result)
+        self._store_identity(wallet, SOURCE_X, x_identity)
+        self._store_identity(wallet, SOURCE_FARCASTER, farcaster_identity)
 
     @gl.public.write.payable
     def create_campaign(
@@ -2170,7 +2308,7 @@ Campaign brief:
         result = {
             "wallet": wallet,
             "exists": len(self.profiles.get(wallet, "")) != 0,
-            "active": len(active_sources) > 0,
+            "active": len(active_sources) == 2,
             "active_sources": active_sources,
             "x": x_identity,
             "farcaster": farcaster_identity,
@@ -2323,6 +2461,19 @@ Campaign brief:
             int(issued_at_epoch),
             int(expires_at_epoch),
             int(profile_expires_at_epoch),
+        )
+
+    @gl.public.view
+    def compute_identity_bundle_request_id(
+        self,
+        account: Address,
+        x_request_id: str,
+        farcaster_request_id: str,
+    ) -> str:
+        return _identity_bundle_request_id(
+            _address_text(account),
+            _validate_hash(x_request_id, "x_request_id"),
+            _validate_hash(farcaster_request_id, "farcaster_request_id"),
         )
 
     @gl.public.view

@@ -55,20 +55,22 @@ test("normalizes public X handles and rejects profile URLs", () => {
   assert.throws(() => normalizeXHandle("sixteen_chars____"));
 });
 
-test("strictly parses canonical X and legacy Twitter post URLs", () => {
+test("canonicalizes X share URLs and rejects non-X or non-status URLs", () => {
   const postId = snowflakeFor(ISSUED_AT + 10_000);
-  assert.deepEqual(
-    parseVerificationPostUrl(`https://twitter.com/Creator_7/status/${postId}`),
-    {
-      handle: "creator_7",
-      postId,
-      normalizedUrl: `https://x.com/creator_7/status/${postId}`,
-      createdAtMs: ISSUED_AT + 10_000,
-    },
-  );
-  assert.throws(() =>
-    parseVerificationPostUrl(`https://x.com/creator_7/status/${postId}?s=20`),
-  );
+  const expected = {
+    handle: "creator_7",
+    postId,
+    normalizedUrl: `https://x.com/creator_7/status/${postId}`,
+    createdAtMs: ISSUED_AT + 10_000,
+  };
+  for (const url of [
+    `https://twitter.com/Creator_7/status/${postId}`,
+    `https://x.com/creator_7/status/${postId}?s=20`,
+    `https://x.com/creator_7/status/${postId}?t=abc`,
+    `https://x.com/creator_7/status/${postId}#share`,
+  ]) {
+    assert.deepEqual(parseVerificationPostUrl(url), expected);
+  }
   assert.throws(() =>
     parseVerificationPostUrl(`https://x.com.evil.test/creator_7/status/${postId}`),
   );

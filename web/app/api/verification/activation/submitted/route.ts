@@ -3,9 +3,8 @@ import {
   assertExactJsonKeys,
   apiError,
   readSameOriginJson,
-  requireString,
 } from "@/lib/verification-api";
-import { prepareGenLayerIdentityBundleActivation } from "@/lib/marketplace-genlayer-activation";
+import { bindGenLayerIdentityBundleActivationSubmission } from "@/lib/marketplace-genlayer-activation";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 import {
   isAuthenticatedWalletSession,
@@ -13,28 +12,33 @@ import {
 } from "@/lib/wallet-session";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
-    assertExactJsonKeys(body, ["requestId", "verificationPostUrl", "castHash"]);
+    assertExactJsonKeys(body, ["preparedId", "txHash"]);
     const session = readWalletSession(request);
     if (!session || !isAuthenticatedWalletSession(session)) {
-      throw new ApiProblem(401, "WALLET_AUTHENTICATION_REQUIRED", "Prove control of your wallet before preparing activation.");
+      throw new ApiProblem(
+        401,
+        "WALLET_AUTHENTICATION_REQUIRED",
+        "Prove control of your wallet before recording activation submission.",
+      );
     }
-    const requestId = requireString(body, "requestId", 128);
     await enforceVerificationRateLimit(request, "intent", {
       subject: session.subject,
       wallet: session.wallet,
-      requestId,
+      requestId:
+        typeof body.preparedId === "string" ? body.preparedId : null,
     });
-    return Response.json(await prepareGenLayerIdentityBundleActivation({
-      session,
-      requestId,
-      verificationPostUrl: body.verificationPostUrl,
-      castHash: body.castHash,
-    }), { headers: { "Cache-Control": "private, no-store" } });
+    return Response.json(
+      await bindGenLayerIdentityBundleActivationSubmission({
+        session,
+        preparedId: body.preparedId,
+        txHash: body.txHash,
+      }),
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (error) {
     return apiError(error);
   }

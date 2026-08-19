@@ -34,6 +34,8 @@ const [state] = await sql.query(`
         ('verification_requests', 'activation_prepared_id'),
         ('verification_requests', 'activation_tx_hash'),
         ('verification_requests', 'activation_confirmed_at'),
+        ('verification_requests', 'x_ownership_request_id'),
+        ('verification_requests', 'farcaster_ownership_request_id'),
         ('marketplace_genlayer_profiles', 'projection_id'),
         ('marketplace_genlayer_profiles', 'network'),
         ('marketplace_genlayer_profiles', 'chain_id'),
@@ -74,7 +76,7 @@ const [state] = await sql.query(`
       )
     ) as native_columns_ready,
     (
-      select count(*)::int = 13
+      select count(*)::int = 16
       from pg_constraint c
       join pg_class t on t.oid = c.conrelid
       join pg_namespace n on n.oid = t.relnamespace
@@ -85,6 +87,9 @@ const [state] = await sql.query(`
           'verification_requests_farcaster_cast_hash',
           'verification_requests_activation_tx',
           'verification_requests_expiry_state',
+          'verification_requests_identity_bundle_pair',
+          'verification_requests_identity_bundle_hashes',
+          'marketplace_genlayer_transactions_operation',
           'marketplace_genlayer_profiles_namespace',
           'marketplace_genlayer_profiles_source',
           'marketplace_genlayer_campaigns_namespace',
@@ -94,6 +99,7 @@ const [state] = await sql.query(`
           'marketplace_genlayer_maintenance_generations_vercel',
           'marketplace_genlayer_maintenance_generations_monotonic'
         )
+        and c.convalidated
     ) as native_constraints_ready,
     (
       select count(*)::int = 9
@@ -156,7 +162,7 @@ process.stdout.write(JSON.stringify({
   ok: true,
   network: "studionet",
   chainId: 61_999,
-  schemaVersion: 3,
+  schemaVersion: 4,
   verificationColumns: state.verification_column_count,
   verificationRequests: requestState.request_count,
   campaigns: campaignState.campaign_count,
