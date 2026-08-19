@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "network": "studionet",
   "chainId": 61999,
   "rpcUrl": "https://studio.genlayer.com/api",
@@ -24,16 +24,18 @@
     }
   },
   "marketplace": {
-    "address": "0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11",
-    "deploymentTransaction": "0xd21bb805678c7cb93be39b73f8af2955627ce87dd536004a9e144aa145f36aa2",
-    "deployedAt": "2026-08-19T12:02:54.276347Z",
+    "address": "0x17eB37A3578E21662F4D654b245238dF520663Fa",
+    "deploymentTransaction": "0xa3257e846cfcb581bc473bb32f4e47563a72b7bb1ff0215d0fe1de5aa637a99c",
+    "deployedAt": "2026-08-19T12:50:10.645764Z",
     "status": "FINALIZED",
     "executionResult": "SUCCESS",
     "consensusResult": "MAJORITY_AGREE",
-    "protocolVersion": "INFLUENCEDX_MARKETPLACE_V1",
-    "storageSchemaVersion": 1,
+    "protocolVersion": "INFLUENCEDX_MARKETPLACE_V2",
+    "storageSchemaVersion": 2,
     "owner": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
-    "treasury": "0x797d3B25fB2cCA0Ff93F60df1910267f3822D655",
+    "treasury": "0x63038a310a46AC61A59c1bC5eAD5fe41040eF38e",
+    "upgradeAdmin": "0x87e94EDAb4418e8A9eA37c0FAb0675Cf0602A9F2",
+    "upgradeDelaySeconds": 604800,
     "protocolFeeBps": 250,
     "nativeAsset": {
       "symbol": "GEN",
@@ -41,10 +43,22 @@
     },
     "abiVerified": true,
     "stateVerified": true,
-    "methodCount": 42,
-    "directTestsPassed": 22,
+    "methodCount": 49,
+    "directTestsPassed": 43,
+    "sourceSha256": "0x926aa4b89a549327eda4ce0c89fe04974881c79489a1080f2946f64b8a8275d7",
+    "sourceCommit": "0289b9be245416ad292e478fc8f43dff37ac3778",
     "productionOwnerConfigured": false
   },
+  "historicalMarketplaces": [
+    {
+      "address": "0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11",
+      "deploymentTransaction": "0xd21bb805678c7cb93be39b73f8af2955627ce87dd536004a9e144aa145f36aa2",
+      "protocolVersion": "INFLUENCEDX_MARKETPLACE_V1",
+      "storageSchemaVersion": 1,
+      "status": "FINALIZED",
+      "reasonRetired": "Fresh V2 deployment required for deterministic consensus time, source-keyed identities, Farcaster, and native seven-day upgrades."
+    }
+  ],
   "limitations": {
     "durability": "StudioNet persistence is temporary. A network reset requires fresh resolver and marketplace deployments, new network-scoped projections, and fresh creator verification.",
     "mainnet": false
