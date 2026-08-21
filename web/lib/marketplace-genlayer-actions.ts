@@ -48,6 +48,7 @@ import {
   type GenLayerCampaignProjection,
   type GenLayerPrivateApplication,
 } from "./marketplace-genlayer-repository.ts";
+import { resolveFarcasterCastHashFromUrl } from "./marketplace-genlayer-activation.ts";
 import {
   MARKETPLACE_GENLAYER_CHAIN_ID,
   MARKETPLACE_GENLAYER_NETWORK,
@@ -380,23 +381,15 @@ export async function prepareGenLayerSubmission(input: ActionInput) {
   if (expectedHandle !== context.assignment.creatorHandle) {
     throw problem(409, "CREATOR_HANDLE_MISMATCH", "expectedHandle does not match the selected creator identity.");
   }
-  const contentId = contentIdentifier(source, input.body.contentId);
-  const submissionHash = canonicalHash({
-    protocol: "influencedx-submission-v2",
-    assignment_id: context.assignment.assignmentId,
-    content_source: source,
-    content_id: contentId,
-    creator_identity_hash: context.assignment.creatorIdentityHash,
-  });
-  const requestId = deriveResolutionRequestId({
+  const { call } = await buildGenLayerSubmissionCall({
     assignmentId: context.assignment.assignmentId,
     agreementHash: context.assignment.agreementHash,
-    submissionHash,
+    creatorIdentityHash: context.assignment.creatorIdentityHash,
     contentSource: source,
-    postId: contentId,
-    roundIndex: 0,
+    submittedContent: input.body.contentId,
+    expectedUsername: identity.authoritativeProfile.handle,
+    expectedExternalUserId: identity.authoritativeProfile.externalUserId,
   });
-  const call = callPlan("submit_evidence", [context.assignment.assignmentId, requestId, contentId, submissionHash], ["string", "string", "string", "string"]);
   const prepared = await prepareAction("SUBMIT_EVIDENCE", call, context, input.session.wallet, context.assignment.assignmentId);
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
@@ -1359,6 +1352,55 @@ function assertCreator(application: GenLayerPrivateApplication, wallet: string) 
 function positiveAtto(value: unknown, field: string): string {
   if (typeof value !== "string" || !/^[1-9][0-9]{0,77}$/.test(value) || BigInt(value) >= 1n << 256n) throw problem(400, "INVALID_REQUEST", `${field} is invalid.`);
   return value;
+}
+
+export async function buildGenLayerSubmissionCall(input: {
+  assignmentId: string;
+  agreementHash: string;
+  creatorIdentityHash: string;
+  contentSource: "X" | "FARCASTER";
+  submittedContent: unknown;
+  expectedUsername: string;
+  expectedExternalUserId: string;
+}, options: {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+} = {}) {
+  const contentId = input.contentSource === "FARCASTER"
+    ? await resolveFarcasterCastHashFromUrl(
+        input.submittedContent,
+        {
+          expectedUsername: input.expectedUsername,
+          expectedFid: input.expectedExternalUserId,
+        },
+        options,
+      )
+    : contentIdentifier(input.contentSource, input.submittedContent);
+  const submissionHash = canonicalHash({
+    protocol: "influencedx-submission-v2",
+    assignment_id: input.assignmentId,
+    content_source: input.contentSource,
+    content_id: contentId,
+    creator_identity_hash: input.creatorIdentityHash,
+  });
+  const requestId = deriveResolutionRequestId({
+    assignmentId: input.assignmentId,
+    agreementHash: input.agreementHash,
+    submissionHash,
+    contentSource: input.contentSource,
+    postId: contentId,
+    roundIndex: 0,
+  });
+  return Object.freeze({
+    contentId,
+    submissionHash,
+    requestId,
+    call: callPlan(
+      "submit_evidence",
+      [input.assignmentId, requestId, contentId, submissionHash],
+      ["string", "string", "string", "string"],
+    ),
+  });
 }
 
 function contentIdentifier(source: "X" | "FARCASTER", value: unknown): string {

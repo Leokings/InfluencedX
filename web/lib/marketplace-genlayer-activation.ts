@@ -449,7 +449,7 @@ function invalidFarcasterCastUrl(): ApiProblem {
   return problem(
     400,
     "INVALID_FARCASTER_CAST_URL",
-    "Enter the HTTPS farcaster.xyz URL for the published challenge cast.",
+    "Enter a public HTTPS farcaster.xyz cast URL.",
   );
 }
 
@@ -457,7 +457,7 @@ function farcasterCastNotFound(): ApiProblem {
   return problem(
     400,
     "FARCASTER_CAST_NOT_FOUND",
-    "The Farcaster cast could not be found for the challenged identity.",
+    "The Farcaster cast could not be found for this identity.",
   );
 }
 

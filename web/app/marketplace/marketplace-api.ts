@@ -83,6 +83,18 @@ export type PreparedMarketplaceRecovery = Readonly<{
   txHash: string;
 }>;
 
+export function matchingMarketplaceReadyRetry<
+  T extends { actor: string; requestBody: string },
+>(
+  retry: T | undefined,
+  actor: string,
+  requestBody: string,
+): T | null {
+  return retry?.actor === actor && retry.requestBody === requestBody
+    ? retry
+    : null;
+}
+
 export function preparedMarketplaceRecovery(value: {
   preparedId: string;
   recovery?: unknown;

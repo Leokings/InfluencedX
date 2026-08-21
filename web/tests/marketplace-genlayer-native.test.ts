@@ -10,6 +10,7 @@ import {
 } from "../app/marketplace/marketplace-transaction.ts";
 import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
 import {
+  buildGenLayerSubmissionCall,
   genLayerUnallocatedRefundAvailability,
   nextGenLayerResolutionProgression,
 } from "../lib/marketplace-genlayer-actions.ts";
@@ -82,6 +83,7 @@ import type {
 } from "../lib/marketplace-genlayer-operator-client.ts";
 import {
   assertTransactionMatchesPreparedCall,
+  canonicalHash,
   canonicalJson,
   finalizedExecution,
   loadFinalizedMarketplaceTransaction,
@@ -387,6 +389,97 @@ test("Farcaster cast URL resolution rejects unsafe URLs and unbound lookup resul
     ),
     (error: unknown) =>
       (error as { code?: string }).code === "FARCASTER_CAST_LOOKUP_UNAVAILABLE",
+  );
+});
+
+test("Farcaster campaign evidence resolves the public URL and freezes the full FID-bound hash in calldata", async () => {
+  const exactHash = "0x9625056e23efed813044dffbaf2df94b30ac961e";
+  const agreementHash = `0x${"58".repeat(32)}`;
+  const creatorIdentityHash = `0x${"59".repeat(32)}`;
+  const result = await buildGenLayerSubmissionCall({
+    assignmentId,
+    agreementHash,
+    creatorIdentityHash,
+    contentSource: "FARCASTER",
+    submittedContent: "https://farcaster.xyz/milechain/0x9625056e",
+    expectedUsername: "milechain",
+    expectedExternalUserId: "279320",
+  }, {
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      assert.equal(url.origin, "https://client.farcaster.xyz");
+      assert.equal(url.pathname, "/v2/user-cast");
+      assert.equal(url.searchParams.get("username"), "milechain");
+      assert.equal(url.searchParams.get("hashPrefix"), "0x9625056e");
+      return new Response(JSON.stringify({
+        result: {
+          cast: {
+            hash: exactHash,
+            author: { fid: 279320, username: "milechain" },
+          },
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const expectedSubmissionHash = canonicalHash({
+    protocol: "influencedx-submission-v2",
+    assignment_id: assignmentId,
+    content_source: "FARCASTER",
+    content_id: exactHash,
+    creator_identity_hash: creatorIdentityHash,
+  });
+  const expectedRequestId = deriveResolutionRequestId({
+    assignmentId,
+    agreementHash,
+    submissionHash: expectedSubmissionHash,
+    contentSource: "FARCASTER",
+    postId: exactHash,
+    roundIndex: 0,
+  });
+  assert.equal(result.contentId, exactHash);
+  assert.equal(result.submissionHash, expectedSubmissionHash);
+  assert.equal(result.requestId, expectedRequestId);
+  assert.equal(result.call.functionName, "submit_evidence");
+  assert.deepEqual(result.call.args, [
+    assignmentId,
+    expectedRequestId,
+    exactHash,
+    expectedSubmissionHash,
+  ]);
+  assert.deepEqual(result.call.argTypes, ["string", "string", "string", "string"]);
+  assert.equal(result.call.value, "0");
+});
+
+test("Farcaster campaign evidence fails closed when the URL lookup is missing or belongs to another FID", async () => {
+  const input = {
+    assignmentId,
+    agreementHash: `0x${"58".repeat(32)}`,
+    creatorIdentityHash: `0x${"59".repeat(32)}`,
+    contentSource: "FARCASTER" as const,
+    submittedContent: "https://farcaster.xyz/milechain/0x9625056e",
+    expectedUsername: "milechain",
+    expectedExternalUserId: "279320",
+  };
+  await assert.rejects(
+    () => buildGenLayerSubmissionCall(input, {
+      fetchImpl: async () => new Response("", { status: 404 }),
+    }),
+    (error: unknown) =>
+      (error as { code?: string }).code === "FARCASTER_CAST_NOT_FOUND",
+  );
+  await assert.rejects(
+    () => buildGenLayerSubmissionCall(input, {
+      fetchImpl: async () => new Response(JSON.stringify({
+        result: {
+          cast: {
+            hash: "0x9625056e23efed813044dffbaf2df94b30ac961e",
+            author: { fid: 279321, username: "milechain" },
+          },
+        },
+      }), { headers: { "Content-Type": "application/json" } }),
+    }),
+    (error: unknown) =>
+      (error as { code?: string }).code === "FARCASTER_CAST_NOT_FOUND",
   );
 });
 
@@ -1965,6 +2058,28 @@ test("apply, select, accept, and submit preflight the exact active X plus Farcas
   const acceptStart = actions.indexOf("export async function prepareGenLayerAccept");
   const acceptEnd = actions.indexOf("export async function confirmGenLayerAccept", acceptStart);
   assert.match(actions.slice(acceptStart, acceptEnd), /prepareAssignmentSimple\([\s\S]*true/);
+});
+
+test("campaign evidence resolution uses the authoritative Farcaster identity only during preparation", async () => {
+  const actions = await readFile(
+    new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
+    "utf8",
+  );
+  const prepareStart = actions.indexOf("export async function prepareGenLayerSubmission");
+  const confirmStart = actions.indexOf("export async function confirmGenLayerSubmission", prepareStart);
+  const resolutionStart = actions.indexOf("export async function prepareGenLayerResolution", confirmStart);
+  const prepare = actions.slice(prepareStart, confirmStart);
+  const confirm = actions.slice(confirmStart, resolutionStart);
+  assert.match(prepare, /await buildGenLayerSubmissionCall\(\{/);
+  assert.match(prepare, /submittedContent: input\.body\.contentId/);
+  assert.match(prepare, /expectedUsername: identity\.authoritativeProfile\.handle/);
+  assert.match(prepare, /expectedExternalUserId: identity\.authoritativeProfile\.externalUserId/);
+  assert.ok(
+    prepare.indexOf("await buildGenLayerSubmissionCall")
+      < prepare.indexOf('prepareAction("SUBMIT_EVIDENCE"'),
+  );
+  assert.doesNotMatch(confirm, /resolveFarcasterCastHashFromUrl|buildGenLayerSubmissionCall/);
+  assert.match(confirm, /const contentId = contentIdentifier\(source, contentArg\)/);
 });
 
 test("every reusable submitted marketplace journal returns confirm-only recovery instead of a transaction", async () => {

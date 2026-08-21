@@ -4,6 +4,7 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { MarketplaceState } from "../../components/MarketplaceState";
 import {
+  matchingMarketplaceReadyRetry,
   marketplaceErrorMessage,
   marketplaceRequest,
   preparedMarketplaceRecovery,
@@ -51,7 +52,7 @@ type PreparedMutation = {
 };
 
 type Recovery = { preparedId: string; txHash: string; confirmPath: string };
-type ReadyRetry = { actor: string; prepared: PreparedMutation; confirmPath: string };
+type ReadyRetry = { actor: string; prepared: PreparedMutation; confirmPath: string; requestBody: string };
 type SettlementActionKind = "claim" | "execute-claim" | "refund-unallocated";
 type MarketplaceWallet = ReturnType<typeof useMarketplaceWallet>;
 
@@ -192,11 +193,12 @@ function CampaignDetailSession({
       if (input.recoveryOnly) {
         throw new Error("The original submitted transaction hash is required.");
       }
+      const requestBody = JSON.stringify(input.body ?? {});
       const readyRetry = readyRetries.current[input.key];
-      const reusableReady = readyRetry?.actor === actor ? readyRetry : null;
+      const reusableReady = matchingMarketplaceReadyRetry(readyRetry, actor, requestBody);
       const prepared = reusableReady?.prepared ?? await marketplaceRequest<PreparedMutation>(input.preparePath, {
         method: "POST",
-        body: JSON.stringify(input.body ?? {}),
+        body: requestBody,
       });
       const confirmPath = reusableReady?.confirmPath ?? (
         typeof input.confirmPath === "function"
@@ -219,7 +221,7 @@ function CampaignDetailSession({
       if (!prepared.transaction) {
         throw new Error("The prepared marketplace transaction is unavailable.");
       }
-      readyRetries.current[input.key] = { actor, prepared, confirmPath };
+      readyRetries.current[input.key] = { actor, prepared, confirmPath, requestBody };
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
         expectedFunctionName: input.expectedFunctionName,
         expectedValue: "0",
@@ -705,20 +707,18 @@ function EvidenceSubmissionForm({ application, campaign, busy, onSubmit }: { app
   return (
     <form className="evidence-form" onSubmit={(event) => void onSubmit(application, event)}>
       <span>PUBLIC TEXT-POST EVIDENCE</span><strong>SUBMIT YOUR {contentSourceLabel(source)} POST.</strong>
-      <p>Enter the {isFarcaster ? "cast hash" : "X post ID"} from verified @{handle || "handle"}.</p>
+      <p>Paste the public {isFarcaster ? "cast" : "post"} link from @{handle || "handle"}.</p>
       <label>
-        <span>{isFarcaster ? "FARCASTER CAST HASH" : "X POST ID"}</span>
+        <span>{isFarcaster ? "FARCASTER CAST URL" : "X POST URL"}</span>
         <input
-          type="text"
+          type="url"
           name="contentId"
           defaultValue={contentId}
-          placeholder={isFarcaster ? `0x${"a".repeat(40)}` : "1890123456789012345"}
-          pattern={isFarcaster ? "0x[0-9a-fA-F]{40}" : "[0-9]{5,25}"}
-          inputMode={isFarcaster ? "text" : "numeric"}
+          placeholder={isFarcaster ? "https://farcaster.xyz/username/0x…" : "https://x.com/username/status/…"}
+          inputMode="url"
           autoComplete="off"
           required
         />
-        <small>{isFarcaster ? "Use the 0x-prefixed 20-byte cast hash." : "Use only the numeric ID from the canonical X status URL."}</small>
       </label>
       <button className="button" type="submit" disabled={busy}>{busy ? "WAITING FOR FINALITY…" : "SUBMIT ON GENLAYER →"}</button>
     </form>

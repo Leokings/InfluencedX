@@ -22,6 +22,7 @@ import { shouldRejectVerificationResponse } from "../app/verify/verification-api
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle } from "../app/verify/verification-recovery.ts";
 import {
   MarketplaceApiError,
+  matchingMarketplaceReadyRetry,
   marketplaceErrorMessage,
   preparedMarketplaceRecovery,
 } from "../app/marketplace/marketplace-api.ts";
@@ -80,6 +81,32 @@ test("accepts only an exact server-bound confirm-only marketplace recovery", () 
       recovery: { preparedId, txHash, actorWallet: `0x${"34".repeat(20)}` },
     }),
     /Invalid marketplace recovery response/,
+  );
+});
+
+test("a rejected ready transaction is reused only for the exact same evidence URL", () => {
+  const actor = "0x1111111111111111111111111111111111111111";
+  const firstBody = JSON.stringify({
+    contentId: "https://farcaster.xyz/milechain/0x9625056e",
+    contentSource: "FARCASTER",
+    expectedHandle: "milechain",
+  });
+  const retry = { actor, requestBody: firstBody, preparedId: "prepared-1" };
+  assert.equal(
+    matchingMarketplaceReadyRetry(retry, actor, firstBody),
+    retry,
+  );
+  assert.equal(
+    matchingMarketplaceReadyRetry(
+      retry,
+      actor,
+      JSON.stringify({
+        contentId: "https://farcaster.xyz/milechain/0xdeadbeef",
+        contentSource: "FARCASTER",
+        expectedHandle: "milechain",
+      }),
+    ),
+    null,
   );
 });
 
@@ -408,6 +435,9 @@ test("marketplace submissions durably bind hashes and preserve pending applicati
   assert.match(funding, /onBusyChange\(true\)/);
   assert.match(funding, /onBusyChange\(false\)/);
   assert.match(funding, /await recordSubmittedMarketplaceTransaction\(preparedId, txHash\)/);
+  assert.match(detail, /const requestBody = JSON\.stringify\(input\.body \?\? \{\}\)/);
+  assert.match(detail, /matchingMarketplaceReadyRetry\(readyRetry, actor, requestBody\)/);
+  assert.match(detail, /readyRetries\.current\[input\.key\] = \{ actor, prepared, confirmPath, requestBody \}/);
   const actionRecoveryResponse = detail.indexOf("preparedMarketplaceRecovery(prepared)");
   const actionBroadcast = detail.indexOf("broadcastMarketplaceTransaction(prepared.transaction", actionRecoveryResponse);
   assert.ok(actionRecoveryResponse >= 0 && actionBroadcast > actionRecoveryResponse);
@@ -596,7 +626,7 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.doesNotMatch(transactionSource, /activate_creator|activate_farcaster_creator/);
 });
 
-test("V2 marketplace UI binds campaigns and content IDs to X or Farcaster", async () => {
+test("V2 marketplace UI accepts public X and Farcaster evidence links", async () => {
   const [createSource, detailSource, directorySource, profileSource] = await Promise.all([
     readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
@@ -606,8 +636,16 @@ test("V2 marketplace UI binds campaigns and content IDs to X or Farcaster", asyn
   assert.match(createSource, /contentSource/);
   assert.match(createSource, /FARCASTER/);
   assert.match(directorySource, /campaignContentSource/);
-  assert.match(detailSource, /0x\[0-9a-fA-F\]\{40\}/);
-  assert.match(detailSource, /\[0-9\]\{5,25\}/);
+  const evidenceStart = detailSource.indexOf("function EvidenceSubmissionForm");
+  const evidenceEnd = detailSource.indexOf("function ResolutionControl", evidenceStart);
+  const evidenceForm = detailSource.slice(evidenceStart, evidenceEnd);
+  assert.match(evidenceForm, /FARCASTER CAST URL/);
+  assert.match(evidenceForm, /X POST URL/);
+  assert.match(evidenceForm, /type="url"/);
+  assert.match(evidenceForm, /https:\/\/farcaster\.xyz\/username\/0x…/);
+  assert.match(evidenceForm, /https:\/\/x\.com\/username\/status\/…/);
+  assert.doesNotMatch(evidenceForm, /\bpattern=/);
+  assert.doesNotMatch(evidenceForm, /CAST HASH|POST ID|20-byte|numeric ID/);
   assert.match(detailSource, /contentId/);
   assert.match(profileSource, /creator\.farcaster/);
   assert.match(profileSource, /FARCASTER/);
