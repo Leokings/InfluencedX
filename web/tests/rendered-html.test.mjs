@@ -93,6 +93,10 @@ test("server-renders the InfluencedX marketplace and share metadata", async () =
   assert.match(html, /ACTIVE CAMPAIGNS/);
   assert.match(html, /CREATOR BOARD/);
   assert.match(html, /LOADING THE MARKET/);
+  assert.match(html, /VERIFY X \+ FARCASTER/);
+  assert.match(html, /X POST OR FARCASTER CAST/);
+  assert.match(html, /PROVEN WITH X \+ FARCASTER · 1 TRANSACTION/);
+  assert.doesNotMatch(html, /VERIFY YOUR X|ONE-TIME PUBLIC X POST|>PUBLIC X POST<\/span>/);
   assert.match(html, /href="\/privacy"/);
   assert.match(html, /href="\/terms"/);
   assert.doesNotMatch(html, /Northstar Labs|84\.2K|416.*VERIFIED CREATORS/i);

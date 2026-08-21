@@ -13,10 +13,10 @@ export default function Home() {
           <p className="eyebrow"><span /> PUBLIC EVIDENCE / PRIVATE KEYS STAY PRIVATE</p>
           <h2>WORK.<br /><em>RESOLVED.</em></h2>
           <p>
-            A creator’s public X post, campaign terms, and deadlines form a resolution request.
+            A public X post or Farcaster cast, campaign terms, and deadlines form a resolution request.
             GenLayer evaluates the public evidence and atomically credits the creator or refunds the brand.
           </p>
-          <Link className="button" href="/verify">VERIFY YOUR X →</Link>
+          <Link className="button" href="/verify">VERIFY X + FARCASTER →</Link>
         </div>
 
         <div className="proof-board">
@@ -26,7 +26,7 @@ export default function Home() {
           </div>
           {[
             ["01", "CAMPAIGN TERMS", "HASHED BRIEF + DELIVERABLES", "REQUIRED"],
-            ["02", "CREATOR SUBMISSION", "PUBLIC X POST", "REQUIRED"],
+            ["02", "CREATOR SUBMISSION", "X POST OR FARCASTER CAST", "REQUIRED"],
             ["03", "GENLAYER RESOLUTION", "VALIDATOR CONSENSUS", "PENDING"],
             ["04", "GENLAYER SETTLEMENT", "CREDIT OR REFUND", "AFTER FINALITY"],
           ].map(([number, title, detail, status]) => (
@@ -55,7 +55,7 @@ export default function Home() {
         <div className="creator-data-notice">
           <div>
             <span>ACCOUNT OWNERSHIP</span>
-            <strong>PROVEN WITH A ONE-TIME PUBLIC X POST</strong>
+            <strong>PROVEN WITH X + FARCASTER · 1 TRANSACTION</strong>
           </div>
           <div>
             <span>PAY ESTIMATE INPUTS</span>
