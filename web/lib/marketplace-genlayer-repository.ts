@@ -69,6 +69,10 @@ export type PreparedMarketplaceTransaction = Readonly<{
   preparedId: string;
   operation: MarketplaceGenLayerOperation;
   call: MarketplaceGenLayerCall;
+  recovery: Readonly<{
+    preparedId: string;
+    transactionHash: string;
+  }> | null;
 }>;
 
 export const MAX_GENLAYER_RECONCILIATION_ATTEMPTS = 12;
@@ -460,6 +464,92 @@ export async function findGenLayerPreparedTransaction(
     .select()
     .from(marketplaceGenLayerTransactions)
     .where(eq(marketplaceGenLayerTransactions.preparedId, preparedId))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function findBoundGenLayerApplicationRecovery(input: {
+  localApplicationId: string;
+  actorWallet: string;
+}): Promise<{ preparedId: string; transactionHash: string } | null> {
+  const [row] = await getDb()
+    .select({
+      preparedId: marketplaceGenLayerTransactions.preparedId,
+      transactionHash: marketplaceGenLayerTransactions.transactionHash,
+    })
+    .from(marketplaceGenLayerTransactions)
+    .where(
+      and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(
+          marketplaceGenLayerTransactions.contractAddress,
+          marketplaceContractAddress().toLowerCase(),
+        ),
+        eq(marketplaceGenLayerTransactions.operation, "APPLY"),
+        eq(marketplaceGenLayerTransactions.functionName, "apply_to_campaign"),
+        eq(
+          marketplaceGenLayerTransactions.localApplicationId,
+          input.localApplicationId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.actorWallet,
+          normalizeAddress(input.actorWallet),
+        ),
+        isNotNull(marketplaceGenLayerTransactions.transactionHash),
+        inArray(marketplaceGenLayerTransactions.status, [
+          "SUBMITTED",
+          "ACCEPTED",
+          "FINALIZED",
+          "RECONCILIATION_REQUIRED",
+        ]),
+      ),
+    )
+    .orderBy(desc(marketplaceGenLayerTransactions.createdAt))
+    .limit(1);
+  if (!row?.transactionHash) return null;
+  return {
+    preparedId: row.preparedId,
+    transactionHash: row.transactionHash,
+  };
+}
+
+export async function findPreparedGenLayerApplicationResumeJournal(input: {
+  localCampaignId: string;
+  localApplicationId: string;
+  actorWallet: string;
+}): Promise<GenLayerTransactionRow | null> {
+  const [row] = await getDb()
+    .select()
+    .from(marketplaceGenLayerTransactions)
+    .where(
+      and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(
+          marketplaceGenLayerTransactions.contractAddress,
+          marketplaceContractAddress().toLowerCase(),
+        ),
+        eq(marketplaceGenLayerTransactions.operation, "APPLY"),
+        eq(marketplaceGenLayerTransactions.functionName, "apply_to_campaign"),
+        eq(
+          marketplaceGenLayerTransactions.localCampaignId,
+          input.localCampaignId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.localApplicationId,
+          input.localApplicationId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.actorWallet,
+          normalizeAddress(input.actorWallet),
+        ),
+        eq(marketplaceGenLayerTransactions.valueAtto, "0"),
+        eq(marketplaceGenLayerTransactions.status, "PREPARED"),
+        isNull(marketplaceGenLayerTransactions.transactionHash),
+      ),
+    )
+    .orderBy(desc(marketplaceGenLayerTransactions.createdAt))
     .limit(1);
   return row ?? null;
 }
@@ -1507,6 +1597,12 @@ function preparedDto(row: GenLayerTransactionRow): PreparedMarketplaceTransactio
       argTypes: row.argTypes,
       value: row.valueAtto,
     },
+    recovery: row.transactionHash
+      ? {
+          preparedId: row.preparedId,
+          transactionHash: row.transactionHash,
+        }
+      : null,
   };
 }
 

@@ -14,6 +14,7 @@ import {
   parseClaimableState,
   parseProfileState,
   parseWithdrawalState,
+  type GenLayerContentSource,
   type GenLayerApplicationState,
   type GenLayerAssignmentState,
   type GenLayerCampaignState,
@@ -21,12 +22,14 @@ import {
 } from "./marketplace-genlayer-core.ts";
 import {
   bindGenLayerTransactionHash,
+  exactGenLayerJournalCall,
   findGenLayerAssignmentProjectionByAssignmentId,
   findGenLayerAssignmentProjectionByApplicationId,
   findGenLayerCampaignProjectionByOnchainId,
   findGenLayerCampaignDraft,
   findGenLayerCampaignProjectionByLocalId,
   findGenLayerPreparedTransaction,
+  findPreparedGenLayerApplicationResumeJournal,
   findGenLayerWithdrawalProjectionById,
   findLatestGenLayerWithdrawalProjection,
   findGenLayerPrivateApplication,
@@ -71,6 +74,22 @@ import {
 import { ApiProblem, assertExactJsonKeys } from "./verification-api.ts";
 
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+const IDENTITY_BUNDLE_SOURCES = ["X", "FARCASTER"] as const;
+const USER_SUBMITTED_MARKETPLACE_OPERATIONS = new Set([
+  "CREATE_CAMPAIGN",
+  "APPLY",
+  "WITHDRAW_APPLICATION",
+  "SELECT_CREATOR",
+  "ACCEPT_ASSIGNMENT",
+  "DECLINE_ASSIGNMENT",
+  "SUBMIT_EVIDENCE",
+  "RESOLVE_ASSIGNMENT",
+  "REFUND_UNDETERMINED",
+  "REFUND_UNALLOCATED",
+  "CANCEL_CAMPAIGN",
+  "REQUEST_WITHDRAWAL",
+  "EXECUTE_WITHDRAWAL",
+]);
 
 export function nextGenLayerResolutionProgression(input: {
   assignment: Pick<
@@ -95,6 +114,33 @@ export function nextGenLayerResolutionProgression(input: {
   });
 }
 
+export async function bindSubmittedGenLayerMarketplaceTransaction(input: {
+  preparedId: string;
+  session: AuthenticatedWalletSession;
+  body: Record<string, unknown>;
+}) {
+  assertExactJsonKeys(input.body, ["txHash"]);
+  const preparedId = requireUuid(input.preparedId, "preparedId");
+  const prepared = await findGenLayerPreparedTransaction(preparedId);
+  if (
+    !prepared ||
+    prepared.actorWallet !== input.session.wallet.toLowerCase() ||
+    !USER_SUBMITTED_MARKETPLACE_OPERATIONS.has(prepared.operation)
+  ) preparedMismatch();
+  const txHash = requireHash(input.body.txHash, "txHash");
+  const bound = await bindGenLayerTransactionHash({
+    preparedId,
+    actorWallet: input.session.wallet,
+    transactionHash: txHash,
+  });
+  if (!bound) preparedMismatch();
+  return Object.freeze({
+    preparedId: bound.preparedId,
+    txHash: bound.transactionHash,
+    status: bound.status,
+  });
+}
+
 export async function prepareGenLayerApplication(input: {
   campaignId: string;
   session: AuthenticatedWalletSession;
@@ -114,31 +160,10 @@ export async function prepareGenLayerApplication(input: {
     throw problem(400, "APPLICATION_RATE_INVALID", "Requested GEN exceeds the campaign budget.");
   }
   const pitch = requireText(input.body.pitch, "pitch", 10, 2_000);
-  const profile = await findGenLayerProfileByWallet(creator, context.draft.contentSource);
-  if (!profile?.active || profile.expiresAt <= Date.now()) {
-    throw problem(403, "CREATOR_IDENTITY_REQUIRED", `An active ${context.draft.contentSource} identity is required.`);
-  }
-  let authoritativeProfile;
-  try {
-    authoritativeProfile = parseProfileState(await readMarketplaceState("get_identity", [
-      marketplaceCalldataAddress(creator),
-      context.draft.contentSource,
-    ]));
-  } catch (error) {
-    if (error instanceof Error && /does not exist|not active/i.test(error.message)) {
-      throw problem(403, "CREATOR_IDENTITY_REQUIRED", `An active ${context.draft.contentSource} identity is required.`);
-    }
-    throw error;
-  }
-  if (
-    !authoritativeProfile.active ||
-    authoritativeProfile.expiresAtEpoch * 1_000 <= Date.now() ||
-    authoritativeProfile.wallet !== creator ||
-    authoritativeProfile.source !== context.draft.contentSource ||
-    authoritativeProfile.identityHash !== profile.identityHash
-  ) {
-    throw problem(409, "CREATOR_IDENTITY_STATE_MISMATCH", "The saved creator identity does not match current GenLayer state.");
-  }
+  const { profile } = await requireActiveIdentityBundle(
+    creator,
+    context.draft.contentSource,
+  );
   let application = await findGenLayerPrivateApplicationForCreator(
     context.draft.id,
     creator,
@@ -181,6 +206,81 @@ export async function prepareGenLayerApplication(input: {
   return mutationResponse(context.draft, context.projection, application, null, prepared);
 }
 
+export async function resumePreparedGenLayerApplication(input: ActionInput) {
+  assertExactJsonKeys(input.body, []);
+  const context = await applicationContext(input);
+  assertCreator(context.application, input.session.wallet);
+  if (context.application.status !== "PENDING_ONCHAIN") invalidState();
+  const creator = context.application.creatorWallet;
+  const { profile } = await requireActiveIdentityBundle(
+    creator,
+    context.draft.contentSource,
+  );
+  if (profile.projectionId !== context.application.creatorProfileProjectionId) {
+    identityBundleMismatch();
+  }
+  const journal = await findPreparedGenLayerApplicationResumeJournal({
+    localCampaignId: context.draft.id,
+    localApplicationId: context.application.id,
+    actorWallet: creator,
+  });
+  if (!journal) {
+    throw problem(
+      409,
+      "APPLICATION_RESUME_UNAVAILABLE",
+      "The prepared application cannot be resumed.",
+    );
+  }
+  const applicationId = deriveApplicationId(context.campaign.campaignId, creator);
+  const expectedCall = callPlan("apply_to_campaign", [
+    context.campaign.campaignId,
+    applicationId,
+    BigInt(context.application.requestedRateAtto),
+    context.application.pitchCommitment,
+  ], ["string", "string", "uint256", "string"]);
+  const call = exactGenLayerJournalCall(journal);
+  if (
+    journal.onchainEntityId !== applicationId
+    || call.functionName !== expectedCall.functionName
+    || call.contractAddress !== expectedCall.contractAddress
+    || call.value !== expectedCall.value
+    || canonicalHash(call.args) !== canonicalHash(expectedCall.args)
+    || JSON.stringify(call.argTypes) !== JSON.stringify(expectedCall.argTypes)
+  ) {
+    preparedMismatch();
+  }
+  const authoritative = await readMarketplaceState("get_application", [
+    context.campaign.campaignId,
+    marketplaceCalldataAddress(creator),
+  ]);
+  if (applicationResumeRecordExists(authoritative)) {
+    const state = parseApplicationState(authoritative);
+    assertApplicationBinding(
+      state,
+      context.application,
+      context.campaign.campaignId,
+      applicationId,
+    );
+    throw problem(
+      409,
+      "APPLICATION_TRANSACTION_RECOVERY_REQUIRED",
+      "Application is already on-chain. Recover the original transaction.",
+    );
+  }
+  return mutationResponse(
+    context.draft,
+    context.campaign,
+    context.application,
+    null,
+    {
+      preparedId: journal.preparedId,
+      operation: journal.operation,
+      call,
+      recovery: null,
+    },
+  );
+}
+
 export async function confirmGenLayerApplication(input: ActionInput) {
   const context = await applicationContext(input);
   const applicationId = deriveApplicationId(
@@ -219,6 +319,13 @@ export async function prepareGenLayerSelection(input: ActionInput) {
   const context = await applicationContext(input);
   assertBrand(context.draft, input.session.wallet);
   if (context.application.status !== "APPLIED") invalidState();
+  const { profile } = await requireActiveIdentityBundle(
+    context.application.creatorWallet,
+    context.draft.contentSource,
+  );
+  if (profile.projectionId !== context.application.creatorProfileProjectionId) {
+    identityBundleMismatch();
+  }
   const agreedRateAtto = context.application.requestedRateAtto;
   const agreementHash = canonicalHash({
     protocol: "influencedx-assignment-agreement-v2",
@@ -288,7 +395,13 @@ export async function confirmGenLayerSelection(input: ActionInput) {
 }
 
 export async function prepareGenLayerAccept(input: ActionInput) {
-  return prepareAssignmentSimple(input, "ACCEPT_ASSIGNMENT", "accept_assignment", "creator");
+  return prepareAssignmentSimple(
+    input,
+    "ACCEPT_ASSIGNMENT",
+    "accept_assignment",
+    "creator",
+    true,
+  );
 }
 
 export async function confirmGenLayerAccept(input: ActionInput) {
@@ -332,6 +445,11 @@ export async function prepareGenLayerSubmission(input: ActionInput) {
   const context = await applicationContext(input);
   assertCreator(context.application, input.session.wallet);
   if (!context.assignment || context.assignment.status !== "ACCEPTED") invalidState();
+  const identity = await requireActiveIdentityBundle(
+    context.application.creatorWallet,
+    context.draft.contentSource,
+  );
+  assertAssignmentIdentityBinding(identity.authoritativeProfile, context.assignment);
   const source = normalizeContentSource(input.body.contentSource);
   if (source !== context.draft.contentSource) throw problem(400, "CONTENT_SOURCE_MISMATCH", "Submission source does not match the campaign.");
   const expectedHandle = canonicalSubmissionHandle(source, input.body.expectedHandle);
@@ -630,10 +748,15 @@ export async function confirmGenLayerRefundUnallocated(input: CampaignActionInpu
 export async function getGenLayerSettlement(input: CampaignActionInput) {
   const context = await campaignContext(input.campaignId);
   const wallet = input.session.wallet.toLowerCase();
-  const assignment = (await findGenLayerPrivateApplicationForCreator(context.draft.id, wallet))
-    ? await findGenLayerAssignmentProjectionByApplicationId((await findGenLayerPrivateApplicationForCreator(context.draft.id, wallet))!.id)
-    : null;
-  const role = wallet === context.draft.brandWallet ? "brand" : assignment?.creatorWallet === wallet ? "creator" : null;
+  const application = await findGenLayerPrivateApplicationForCreator(
+    context.draft.id,
+    wallet,
+  );
+  const role = wallet === context.draft.brandWallet
+    ? "brand"
+    : application?.creatorWallet === wallet
+      ? "creator"
+      : null;
   if (!role) forbidden();
   const claimable = parseClaimableState(await readMarketplaceState("get_claimable", [marketplaceCalldataAddress(wallet)]));
   let latestWithdrawal = await findLatestGenLayerWithdrawalProjection(wallet);
@@ -689,7 +812,7 @@ export async function prepareGenLayerWithdrawal(input: CampaignActionInput) {
   });
   const call = callPlan("request_withdrawal", [withdrawalId, BigInt(claimable.claimableAtto)], ["string", "uint256"]);
   const prepared = await prepareGenLayerMarketplaceTransaction({ operation: "REQUEST_WITHDRAWAL", call, actorWallet: wallet, localCampaignId: context.draft.id, onchainEntityId: withdrawalId });
-  return { ...(await getGenLayerSettlement(input)), preparedId: prepared.preparedId, transaction: prepared.call, withdrawalId };
+  return { ...(await getGenLayerSettlement(input)), ...preparedMutationFields(prepared), withdrawalId };
 }
 
 export async function confirmGenLayerWithdrawal(input: CampaignActionInput) {
@@ -717,7 +840,7 @@ export async function prepareGenLayerWithdrawalExecution(input: CampaignActionIn
   if (withdrawal.account !== input.session.wallet.toLowerCase() || withdrawal.status !== "PENDING") invalidState();
   const call = callPlan("execute_withdrawal", [withdrawalId], ["string"]);
   const prepared = await prepareGenLayerMarketplaceTransaction({ operation: "EXECUTE_WITHDRAWAL", call, actorWallet: withdrawal.account, localCampaignId: context.draft.id, onchainEntityId: withdrawalId });
-  return { ...(await getGenLayerSettlement(input)), preparedId: prepared.preparedId, transaction: prepared.call, withdrawalId };
+  return { ...(await getGenLayerSettlement(input)), ...preparedMutationFields(prepared), withdrawalId };
 }
 
 export async function confirmGenLayerWithdrawalExecution(input: CampaignActionInput) {
@@ -805,12 +928,20 @@ async function prepareAssignmentSimple(
   operation: Parameters<typeof prepareGenLayerMarketplaceTransaction>[0]["operation"],
   method: string,
   actor: "creator" | "participant",
+  requireCreatorIdentityBundle = false,
 ) {
   assertExactJsonKeys(input.body, []);
   const context = await applicationContext(input);
   if (!context.assignment) invalidState();
   if (actor === "creator") assertCreator(context.application, input.session.wallet);
   else if (![context.draft.brandWallet, context.application.creatorWallet].includes(input.session.wallet.toLowerCase())) forbidden();
+  if (requireCreatorIdentityBundle) {
+    const identity = await requireActiveIdentityBundle(
+      context.application.creatorWallet,
+      context.draft.contentSource,
+    );
+    assertAssignmentIdentityBinding(identity.authoritativeProfile, context.assignment);
+  }
   const call = callPlan(method, [context.assignment.assignmentId], ["string"]);
   const prepared = await prepareAction(operation, call, context, input.session.wallet, context.assignment.assignmentId);
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
@@ -850,7 +981,7 @@ async function prepareCampaignSimple(
   assertBrand(context.draft, input.session.wallet);
   const call = callPlan(method, [context.projection.campaignId], ["string"]);
   const prepared = await prepareGenLayerMarketplaceTransaction({ operation, call, actorWallet: input.session.wallet, localCampaignId: context.draft.id, onchainEntityId: context.projection.campaignId });
-  return { campaign: (await getGenLayerMarketplaceCampaignDetail({ campaignId: context.draft.id, viewerWallet: input.session.wallet })).campaign, preparedId: prepared.preparedId, transaction: prepared.call };
+  return { campaign: (await getGenLayerMarketplaceCampaignDetail({ campaignId: context.draft.id, viewerWallet: input.session.wallet })).campaign, ...preparedMutationFields(prepared) };
 }
 
 async function confirmCampaignSimple(
@@ -1070,6 +1201,13 @@ async function projectWithdrawal(
   });
 }
 
+export function applicationResumeRecordExists(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("The authoritative application response is invalid.");
+  }
+  return Object.keys(value).length > 0;
+}
+
 function assertApplicationBinding(state: GenLayerApplicationState, local: GenLayerPrivateApplication, campaignId: string, applicationId: string) {
   if (state.applicationId !== applicationId || state.campaignId !== campaignId || state.creator !== local.creatorWallet || state.requestedRateAtto !== local.requestedRateAtto || state.pitchCommitment !== local.pitchCommitment || state.status !== "APPLIED") stateMismatch();
 }
@@ -1078,12 +1216,95 @@ function assertAssignmentBinding(state: GenLayerAssignmentState, context: Action
   if (state.assignmentId !== assignmentId || state.campaignId !== context.campaign.campaignId || state.creator !== context.application.creatorWallet || state.contentSource !== context.draft.contentSource || state.applicationId !== deriveApplicationId(context.campaign.campaignId, context.application.creatorWallet) || state.agreementHash !== agreementHash || state.agreedRateAtto !== context.application.requestedRateAtto || state.status !== "SELECTED") stateMismatch();
 }
 
+async function requireActiveIdentityBundle(
+  wallet: string,
+  selectedSource: GenLayerContentSource,
+) {
+  const normalizedWallet = wallet.toLowerCase();
+  const nowMs = Date.now();
+  const identities = await Promise.all(
+    IDENTITY_BUNDLE_SOURCES.map(async (source) => {
+      const profile = await findGenLayerProfileByWallet(normalizedWallet, source);
+      if (!profile?.active || profile.expiresAt <= nowMs) identityBundleRequired();
+      let authoritativeProfile;
+      try {
+        authoritativeProfile = parseProfileState(await readMarketplaceState(
+          "get_identity",
+          [marketplaceCalldataAddress(normalizedWallet), source],
+        ));
+      } catch (error) {
+        if (error instanceof Error && /does not exist|not active|expired/i.test(error.message)) {
+          identityBundleRequired();
+        }
+        throw error;
+      }
+      if (
+        !authoritativeProfile.active ||
+        authoritativeProfile.expiresAtEpoch * 1_000 <= nowMs ||
+        authoritativeProfile.wallet !== normalizedWallet ||
+        authoritativeProfile.source !== source ||
+        authoritativeProfile.identityHash !== profile.identityHash ||
+        authoritativeProfile.externalUserId !== profile.externalUserId
+      ) identityBundleMismatch();
+      return { source, profile, authoritativeProfile };
+    }),
+  );
+  const selected = identities.find(({ source }) => source === selectedSource);
+  if (!selected) identityBundleMismatch();
+  return selected;
+}
+
+function assertAssignmentIdentityBinding(
+  profile: ReturnType<typeof parseProfileState>,
+  assignment: GenLayerAssignmentProjection,
+) {
+  if (
+    profile.identityHash !== assignment.creatorIdentityHash ||
+    profile.externalUserId !== assignment.creatorExternalUserId
+  ) identityBundleMismatch();
+}
+
+function identityBundleRequired(): never {
+  throw problem(
+    403,
+    "CREATOR_IDENTITY_BUNDLE_REQUIRED",
+    "Active X and Farcaster identities are required.",
+  );
+}
+
+function identityBundleMismatch(): never {
+  throw problem(
+    409,
+    "CREATOR_IDENTITY_STATE_MISMATCH",
+    "Saved X and Farcaster identities do not match current GenLayer state.",
+  );
+}
+
 function mutationResponse(draft: GenLayerCampaignDraft, campaign: GenLayerCampaignProjection, application: GenLayerPrivateApplication, assignment: GenLayerAssignmentProjection | null, prepared?: Awaited<ReturnType<typeof prepareGenLayerMarketplaceTransaction>>) {
   const dto = applicationDto(application, draft.contentSource, assignment);
   return {
     campaign: { id: draft.id, status: campaign.status.toLowerCase(), contentSource: draft.contentSource, genlayerCampaignId: campaign.campaignId },
     application: dto,
-    ...(prepared ? { preparedId: prepared.preparedId, transaction: prepared.call } : {}),
+    ...(prepared ? preparedMutationFields(prepared) : {}),
+  };
+}
+
+function preparedMutationFields(
+  prepared: Awaited<ReturnType<typeof prepareGenLayerMarketplaceTransaction>>,
+) {
+  if (prepared.recovery) {
+    return {
+      preparedId: prepared.preparedId,
+      recovery: {
+        preparedId: prepared.recovery.preparedId,
+        txHash: prepared.recovery.transactionHash,
+      },
+    };
+  }
+  return {
+    preparedId: prepared.preparedId,
+    transaction: prepared.call,
+    recovery: null,
   };
 }
 

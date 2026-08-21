@@ -64,3 +64,48 @@ export function marketplaceErrorMessage(error: unknown): string {
   }
   return error instanceof Error ? error.message : "Marketplace action failed.";
 }
+
+export async function recordSubmittedMarketplaceTransaction(
+  preparedId: string,
+  txHash: string,
+): Promise<void> {
+  await marketplaceRequest(
+    `/api/marketplace/transactions/${encodeURIComponent(preparedId)}/submitted`,
+    {
+      method: "POST",
+      body: JSON.stringify({ txHash }),
+    },
+  );
+}
+
+export type PreparedMarketplaceRecovery = Readonly<{
+  preparedId: string;
+  txHash: string;
+}>;
+
+export function preparedMarketplaceRecovery(value: {
+  preparedId: string;
+  recovery?: unknown;
+}): PreparedMarketplaceRecovery | null {
+  if (value.recovery === undefined || value.recovery === null) return null;
+  if (typeof value.recovery !== "object" || Array.isArray(value.recovery)) {
+    throw new MarketplaceApiError(502, "Invalid marketplace recovery response.");
+  }
+  const recovery = value.recovery as Record<string, unknown>;
+  const keys = Object.keys(recovery).sort();
+  if (
+    keys.length !== 2
+    || keys[0] !== "preparedId"
+    || keys[1] !== "txHash"
+    || typeof recovery.preparedId !== "string"
+    || recovery.preparedId !== value.preparedId
+    || typeof recovery.txHash !== "string"
+    || !/^0x[0-9a-fA-F]{64}$/.test(recovery.txHash)
+  ) {
+    throw new MarketplaceApiError(502, "Invalid marketplace recovery response.");
+  }
+  return Object.freeze({
+    preparedId: recovery.preparedId,
+    txHash: recovery.txHash,
+  });
+}

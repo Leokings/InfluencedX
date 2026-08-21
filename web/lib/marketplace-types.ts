@@ -170,7 +170,73 @@ export type CampaignDetailResponse = Readonly<{
   campaign: MarketplaceCampaignDto;
   applications: MarketplaceApplicationDto[];
   viewerApplication: MarketplaceApplicationDto | null;
+  viewerRecovery: Readonly<{
+    preparedId: string;
+    txHash: string;
+  }> | null;
 }>;
+
+export type MarketplaceDashboardCampaignDto = Readonly<{
+  id: string;
+  campaignId: string;
+  status: string;
+  budgetAtto: string;
+  availableAtto: string;
+}>;
+
+export type MarketplaceDashboardApplicationDto = Readonly<{
+  id: string;
+  campaignId: string;
+  assignmentId: string | null;
+  status: string;
+  rateAtto: string | null;
+}>;
+
+export type MarketplaceDashboardResponseDto = Readonly<{
+  brandCampaigns: MarketplaceDashboardCampaignDto[];
+  creatorApplications: MarketplaceDashboardApplicationDto[];
+  claimableAtto: string;
+}>;
+
+type GenLayerDashboardRows = Readonly<{
+  brandCampaigns: Array<Readonly<{
+    localCampaignId: string;
+    campaignId: string;
+    status: string;
+    budgetAtto: string;
+    availableAtto: string;
+  }>>;
+  creatorApplications: Array<Readonly<{
+    localApplicationId: string;
+    localCampaignId: string;
+    assignmentId: string | null;
+    status: string;
+    agreedRateAtto: string | null;
+  }>>;
+  claimableAtto: string;
+}>;
+
+export function marketplaceDashboardDto(
+  dashboard: GenLayerDashboardRows,
+): MarketplaceDashboardResponseDto {
+  return Object.freeze({
+    brandCampaigns: dashboard.brandCampaigns.map((campaign) => Object.freeze({
+      id: campaign.localCampaignId,
+      campaignId: campaign.campaignId,
+      status: campaign.status.toLowerCase(),
+      budgetAtto: campaign.budgetAtto,
+      availableAtto: campaign.availableAtto,
+    })),
+    creatorApplications: dashboard.creatorApplications.map((application) => Object.freeze({
+      id: application.localApplicationId,
+      campaignId: application.localCampaignId,
+      assignmentId: application.assignmentId,
+      status: application.status.toLowerCase(),
+      rateAtto: application.agreedRateAtto,
+    })),
+    claimableAtto: dashboard.claimableAtto,
+  });
+}
 
 // Historical Base Sepolia DTOs remain for the archived read-only modules. New
 // API routes must never import them.

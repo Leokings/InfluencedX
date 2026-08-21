@@ -18,13 +18,18 @@ import {
 import { farcasterCastUrlForHash } from "../app/verify/farcaster-cast-url.ts";
 import { shouldRejectVerificationResponse } from "../app/verify/verification-api-client.ts";
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle } from "../app/verify/verification-recovery.ts";
-import { MarketplaceApiError, marketplaceErrorMessage } from "../app/marketplace/marketplace-api.ts";
+import {
+  MarketplaceApiError,
+  marketplaceErrorMessage,
+  preparedMarketplaceRecovery,
+} from "../app/marketplace/marketplace-api.ts";
 import {
   classifyCreatorMetrics,
   MAX_CREATOR_METRICS_CONCURRENCY,
   normalizeCreatorMetricWallets,
 } from "../app/marketplace/use-creator-metrics.ts";
 import type { MarketplaceMetricsDto } from "../lib/marketplace-types.ts";
+import { marketplaceDashboardDto } from "../lib/marketplace-types.ts";
 
 test("formats native GEN only from canonical 18-decimal atomic strings", () => {
   assert.equal(genAtomsToDisplay("0"), "0");
@@ -44,6 +49,76 @@ test("never presents absent GenLayer funding as confirmed", () => {
   assert.equal(fundingStatusLabel(undefined), "FUNDING UNAVAILABLE");
   assert.equal(fundingStatusLabel("unfunded"), "NOT YET FUNDED");
   assert.equal(fundingStatusLabel("funded"), "FUNDED ON GENLAYER");
+});
+
+test("accepts only an exact server-bound confirm-only marketplace recovery", () => {
+  const preparedId = "11111111-1111-4111-8111-111111111111";
+  const txHash = `0x${"12".repeat(32)}`;
+  assert.deepEqual(
+    preparedMarketplaceRecovery({
+      preparedId,
+      recovery: { preparedId, txHash },
+    }),
+    { preparedId, txHash },
+  );
+  assert.equal(preparedMarketplaceRecovery({ preparedId, recovery: null }), null);
+  assert.throws(
+    () => preparedMarketplaceRecovery({
+      preparedId,
+      recovery: {
+        preparedId: "22222222-2222-4222-8222-222222222222",
+        txHash,
+      },
+    }),
+    /Invalid marketplace recovery response/,
+  );
+  assert.throws(
+    () => preparedMarketplaceRecovery({
+      preparedId,
+      recovery: { preparedId, txHash, actorWallet: `0x${"34".repeat(20)}` },
+    }),
+    /Invalid marketplace recovery response/,
+  );
+});
+
+test("maps GenLayer dashboard rows into the exact client DTO", () => {
+  const result = marketplaceDashboardDto({
+    brandCampaigns: [{
+      localCampaignId: "local-campaign",
+      campaignId: `0x${"11".repeat(32)}`,
+      status: "OPEN",
+      budgetAtto: "3000000000000000000",
+      availableAtto: "2000000000000000000",
+    }],
+    creatorApplications: [{
+      localApplicationId: "local-application",
+      localCampaignId: "local-campaign",
+      assignmentId: null,
+      status: "PENDING_ONCHAIN",
+      agreedRateAtto: null,
+    }],
+    claimableAtto: "1000000000000000000",
+  });
+
+  assert.deepEqual(result, {
+    brandCampaigns: [{
+      id: "local-campaign",
+      campaignId: `0x${"11".repeat(32)}`,
+      status: "open",
+      budgetAtto: "3000000000000000000",
+      availableAtto: "2000000000000000000",
+    }],
+    creatorApplications: [{
+      id: "local-application",
+      campaignId: "local-campaign",
+      assignmentId: null,
+      status: "pending_onchain",
+      rateAtto: null,
+    }],
+    claimableAtto: "1000000000000000000",
+  });
+  assert.equal("localCampaignId" in result.brandCampaigns[0], false);
+  assert.equal("localApplicationId" in result.creatorApplications[0], false);
 });
 
 test("uses the live StudioNet explorer route shapes", () => {
@@ -270,6 +345,64 @@ test("campaign actions preserve prepared intent through wallet finality and serv
   assert.ok(clear > confirmation && productReload > confirmation, "a failed server confirmation must retain recovery and not update product state");
 });
 
+test("marketplace submissions durably bind hashes and preserve pending application recovery", async () => {
+  const [detail, funding, api] = await Promise.all([
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/marketplace-api.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(api, /\/api\/marketplace\/transactions\/\$\{encodeURIComponent\(preparedId\)\}\/submitted/);
+  assert.match(detail, /onSubmitted: async \(hash\)/);
+  assert.match(funding, /onSubmitted: async \(hash\)/);
+  const actionSubmit = detail.indexOf("onSubmitted: async (hash)");
+  const actionRecovery = detail.indexOf("saveRecovery(input.key", actionSubmit);
+  const actionBinding = detail.indexOf("await recordSubmittedMarketplaceTransaction", actionSubmit);
+  assert.ok(actionRecovery > actionSubmit && actionBinding > actionRecovery);
+  const existingRecovery = detail.indexOf("if (existing)");
+  const existingBinding = detail.indexOf(
+    "await recordSubmittedMarketplaceTransaction(existing.preparedId, existing.txHash)",
+    existingRecovery,
+  );
+  const existingConfirmation = detail.indexOf(
+    "await marketplaceRequest(existing.confirmPath",
+    existingRecovery,
+  );
+  assert.ok(existingBinding > existingRecovery && existingConfirmation > existingBinding);
+  const fundingSubmit = funding.indexOf("onSubmitted: async (hash)");
+  const fundingRecovery = funding.indexOf("sessionStorage.setItem", fundingSubmit);
+  const fundingBinding = funding.indexOf("await recordSubmittedMarketplaceTransaction", fundingSubmit);
+  assert.ok(fundingRecovery > fundingSubmit && fundingBinding > fundingRecovery);
+  assert.match(detail, /application\.status === "pending_onchain"/);
+  assert.match(detail, /FINISH APPLICATION/);
+  assert.match(detail, /RESUME APPLICATION/);
+  assert.match(detail, /apply\/resume/);
+  assert.match(detail, /hasPendingRecovery=\{Boolean\(recoveries\.apply\)\}/);
+  assert.match(detail, /detail\.viewerRecovery \?\? null/);
+  assert.match(detail, /recoveryStorageKey\(campaignId, "apply"\)/);
+  assert.match(detail, /setRecoveries\(\(current\) => \(\{ \.\.\.current, apply: recovery \}\)\)/);
+  assert.match(detail, /disabled=\{walletSwitchLocked\}/);
+  assert.match(detail, /walletSwitchLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
+  assert.doesNotMatch(detail, /walletSwitchLocked[\s\S]{0,120}Object\.keys\(recoveries\)/);
+  assert.match(detail, /onBusyChange\(true\)/);
+  assert.match(detail, /onBusyChange\(false\)/);
+  assert.match(funding, /onBusyChange\(true\)/);
+  assert.match(funding, /onBusyChange\(false\)/);
+  assert.match(funding, /await recordSubmittedMarketplaceTransaction\(preparedId, txHash\)/);
+  const actionRecoveryResponse = detail.indexOf("preparedMarketplaceRecovery(prepared)");
+  const actionBroadcast = detail.indexOf("broadcastMarketplaceTransaction(prepared.transaction", actionRecoveryResponse);
+  assert.ok(actionRecoveryResponse >= 0 && actionBroadcast > actionRecoveryResponse);
+  const settlementStart = detail.indexOf("function SettlementControls");
+  const settlementRecoveryResponse = detail.indexOf("preparedMarketplaceRecovery(prepared)", settlementStart);
+  const settlementBroadcast = detail.indexOf("broadcastMarketplaceTransaction(prepared.transaction", settlementRecoveryResponse);
+  assert.ok(settlementRecoveryResponse > settlementStart && settlementBroadcast > settlementRecoveryResponse);
+  const fundingRecoveryResponse = funding.indexOf("preparedMarketplaceRecovery(prepared)");
+  const fundingBroadcast = funding.indexOf("broadcastMarketplaceTransaction(prepared.transaction", fundingRecoveryResponse);
+  assert.ok(fundingRecoveryResponse >= 0 && fundingBroadcast > fundingRecoveryResponse);
+  assert.match(detail, /if \(!prepared\.transaction\)[\s\S]*prepared marketplace transaction is unavailable/i);
+  assert.match(funding, /if \(!prepared\.transaction\)[\s\S]*prepared marketplace transaction is unavailable/i);
+  assert.doesNotMatch(detail, /PRIOR TX FAILED — PREPARE A NEW ACTION/);
+});
+
 test("campaign funding persists both prepared ID and submitted hash without auto-rebroadcast", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8");
   assert.match(source, /const recovery = \{ preparedId: prepared\.preparedId, txHash: hash \}/);
@@ -301,6 +434,7 @@ test("GenLayer settlement UI confirms contract state before displaying a claim o
   assert.match(source, /NOT YET PAID/);
   assert.match(source, /studionet-settlement/);
   assert.doesNotMatch(source, /set(?:Campaign|Application).*paid|set(?:Campaign|Application).*refunded/i);
+  assert.match(source, /\["RESTORED_FAILED", "CONFIRMED"\]\.includes\(view\.withdrawalStatus\)/);
 });
 
 test("UNDETERMINED exposes bounded retry and refund paths", async () => {

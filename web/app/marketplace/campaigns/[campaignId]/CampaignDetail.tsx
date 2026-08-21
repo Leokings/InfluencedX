@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { MarketplaceState } from "../../components/MarketplaceState";
-import { marketplaceErrorMessage, marketplaceRequest } from "../../marketplace-api";
+import {
+  marketplaceErrorMessage,
+  marketplaceRequest,
+  preparedMarketplaceRecovery,
+  recordSubmittedMarketplaceTransaction,
+} from "../../marketplace-api";
 import {
   broadcastMarketplaceTransaction,
   type GenLayerTransactionStage,
@@ -37,18 +42,22 @@ type DetailState =
 
 type PreparedMutation = {
   preparedId: string;
-  transaction: MarketplaceTransactionDto;
+  transaction?: MarketplaceTransactionDto;
+  recovery?: unknown;
   campaign?: MarketplaceCampaign;
   application?: MarketplaceApplication;
 };
 
 type Recovery = { preparedId: string; txHash: string; confirmPath: string };
+type SettlementActionKind = "claim" | "execute-claim" | "refund-unallocated";
 
 export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const wallet = useMarketplaceWallet();
   const [state, setState] = useState<DetailState>({ phase: "loading", detail: null, error: null });
   const [action, setAction] = useState<{ key: string | null; notice: string | null; error: string | null }>({ key: null, notice: null, error: null });
   const [recoveries, setRecoveries] = useState<Record<string, Recovery>>(() => loadRecoveries(campaignId));
+  const [fundingBusy, setFundingBusy] = useState(false);
+  const [settlementBusy, setSettlementBusy] = useState(false);
 
   const loadDetail = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -56,12 +65,27 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}`,
         { signal },
       );
+      const viewerApplication = detail.viewerApplication ?? null;
+      const viewerRecovery = detail.viewerRecovery ?? null;
+      if (viewerApplication?.status === "pending_onchain" && viewerRecovery) {
+        const recovery: Recovery = {
+          preparedId: viewerRecovery.preparedId,
+          txHash: viewerRecovery.txHash,
+          confirmPath: `${applicationPath(campaignId, viewerApplication.id)}/apply/confirm`,
+        };
+        window.sessionStorage.setItem(
+          recoveryStorageKey(campaignId, "apply"),
+          JSON.stringify(recovery),
+        );
+        setRecoveries((current) => ({ ...current, apply: recovery }));
+      }
       setState({
         phase: "ready",
         detail: {
           ...detail,
           applications: Array.isArray(detail.applications) ? detail.applications : [],
-          viewerApplication: detail.viewerApplication ?? null,
+          viewerApplication,
+          viewerRecovery,
         },
         loadedAt: Date.now(),
         error: null,
@@ -101,6 +125,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       const existing = recoveries[input.key];
       if (existing) {
         setAction({ key: input.key, notice: "Recovering submitted transaction…", error: null });
+        await recordSubmittedMarketplaceTransaction(existing.preparedId, existing.txHash);
         await marketplaceRequest(existing.confirmPath, {
           method: "POST",
           body: JSON.stringify({ preparedId: existing.preparedId, txHash: existing.txHash }),
@@ -117,10 +142,33 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       const confirmPath = typeof input.confirmPath === "function"
         ? input.confirmPath(prepared)
         : input.confirmPath ?? `${input.preparePath}/confirm`;
+      const submitted = preparedMarketplaceRecovery(prepared);
+      if (submitted) {
+        saveRecovery(input.key, { ...submitted, confirmPath });
+        await recordSubmittedMarketplaceTransaction(submitted.preparedId, submitted.txHash);
+        await marketplaceRequest(confirmPath, {
+          method: "POST",
+          body: JSON.stringify(submitted),
+        });
+        clearRecovery(input.key);
+        await loadDetail();
+        setAction({ key: null, notice: "Transaction recovered.", error: null });
+        return;
+      }
+      if (!prepared.transaction) {
+        throw new Error("The prepared marketplace transaction is unavailable.");
+      }
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
         expectedFunctionName: input.expectedFunctionName,
         expectedValue: "0",
-        onSubmitted: (hash) => saveRecovery(input.key, { preparedId: prepared.preparedId, txHash: hash, confirmPath }),
+        onSubmitted: async (hash) => {
+          saveRecovery(input.key, {
+            preparedId: prepared.preparedId,
+            txHash: hash,
+            confirmPath,
+          });
+          await recordSubmittedMarketplaceTransaction(prepared.preparedId, hash);
+        },
         onStage: (stage) => setAction({ key: input.key, notice: transactionNotice(stage), error: null }),
       });
       setAction({ key: input.key, notice: "Finality reached. Confirming state…", error: null });
@@ -166,6 +214,15 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         requestedRateGen: genInputToAtoms(String(values.get("requestedRateGen") ?? "")),
         pitch: String(values.get("pitch") ?? "").trim(),
       },
+    });
+  }
+
+  async function recoverPendingApplication(application: MarketplaceApplication) {
+    await executePrepared({
+      key: "apply",
+      expectedFunctionName: "apply_to_campaign",
+      preparePath: `${applicationPath(campaignId, application.id)}/apply/resume`,
+      confirmPath: `${applicationPath(campaignId, application.id)}/apply/confirm`,
     });
   }
 
@@ -237,6 +294,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const isBrand = Boolean(wallet.address && wallet.address === campaign.brandWallet.toLowerCase());
   const canApply = campaign.status === "open" && campaign.fundingStatus === "funded" && !isBrand && !viewerApplication;
   const canCancel = isBrand && ["funding", "open"].includes(campaign.status);
+  const walletSwitchLocked = action.key !== null || fundingBusy || settlementBusy;
 
   return (
     <section className="marketplace-detail-shell">
@@ -276,7 +334,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         <aside className="campaign-action-panel">
           <div className="detail-panel-head"><span>YOUR ACTION</span><strong>{wallet.address ? shortenAddress(wallet.address) : "WALLET REQUIRED"}</strong></div>
           {!wallet.address ? <WalletIntro wallet={wallet} /> : null}
-          {isBrand && campaign.fundingStatus !== "funded" ? <CampaignFunding campaign={campaign} onFunded={loadDetail} /> : null}
+          {isBrand && campaign.fundingStatus !== "funded" ? <CampaignFunding campaign={campaign} onFunded={loadDetail} onBusyChange={setFundingBusy} /> : null}
           {isBrand && campaign.fundingStatus === "funded" ? <div className="action-intro"><p className="card-index">BRAND VIEW</p><h2>APPLICATIONS</h2></div> : null}
           {wallet.address && viewerApplication ? (
             <CreatorApplication
@@ -290,17 +348,18 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
               onSubmit={submitEvidence}
               onResolve={requestResolution}
               onRefund={refundUndetermined}
+              hasPendingRecovery={Boolean(recoveries.apply)}
+              onRecoverPending={recoverPendingApplication}
             />
           ) : null}
           {wallet.address && canApply ? <ApplicationForm busy={action.key === "apply"} contentSource={contentSource} onSubmit={apply} /> : null}
           {wallet.address && !isBrand && !viewerApplication && !canApply ? <div className="action-intro"><h2>APPLICATIONS CLOSED</h2><p>This campaign is not accepting applications.</p></div> : null}
-          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? <SettlementControls campaign={campaign} wallet={wallet} onUpdated={loadDetail} /> : null}
+          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? <SettlementControls campaign={campaign} wallet={wallet} onUpdated={loadDetail} onBusyChange={setSettlementBusy} /> : null}
           {canCancel ? <button className="recovery-retry" type="button" disabled={action.key === "cancel"} onClick={() => void cancelCampaign()}>{action.key === "cancel" ? "CANCELLING…" : "CANCEL + REFUND CAMPAIGN"}</button> : null}
           {action.notice ? <p className="form-message" role="status">{action.notice}</p> : null}
           {action.error ? <p className="form-message error" role="alert">{action.error}</p> : null}
-          {Object.keys(recoveries).length ? <button className="recovery-retry" type="button" onClick={() => Object.keys(recoveries).forEach(clearRecovery)}>PRIOR TX FAILED — PREPARE A NEW ACTION</button> : null}
           {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
-          {wallet.hasSession ? <button className="wallet-signout" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET</button> : null}
+          {wallet.hasSession ? <button className="wallet-signout" type="button" disabled={walletSwitchLocked} onClick={() => void wallet.signOut()}>SWITCH WALLET</button> : null}
         </aside>
       </div>
     </section>
@@ -343,7 +402,7 @@ function ApplicationForm({ busy, contentSource, onSubmit }: { busy: boolean; con
   );
 }
 
-function CreatorApplication({ application, campaign, actionKey, loadedAt, onAccept, onDecline, onWithdraw, onSubmit, onResolve, onRefund }: {
+function CreatorApplication({ application, campaign, actionKey, loadedAt, onAccept, onDecline, onWithdraw, onSubmit, onResolve, onRefund, hasPendingRecovery, onRecoverPending }: {
   application: MarketplaceApplication;
   campaign: MarketplaceCampaign;
   actionKey: string | null;
@@ -354,17 +413,22 @@ function CreatorApplication({ application, campaign, actionKey, loadedAt, onAcce
   onSubmit: (application: MarketplaceApplication, event: FormEvent<HTMLFormElement>) => Promise<void>;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
   onRefund: (application: MarketplaceApplication) => Promise<void>;
+  hasPendingRecovery: boolean;
+  onRecoverPending: (application: MarketplaceApplication) => Promise<void>;
 }) {
+  const pending = application.status === "pending_onchain";
   const selected = application.status === "selected";
   const accepted = application.status === "accepted";
   const submitted = Boolean(application.submissionTxHash || application.contentId);
   return (
     <div className="creator-application-summary">
       <p className="card-index">YOUR APPLICATION</p>
-      <h2>{submitted ? "WORK SUBMITTED." : accepted ? "CAMPAIGN ACTIVE." : selected ? "YOU WERE SELECTED." : "APPLICATION RECORDED."}</h2>
+      <h2>{submitted ? "WORK SUBMITTED." : accepted ? "CAMPAIGN ACTIVE." : selected ? "YOU WERE SELECTED." : pending ? "FINISH APPLICATION." : "APPLICATION RECORDED."}</h2>
       <dl><div><dt>RATE</dt><dd>{genAtomsToDisplay(applicationRateAtoms(application))} TEST GEN</dd></div><div><dt>STATUS</dt><dd>{application.status.replaceAll("_", " ").toUpperCase()}</dd></div></dl>
       <p>{application.pitch}</p>
       <Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>VIEW PUBLIC PROFILE →</Link>
+      {pending && hasPendingRecovery ? <button className="button" type="button" disabled={actionKey === "apply"} onClick={() => void onRecoverPending(application)}>{actionKey === "apply" ? "CONFIRMING…" : "FINISH APPLICATION →"}</button> : null}
+      {pending && !hasPendingRecovery ? <button className="button" type="button" disabled={actionKey === "apply"} onClick={() => void onRecoverPending(application)}>{actionKey === "apply" ? "CHECKING…" : "RESUME APPLICATION →"}</button> : null}
       {application.status === "applied" ? <button className="recovery-retry" type="button" disabled={actionKey === `withdraw:${application.id}`} onClick={() => void onWithdraw(application)}>WITHDRAW APPLICATION</button> : null}
       {selected ? <><button className="button" type="button" disabled={actionKey === `accept:${application.id}`} onClick={() => void onAccept(application)}>ACCEPT CAMPAIGN →</button><button className="recovery-retry" type="button" disabled={actionKey === `decline:${application.id}`} onClick={() => void onDecline(application)}>DECLINE ASSIGNMENT</button></> : null}
       {accepted && !submitted && campaign.status === "open" ? <EvidenceSubmissionForm application={application} campaign={campaign} busy={actionKey === `submit:${application.id}`} onSubmit={onSubmit} /> : null}
@@ -395,7 +459,7 @@ function BrandApplications({ applications, actionKey, onSelect, onResolve }: {
   );
 }
 
-function SettlementControls({ campaign, wallet, onUpdated }: { campaign: MarketplaceCampaign; wallet: ReturnType<typeof useMarketplaceWallet>; onUpdated: (signal?: AbortSignal) => Promise<void> }) {
+function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { campaign: MarketplaceCampaign; wallet: ReturnType<typeof useMarketplaceWallet>; onUpdated: (signal?: AbortSignal) => Promise<void>; onBusyChange: (busy: boolean) => void }) {
   const [settlement, setSettlement] = useState<MarketplaceSettlementStateDto | null>(null);
   const [phase, setPhase] = useState<"loading" | "idle" | "claiming" | "executing" | "refunding">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -418,7 +482,10 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [load]);
 
-  async function execute(kind: "claim" | "execute-claim" | "refund-unallocated") {
+  useEffect(() => () => onBusyChange(false), [onBusyChange]);
+
+  async function execute(kind: SettlementActionKind) {
+    onBusyChange(true);
     setPhase(kind === "claim" ? "claiming" : kind === "execute-claim" ? "executing" : "refunding"); setMessage(null); setError(null);
     try {
       const actor = await wallet.authenticate();
@@ -432,6 +499,7 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
       const recovery = readRecovery(recoveryKey);
       if (recovery) {
         setMessage("Recovering finalized transaction…");
+        await recordSubmittedMarketplaceTransaction(recovery.preparedId, recovery.txHash);
         await marketplaceRequest(`${preparePath}/confirm`, {
           method: "POST",
           body: JSON.stringify({ preparedId: recovery.preparedId, txHash: recovery.txHash }),
@@ -442,6 +510,22 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
         return;
       }
       const prepared = await marketplaceRequest<PreparedMutation>(preparePath, { method: "POST", body: "{}" });
+      const submitted = preparedMarketplaceRecovery(prepared);
+      if (submitted) {
+        window.sessionStorage.setItem(recoveryKey, JSON.stringify(submitted));
+        await recordSubmittedMarketplaceTransaction(submitted.preparedId, submitted.txHash);
+        await marketplaceRequest(`${preparePath}/confirm`, {
+          method: "POST",
+          body: JSON.stringify(submitted),
+        });
+        window.sessionStorage.removeItem(recoveryKey);
+        setMessage(settlementSuccessMessage(kind));
+        await load(); await onUpdated();
+        return;
+      }
+      if (!prepared.transaction) {
+        throw new Error("The prepared marketplace transaction is unavailable.");
+      }
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
         expectedFunctionName: kind === "claim"
           ? "request_withdrawal"
@@ -449,7 +533,13 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
             ? "execute_withdrawal"
             : "refund_unallocated",
         expectedValue: "0",
-        onSubmitted: (hash) => window.sessionStorage.setItem(recoveryKey, JSON.stringify({ preparedId: prepared.preparedId, txHash: hash })),
+        onSubmitted: async (hash) => {
+          window.sessionStorage.setItem(
+            recoveryKey,
+            JSON.stringify({ preparedId: prepared.preparedId, txHash: hash }),
+          );
+          await recordSubmittedMarketplaceTransaction(prepared.preparedId, hash);
+        },
         onStage: (stage) => setMessage(transactionNotice(stage)),
       });
       await marketplaceRequest(`${preparePath}/confirm`, { method: "POST", body: JSON.stringify({ preparedId: prepared.preparedId, txHash }) });
@@ -457,7 +547,7 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
       setMessage(settlementSuccessMessage(kind));
       await load(); await onUpdated();
     } catch (settlementError) { setError(marketplaceErrorMessage(settlementError)); }
-    finally { setPhase("idle"); }
+    finally { setPhase("idle"); onBusyChange(false); }
   }
 
   const view = settlement;
@@ -473,7 +563,7 @@ function SettlementControls({ campaign, wallet, onUpdated }: { campaign: Marketp
       {view?.withdrawalStatus === "PENDING" ? <button className="button" type="button" disabled={busy} onClick={() => void execute("execute-claim")}>{phase === "executing" ? "WAITING FOR FINALITY…" : "EXECUTE GEN WITHDRAWAL →"}</button> : null}
       {view?.withdrawalStatus === "EMITTED_UNCONFIRMED" ? <p className="form-message">TRANSFER EMITTED · AWAITING DELIVERY CONFIRMATION · NOT YET PAID</p> : null}
       {view?.withdrawalStatus === "CONFIRMED" ? <p className="form-message success">WITHDRAWAL DELIVERY CONFIRMED</p> : null}
-      {(!view?.withdrawalStatus || view.withdrawalStatus === "RESTORED_FAILED") && (view?.canClaim || claimable !== "0") ? <button className="button" type="button" disabled={busy} onClick={() => void execute("claim")}>{phase === "claiming" ? "WAITING FOR FINALITY…" : "REQUEST GEN WITHDRAWAL →"}</button> : null}
+      {(!view?.withdrawalStatus || ["RESTORED_FAILED", "CONFIRMED"].includes(view.withdrawalStatus)) && (view?.canClaim || claimable !== "0") ? <button className="button" type="button" disabled={busy} onClick={() => void execute("claim")}>{phase === "claiming" ? "WAITING FOR FINALITY…" : "REQUEST GEN WITHDRAWAL →"}</button> : null}
       {message ? <p className="form-message success">{message}</p> : null}
       {error ? <><p className="form-message error" role="alert">{error}</p><button className="recovery-retry" type="button" disabled={busy} onClick={() => void load()}>REFRESH CONTRACT STATE</button></> : null}
     </section>
@@ -564,7 +654,7 @@ function readRecovery(storageKey: string): Pick<Recovery, "preparedId" | "txHash
   return null;
 }
 
-function settlementSuccessMessage(kind: "claim" | "execute-claim" | "refund-unallocated"): string {
+function settlementSuccessMessage(kind: SettlementActionKind): string {
   if (kind === "claim") return "Withdrawal ready. Execute it to send GEN.";
   if (kind === "execute-claim") return "Transfer emitted. Awaiting delivery confirmation.";
   return "Unused GEN added to the brand balance.";

@@ -6,7 +6,10 @@ import { abi } from "genlayer-js";
 
 import { hydrateArgs } from "../app/marketplace/marketplace-transaction.ts";
 import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
-import { nextGenLayerResolutionProgression } from "../lib/marketplace-genlayer-actions.ts";
+import {
+  applicationResumeRecordExists,
+  nextGenLayerResolutionProgression,
+} from "../lib/marketplace-genlayer-actions.ts";
 import {
   assertFinalizedOwnershipTiming,
   projectIdentityActiveAt,
@@ -1743,6 +1746,187 @@ test("post-submit recovery binds the exact bundle hash before hosted reconciliat
   assert.doesNotMatch(recovery, /prepared\.args|Challenge|challenge/);
 });
 
+test("user marketplace hashes bind immediately and applicant settlement does not require assignment", async () => {
+  const [actions, route, repository, service] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/api/marketplace/transactions/[preparedId]/submitted/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-service.ts", import.meta.url), "utf8"),
+  ]);
+  const bindStart = actions.indexOf(
+    "export async function bindSubmittedGenLayerMarketplaceTransaction",
+  );
+  const bindEnd = actions.indexOf("export async function prepareGenLayerApplication", bindStart);
+  assert.ok(bindStart >= 0 && bindEnd > bindStart);
+  const binding = actions.slice(bindStart, bindEnd);
+  assert.match(binding, /prepared\.actorWallet !== input\.session\.wallet\.toLowerCase\(\)/);
+  assert.match(binding, /USER_SUBMITTED_MARKETPLACE_OPERATIONS\.has\(prepared\.operation\)/);
+  assert.match(binding, /bindGenLayerTransactionHash\(\{/);
+  assert.match(route, /requireMarketplaceSession\(request\)/);
+  assert.match(route, /"marketplace-transaction-submit"/);
+  assert.match(route, /bindSubmittedGenLayerMarketplaceTransaction/);
+
+  const settlementStart = actions.indexOf("export async function getGenLayerSettlement");
+  const settlementEnd = actions.indexOf("export async function prepareGenLayerWithdrawal", settlementStart);
+  const settlement = actions.slice(settlementStart, settlementEnd);
+  assert.match(settlement, /findGenLayerPrivateApplicationForCreator/);
+  assert.match(settlement, /application\?\.creatorWallet === wallet/);
+  assert.doesNotMatch(settlement, /findGenLayerAssignmentProjectionByApplicationId/);
+
+  const recoveryStart = repository.indexOf(
+    "export async function findBoundGenLayerApplicationRecovery",
+  );
+  const recoveryEnd = repository.indexOf("/**", recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart);
+  const recovery = repository.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /operation, "APPLY"/);
+  assert.match(recovery, /functionName, "apply_to_campaign"/);
+  assert.match(recovery, /localApplicationId/);
+  assert.match(recovery, /normalizeAddress\(input\.actorWallet\)/);
+  assert.match(recovery, /isNotNull\(marketplaceGenLayerTransactions\.transactionHash\)/);
+  assert.match(recovery, /"SUBMITTED"[\s\S]*"ACCEPTED"[\s\S]*"FINALIZED"[\s\S]*"RECONCILIATION_REQUIRED"/);
+  assert.doesNotMatch(recovery, /EXECUTION_FAILED|NETWORK_TERMINATED/);
+
+  const detailStart = service.indexOf(
+    "export async function getGenLayerMarketplaceCampaignDetail",
+  );
+  const detailEnd = service.indexOf("function campaignCreationCall", detailStart);
+  assert.ok(detailStart >= 0 && detailEnd > detailStart);
+  const detail = service.slice(detailStart, detailEnd);
+  assert.match(detail, /viewerPrivateApplication\?\.status === "PENDING_ONCHAIN" && viewer/);
+  assert.match(detail, /findBoundGenLayerApplicationRecovery\(\{/);
+  assert.match(detail, /localApplicationId: viewerPrivateApplication\.id/);
+  assert.match(detail, /actorWallet: viewer/);
+  assert.match(detail, /viewerRecovery: boundRecovery/);
+});
+
+test("apply, select, accept, and submit preflight the exact active X plus Farcaster bundle", async () => {
+  const actions = await readFile(
+    new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(actions, /IDENTITY_BUNDLE_SOURCES = \["X", "FARCASTER"\]/);
+  const helperStart = actions.indexOf("async function requireActiveIdentityBundle");
+  const helperEnd = actions.indexOf("function assertAssignmentIdentityBinding", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = actions.slice(helperStart, helperEnd);
+  assert.match(helper, /findGenLayerProfileByWallet\(normalizedWallet, source\)/);
+  assert.match(helper, /readMarketplaceState\([\s\S]*"get_identity"/);
+  assert.match(helper, /authoritativeProfile\.expiresAtEpoch \* 1_000 <= nowMs/);
+  assert.match(helper, /authoritativeProfile\.identityHash !== profile\.identityHash/);
+  assert.match(helper, /authoritativeProfile\.externalUserId !== profile\.externalUserId/);
+
+  for (const functionName of [
+    "prepareGenLayerApplication",
+    "prepareGenLayerSelection",
+    "prepareGenLayerSubmission",
+  ]) {
+    const start = actions.indexOf(`export async function ${functionName}`);
+    const end = actions.indexOf("export async function", start + 1);
+    assert.match(actions.slice(start, end), /requireActiveIdentityBundle\(/, functionName);
+  }
+  const acceptStart = actions.indexOf("export async function prepareGenLayerAccept");
+  const acceptEnd = actions.indexOf("export async function confirmGenLayerAccept", acceptStart);
+  assert.match(actions.slice(acceptStart, acceptEnd), /prepareAssignmentSimple\([\s\S]*true/);
+});
+
+test("every reusable submitted marketplace journal returns confirm-only recovery instead of a transaction", async () => {
+  const [repository, actions, service] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-service.ts", import.meta.url), "utf8"),
+  ]);
+  const dtoStart = repository.indexOf("function preparedDto(");
+  const dtoEnd = repository.indexOf("function validateCall", dtoStart);
+  assert.ok(dtoStart >= 0 && dtoEnd > dtoStart);
+  const dto = repository.slice(dtoStart, dtoEnd);
+  assert.match(dto, /recovery: row\.transactionHash/);
+  assert.match(dto, /preparedId: row\.preparedId/);
+  assert.match(dto, /transactionHash: row\.transactionHash/);
+
+  const fieldsStart = actions.indexOf("function preparedMutationFields(");
+  const fieldsEnd = actions.indexOf("function applicationDto", fieldsStart);
+  assert.ok(fieldsStart >= 0 && fieldsEnd > fieldsStart);
+  const fields = actions.slice(fieldsStart, fieldsEnd);
+  const recoveryBranch = fields.slice(0, fields.indexOf("return {", fields.indexOf("if (prepared.recovery)") + 1));
+  assert.doesNotMatch(recoveryBranch, /transaction: prepared\.call/);
+  assert.match(fields, /txHash: prepared\.recovery\.transactionHash/);
+  assert.match(fields, /transaction: prepared\.call[\s\S]*recovery: null/);
+  assert.equal(actions.match(/preparedMutationFields\(prepared\)/g)?.length, 4);
+
+  const fundingStart = service.indexOf("export async function prepareGenLayerCampaignFunding");
+  const fundingEnd = service.indexOf("export async function confirmGenLayerCampaignFunding", fundingStart);
+  assert.ok(fundingStart >= 0 && fundingEnd > fundingStart);
+  const funding = service.slice(fundingStart, fundingEnd);
+  const submittedBranch = funding.slice(
+    funding.indexOf("return prepared.recovery"),
+    funding.indexOf(": {", funding.indexOf("return prepared.recovery")),
+  );
+  assert.doesNotMatch(submittedBranch, /transaction: prepared\.call/);
+  assert.match(funding, /txHash: prepared\.recovery\.transactionHash/);
+  assert.match(funding, /transaction: prepared\.call[\s\S]*recovery: null/);
+});
+
+test("a null-hash prepared application resumes only while authoritative chain state is empty", async () => {
+  assert.equal(applicationResumeRecordExists({}), false);
+  assert.equal(applicationResumeRecordExists({ status: "APPLIED" }), true);
+  assert.throws(
+    () => applicationResumeRecordExists(null),
+    /authoritative application response is invalid/,
+  );
+  assert.throws(
+    () => applicationResumeRecordExists([]),
+    /authoritative application response is invalid/,
+  );
+
+  const [repository, actions, route] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/api/marketplace/campaigns/[campaignId]/applications/[applicationId]/apply/resume/route.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  const finderStart = repository.indexOf(
+    "export async function findPreparedGenLayerApplicationResumeJournal",
+  );
+  const finderEnd = repository.indexOf("/**", finderStart);
+  assert.ok(finderStart >= 0 && finderEnd > finderStart);
+  const finder = repository.slice(finderStart, finderEnd);
+  assert.match(finder, /localCampaignId/);
+  assert.match(finder, /localApplicationId/);
+  assert.match(finder, /normalizeAddress\(input\.actorWallet\)/);
+  assert.match(finder, /operation, "APPLY"/);
+  assert.match(finder, /functionName, "apply_to_campaign"/);
+  assert.match(finder, /valueAtto, "0"/);
+  assert.match(finder, /status, "PREPARED"/);
+  assert.match(finder, /isNull\(marketplaceGenLayerTransactions\.transactionHash\)/);
+
+  const resumeStart = actions.indexOf(
+    "export async function resumePreparedGenLayerApplication",
+  );
+  const resumeEnd = actions.indexOf("export async function confirmGenLayerApplication", resumeStart);
+  assert.ok(resumeStart >= 0 && resumeEnd > resumeStart);
+  const resume = actions.slice(resumeStart, resumeEnd);
+  assert.match(resume, /assertCreator\(context\.application, input\.session\.wallet\)/);
+  assert.match(resume, /context\.application\.status !== "PENDING_ONCHAIN"/);
+  assert.match(resume, /requireActiveIdentityBundle\(/);
+  assert.match(resume, /exactGenLayerJournalCall\(journal\)/);
+  assert.match(resume, /journal\.onchainEntityId !== applicationId/);
+  assert.match(resume, /canonicalHash\(call\.args\) !== canonicalHash\(expectedCall\.args\)/);
+  const authoritativeRead = resume.indexOf('readMarketplaceState("get_application"');
+  const alreadyOnchain = resume.indexOf("applicationResumeRecordExists(authoritative)");
+  const recoveryRequired = resume.indexOf("APPLICATION_TRANSACTION_RECOVERY_REQUIRED");
+  const resumeResponse = resume.indexOf("return mutationResponse(");
+  assert.ok(authoritativeRead >= 0 && alreadyOnchain > authoritativeRead);
+  assert.ok(recoveryRequired > alreadyOnchain && resumeResponse > recoveryRequired);
+  assert.match(route, /resumePreparedGenLayerApplication/);
+  assert.match(route, /applicationActionRoute\([\s\S]*"marketplace-apply"/);
+});
+
 test("database verifier requires the complete native projection and activation schema", async () => {
   const verifier = await readFile(
     new URL("../scripts/verify-database.mjs", import.meta.url),
@@ -1801,14 +1985,14 @@ test("terminal identity activation releases the request lock while UNDETERMINED 
   assert.match(migration, /activation_confirmed_at[\s\S]*genlayer_outcome" IN \('VERIFIED', 'REJECTED'\)/);
 });
 
-test("application preparation rejects expired projections and rechecks authoritative source identity", async () => {
+test("application preparation rejects expired projections and rechecks authoritative identity state", async () => {
   const actions = await readFile(
     new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
     "utf8",
   );
-  assert.match(actions, /profile\.expiresAt <= Date\.now\(\)/);
+  assert.match(actions, /profile\.expiresAt <= nowMs/);
   assert.doesNotMatch(actions, /profile\.expiresAt \* 1_000/);
-  assert.match(actions, /readMarketplaceState\("get_identity"/);
+  assert.match(actions, /readMarketplaceState\([\s\S]*"get_identity"/);
   assert.match(actions, /authoritativeProfile\.identityHash !== profile\.identityHash/);
 });
 

@@ -4,28 +4,15 @@ import Link from "next/link";
 import { useCallback, useState } from "react";
 import { marketplaceErrorMessage, marketplaceRequest } from "../marketplace-api";
 import {
-  applicationRateAtoms,
-  campaignBudgetAtoms,
-  campaignContentSource,
   genAtomsToDisplay,
-  type MarketplaceApplication,
-  type MarketplaceCampaign,
   shortenAddress,
 } from "../marketplace-types";
 import { useMarketplaceWallet } from "../use-marketplace-wallet";
-
-type DashboardResponse = {
-  brandCampaigns: MarketplaceCampaign[];
-  creatorApplications: MarketplaceApplication[];
-  claimableGen?: string;
-  claimableAtto?: string;
-  withdrawalId?: string | null;
-  withdrawalStatus?: "PENDING" | "EMITTED_UNCONFIRMED" | "CONFIRMED" | "RESTORED_FAILED" | null;
-};
+import type { MarketplaceDashboardResponseDto } from "../../../lib/marketplace-types";
 
 export function MarketplaceDashboard() {
   const wallet = useMarketplaceWallet();
-  const [data, setData] = useState<DashboardResponse | null>(null);
+  const [data, setData] = useState<MarketplaceDashboardResponseDto | null>(null);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +21,7 @@ export function MarketplaceDashboard() {
     setError(null);
     try {
       await wallet.authenticate();
-      const response = await marketplaceRequest<DashboardResponse>("/api/marketplace/dashboard");
+      const response = await marketplaceRequest<MarketplaceDashboardResponseDto>("/api/marketplace/dashboard");
       setData({
         ...response,
         brandCampaigns: Array.isArray(response.brandCampaigns) ? response.brandCampaigns : [],
@@ -56,8 +43,7 @@ export function MarketplaceDashboard() {
         </div>
         <aside className="campaign-terms-card">
           <div><span>WALLET</span><strong>{shortenAddress(wallet.address)}</strong></div>
-          <div><span>CLAIMABLE</span><strong>{data ? genAtomsToDisplay(data.claimableAtto ?? data.claimableGen ?? "0") : "—"} <small>GEN</small></strong></div>
-          {data?.withdrawalStatus ? <div><span>WITHDRAWAL</span><strong>{data.withdrawalStatus.replaceAll("_", " ")}</strong>{data.withdrawalStatus !== "CONFIRMED" ? <small>NOT YET PAID</small> : null}</div> : null}
+          <div><span>CLAIMABLE</span><strong>{data ? genAtomsToDisplay(data.claimableAtto) : "—"} <small>GEN</small></strong></div>
           <div><span>BRAND CAMPAIGNS</span><strong>{data?.brandCampaigns.length ?? "—"}</strong></div>
           <div><span>CREATOR APPLICATIONS</span><strong>{data?.creatorApplications.length ?? "—"}</strong></div>
         </aside>
@@ -81,8 +67,8 @@ export function MarketplaceDashboard() {
             {data.brandCampaigns.length === 0 ? <p className="panel-empty">No campaigns created by this wallet.</p> : null}
             {data.brandCampaigns.map((campaign) => (
               <article className="brand-application" key={campaign.id}>
-                <div><Link href={`/marketplace/campaigns/${encodeURIComponent(campaign.id)}`}>{campaign.title}</Link><strong>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} GEN</strong></div>
-                <p>{campaignContentSource(campaign)} · {campaign.status.toUpperCase()} · {campaign.fundingStatus.toUpperCase()}</p>
+                <div><Link href={`/marketplace/campaigns/${encodeURIComponent(campaign.id)}`}>{shortenAddress(campaign.campaignId)}</Link><strong>{genAtomsToDisplay(campaign.budgetAtto)} GEN</strong></div>
+                <p>{campaign.status.toUpperCase()} · {genAtomsToDisplay(campaign.availableAtto)} GEN AVAILABLE</p>
               </article>
             ))}
           </section>
@@ -91,7 +77,7 @@ export function MarketplaceDashboard() {
             {data.creatorApplications.length === 0 ? <p className="panel-empty">No creator applications from this wallet.</p> : null}
             {data.creatorApplications.map((application) => (
               <article className="brand-application" key={application.id}>
-                <div><Link href={`/marketplace/campaigns/${encodeURIComponent(application.campaignId)}`}>{application.campaignId}</Link><strong>{genAtomsToDisplay(applicationRateAtoms(application))} GEN</strong></div>
+                <div><Link href={`/marketplace/campaigns/${encodeURIComponent(application.campaignId)}`}>{application.campaignId}</Link><strong>{application.rateAtto ? `${genAtomsToDisplay(application.rateAtto)} GEN` : "RATE PENDING"}</strong></div>
                 <p>{application.status.toUpperCase()}</p>
               </article>
             ))}

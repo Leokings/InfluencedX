@@ -1,7 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { marketplaceErrorMessage, marketplaceRequest } from "../../marketplace-api";
+import { useEffect, useState } from "react";
+import {
+  marketplaceErrorMessage,
+  marketplaceRequest,
+  preparedMarketplaceRecovery,
+  recordSubmittedMarketplaceTransaction,
+} from "../../marketplace-api";
 import { broadcastMarketplaceTransaction, type GenLayerTransactionStage } from "../../marketplace-transaction";
 import {
   campaignBudgetAtoms,
@@ -16,9 +21,9 @@ import {
 import { useMarketplaceWallet } from "../../use-marketplace-wallet";
 
 type FundingPhase = "idle" | "preparing" | "wallet" | "submitted" | "finality" | "recording" | "error";
-type PreparedFundingResponse = CampaignMutationResponse & { preparedId: string; transaction: MarketplaceTransactionDto };
+type PreparedFundingResponse = CampaignMutationResponse & { preparedId: string; transaction?: MarketplaceTransactionDto; recovery?: unknown };
 
-export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceCampaign; onFunded: () => Promise<void> }) {
+export function CampaignFunding({ campaign, onFunded, onBusyChange }: { campaign: MarketplaceCampaign; onFunded: () => Promise<void>; onBusyChange: (busy: boolean) => void }) {
   const wallet = useMarketplaceWallet();
   const [phase, setPhase] = useState<FundingPhase>("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -39,9 +44,12 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
     }
   });
 
+  useEffect(() => () => onBusyChange(false), [onBusyChange]);
+
   async function confirm(preparedId: string, txHash: string) {
     setPhase("recording");
     setMessage("Recording finalized funding…");
+    await recordSubmittedMarketplaceTransaction(preparedId, txHash);
     await marketplaceRequest<CampaignMutationResponse>(
       `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding`,
       { method: "POST", body: JSON.stringify({ preparedId, txHash }) },
@@ -54,6 +62,7 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
   }
 
   async function fund() {
+    onBusyChange(true);
     setPhase("preparing");
     setMessage("Preparing funding…");
     try {
@@ -70,13 +79,24 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
         `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding/prepare`,
         { method: "POST", body: JSON.stringify({ brandWallet: brand }) },
       );
+      const reusable = preparedMarketplaceRecovery(prepared);
+      if (reusable) {
+        window.sessionStorage.setItem(recoveryKey, JSON.stringify(reusable));
+        setSubmitted(reusable);
+        await confirm(reusable.preparedId, reusable.txHash);
+        return;
+      }
+      if (!prepared.transaction) {
+        throw new Error("The prepared marketplace transaction is unavailable.");
+      }
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, brand, {
         expectedFunctionName: "create_campaign",
         expectedValue: campaignBudgetAtoms(campaign),
-        onSubmitted: (hash) => {
+        onSubmitted: async (hash) => {
           const recovery = { preparedId: prepared.preparedId, txHash: hash };
           window.sessionStorage.setItem(recoveryKey, JSON.stringify(recovery));
           setSubmitted(recovery);
+          await recordSubmittedMarketplaceTransaction(prepared.preparedId, hash);
         },
         onStage: (stage) => setFundingStage(stage, setPhase, setMessage),
       });
@@ -94,6 +114,8 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
     } catch (error) {
       setPhase("error");
       setMessage(marketplaceErrorMessage(error));
+    } finally {
+      onBusyChange(false);
     }
   }
 

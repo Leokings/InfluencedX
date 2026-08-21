@@ -29,6 +29,7 @@ export type VerificationRateLimitPolicy =
   | "marketplace-apply"
   | "marketplace-select"
   | "marketplace-accept"
+  | "marketplace-transaction-submit"
   | "marketplace-settlement"
   | "marketplace-resolution-progress"
   | "marketplace-metrics-refresh"
@@ -82,6 +83,7 @@ const POLICY_LABELS: Record<VerificationRateLimitPolicy, string> = {
   "marketplace-apply": "marketplace-apply-v1",
   "marketplace-select": "marketplace-select-v1",
   "marketplace-accept": "marketplace-accept-v1",
+  "marketplace-transaction-submit": "marketplace-transaction-submit-v1",
   "marketplace-settlement": "marketplace-settlement-v1",
   "marketplace-resolution-progress": "marketplace-resolution-progress-v1",
   "marketplace-metrics-refresh": "marketplace-metrics-refresh-v1",
@@ -273,6 +275,32 @@ export const VERIFICATION_RATE_LIMIT_RULES: Readonly<
       identity: "wallet",
       policyKey: "marketplace.accept.wallet.v1",
       limit: 30,
+      windowMs: HOUR_MS,
+    },
+  ],
+  "marketplace-transaction-submit": [
+    {
+      identity: "ip",
+      policyKey: "marketplace.transaction-submit.ip.v1",
+      limit: 240,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "subject",
+      policyKey: "marketplace.transaction-submit.subject.v1",
+      limit: 120,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "wallet",
+      policyKey: "marketplace.transaction-submit.wallet.v1",
+      limit: 120,
+      windowMs: HOUR_MS,
+    },
+    {
+      identity: "request",
+      policyKey: "marketplace.transaction-submit.request.v1",
+      limit: 4,
       windowMs: HOUR_MS,
     },
   ],

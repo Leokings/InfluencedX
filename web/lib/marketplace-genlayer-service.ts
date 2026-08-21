@@ -21,6 +21,7 @@ import {
 } from "./marketplace-genlayer-core.ts";
 import {
   bindGenLayerTransactionHash,
+  findBoundGenLayerApplicationRecovery,
   findGenLayerCampaignDraft,
   findGenLayerCampaignProjectionByLocalId,
   findGenLayerAssignmentProjectionByApplicationId,
@@ -197,7 +198,12 @@ export async function prepareGenLayerCampaignFunding(input: {
   campaignId: string;
   session: AuthenticatedWalletSession;
   body: Record<string, unknown>;
-}): Promise<{ campaign: GenLayerCampaignDto; preparedId: string; transaction: MarketplaceGenLayerCall }> {
+}): Promise<{
+  campaign: GenLayerCampaignDto;
+  preparedId: string;
+  transaction?: MarketplaceGenLayerCall;
+  recovery: { preparedId: string; txHash: string } | null;
+}> {
   assertExactJsonKeys(input.body, ["brandWallet"], []);
   const localCampaignId = requireUuid(input.campaignId, "campaignId");
   assertOptionalActorWallet(input.body, "brandWallet", input.session.wallet);
@@ -222,11 +228,21 @@ export async function prepareGenLayerCampaignFunding(input: {
     localCampaignId,
     onchainEntityId: campaignId,
   });
-  return {
-    campaign: campaignDto(draft, null, 0),
-    preparedId: prepared.preparedId,
-    transaction: prepared.call,
-  };
+  return prepared.recovery
+    ? {
+        campaign: campaignDto(draft, null, 0),
+        preparedId: prepared.preparedId,
+        recovery: {
+          preparedId: prepared.recovery.preparedId,
+          txHash: prepared.recovery.transactionHash,
+        },
+      }
+    : {
+        campaign: campaignDto(draft, null, 0),
+        preparedId: prepared.preparedId,
+        transaction: prepared.call,
+        recovery: null,
+      };
 }
 
 export async function confirmGenLayerCampaignFunding(input: {
@@ -400,7 +416,12 @@ export async function listGenLayerMarketplaceCampaigns(input: {
 export async function getGenLayerMarketplaceCampaignDetail(input: {
   campaignId: string;
   viewerWallet?: string | null;
-}): Promise<{ campaign: GenLayerCampaignDto; applications: MarketplaceApplicationDto[]; viewerApplication: MarketplaceApplicationDto | null }> {
+}): Promise<{
+  campaign: GenLayerCampaignDto;
+  applications: MarketplaceApplicationDto[];
+  viewerApplication: MarketplaceApplicationDto | null;
+  viewerRecovery: { preparedId: string; txHash: string } | null;
+}> {
   const localCampaignId = requireUuid(input.campaignId, "campaignId");
   const [draft, projection] = await Promise.all([
     findGenLayerCampaignDraft(localCampaignId),
@@ -416,16 +437,31 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
   const visible = canViewAll
     ? privateRows
     : privateRows.filter((application) => application.creatorWallet === viewer);
-  const applications = await Promise.all(visible.map(async (application) =>
-    applicationDto(
-      application,
-      draft.contentSource,
-      await findGenLayerAssignmentProjectionByApplicationId(application.id),
-    )));
+  const viewerPrivateApplication = canViewAll ? null : visible[0] ?? null;
+  const [applications, boundRecovery] = await Promise.all([
+    Promise.all(visible.map(async (application) =>
+      applicationDto(
+        application,
+        draft.contentSource,
+        await findGenLayerAssignmentProjectionByApplicationId(application.id),
+      ))),
+    viewerPrivateApplication?.status === "PENDING_ONCHAIN" && viewer
+      ? findBoundGenLayerApplicationRecovery({
+          localApplicationId: viewerPrivateApplication.id,
+          actorWallet: viewer,
+        })
+      : Promise.resolve(null),
+  ]);
   return {
     campaign: campaignDto(draft, projection, privateRows.length),
     applications: canViewAll ? applications : [],
     viewerApplication: canViewAll ? null : applications[0] ?? null,
+    viewerRecovery: boundRecovery
+      ? {
+          preparedId: boundRecovery.preparedId,
+          txHash: boundRecovery.transactionHash,
+        }
+      : null,
   };
 }
 
