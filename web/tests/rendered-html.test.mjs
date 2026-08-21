@@ -107,6 +107,12 @@ test("server-renders the InfluencedX marketplace and share metadata", async () =
   );
 });
 
+test("permanently redirects the marketplace route to the canonical homepage", async () => {
+  const response = await render("/marketplace");
+  assert.equal(response.status, 308);
+  assert.equal(response.headers.get("location"), "/");
+});
+
 test("server-renders accurate public privacy and testnet terms pages", async () => {
   const [privacyResponse, termsResponse] = await Promise.all([
     render("/privacy"),
