@@ -14,6 +14,7 @@ import {
   createCampaignClientNonce,
   deriveCampaignId,
   deriveCampaignTermsHash,
+  genLayerCampaignCancellationAvailability,
   normalizeContentSource,
   normalizeMarketplaceAddress,
   parseCampaignState,
@@ -47,10 +48,12 @@ import {
   MarketplaceGenLayerFinalityError,
   assertTransactionMatchesPreparedCall,
   canonicalHash,
+  exactTerminalMarketplaceTransaction,
   loadFinalizedMarketplaceTransaction,
   marketplaceContractAddress,
   readMarketplaceState,
   terminalMarketplaceTransactionStatus,
+  type FinalizedMarketplaceTransaction,
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem, assertExactJsonKeys } from "./verification-api.ts";
@@ -288,22 +291,35 @@ export async function confirmGenLayerCampaignFunding(input: {
     throw new ApiProblem(409, "TRANSACTION_BINDING_CONFLICT", "The transaction could not be bound to this prepared action.");
   }
 
+  const expectedCall = campaignCreationCall(draft, expectedId);
   let finalized;
   try {
     finalized = await loadFinalizedMarketplaceTransaction(transactionHash);
     assertTransactionMatchesPreparedCall({
       transaction: finalized,
-      call: campaignCreationCall(draft, expectedId),
+      call: expectedCall,
       actorWallet: draft.brandWallet,
     });
   } catch (error) {
+    let classifiedError = error;
+    let terminalTransaction: FinalizedMarketplaceTransaction | null = null;
+    try {
+      terminalTransaction = exactTerminalMarketplaceTransaction(error, {
+        call: expectedCall,
+        actorWallet: draft.brandWallet,
+        transactionHash,
+      });
+    } catch (bindingError) {
+      classifiedError = bindingError;
+    }
     await recordConfirmationFailure(
       preparedId,
-      error,
+      classifiedError,
       nowMs,
       input.reconciliationFenceToken,
+      terminalTransaction,
     );
-    throw confirmationProblem(error);
+    throw confirmationProblem(classifiedError);
   }
 
   let state: GenLayerCampaignState;
@@ -421,6 +437,7 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
   campaign: GenLayerCampaignDto;
   applications: MarketplaceApplicationDto[];
   viewerApplication: MarketplaceApplicationDto | null;
+  canCancel: boolean;
   viewerRecovery: { preparedId: string; txHash: string } | null;
 }> {
   const localCampaignId = requireUuid(input.campaignId, "campaignId");
@@ -439,7 +456,7 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
     ? privateRows
     : privateRows.filter((application) => application.creatorWallet === viewer);
   const viewerPrivateApplication = canViewAll ? null : visible[0] ?? null;
-  const [applications, boundRecovery] = await Promise.all([
+  const [applications, boundRecovery, canCancel] = await Promise.all([
     Promise.all(visible.map(async (application) =>
       applicationDto(
         application,
@@ -452,11 +469,15 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
           actorWallet: viewer,
         })
       : Promise.resolve(null),
+    canViewAll && projection
+      ? authoritativeCampaignCanCancel(draft, projection)
+      : Promise.resolve(false),
   ]);
   return {
     campaign: campaignDto(draft, projection, privateRows.length),
     applications: canViewAll ? applications : [],
     viewerApplication: canViewAll ? null : applications[0] ?? null,
+    canCancel,
     viewerRecovery: boundRecovery
       ? {
           preparedId: boundRecovery.preparedId,
@@ -464,6 +485,21 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
         }
       : null,
   };
+}
+
+async function authoritativeCampaignCanCancel(
+  draft: GenLayerCampaignDraft,
+  projection: GenLayerCampaignProjection,
+): Promise<boolean> {
+  try {
+    const state = parseCampaignState(
+      await readMarketplaceState("get_campaign", [projection.campaignId]),
+    );
+    assertCampaignMatchesDraft(state, draft, projection.campaignId);
+    return genLayerCampaignCancellationAvailability(state).canCancel;
+  } catch {
+    return false;
+  }
 }
 
 function campaignCreationCall(draft: GenLayerCampaignDraft, campaignId: string): MarketplaceGenLayerCall {
@@ -628,6 +664,10 @@ function applicationDto(
     submittedAt: assignment?.submittedAtEpoch ? isoTime(assignment.submittedAtEpoch * 1_000) : null,
     requestId: assignment?.resolutionRequestId ?? null,
     resolutionRound: assignment?.resolutionRound ?? 0,
+    resolutionAttempts: assignment?.resolutionAttempts ?? 0,
+    resolutionEligibleAt: assignment?.resolutionEligibleAtEpoch
+      ? isoTime(assignment.resolutionEligibleAtEpoch * 1_000)
+      : null,
     resolutionOutcome: assignment?.outcome?.toLowerCase() as MarketplaceApplicationDto["resolutionOutcome"] ?? null,
     resolutionEvidenceHash: assignment?.evidenceHash ?? null,
     resolutionTxHash: assignment?.outcome ? assignment.lastTxHash : null,
@@ -643,14 +683,17 @@ async function recordConfirmationFailure(
   error: unknown,
   nowMs: number,
   fenceToken?: string,
+  terminalTransaction: FinalizedMarketplaceTransaction | null = null,
 ): Promise<void> {
   if (error instanceof MarketplaceGenLayerFinalityError) {
-    const terminalStatus = terminalMarketplaceTransactionStatus(error);
+    const terminalStatus = terminalTransaction
+      ? terminalMarketplaceTransactionStatus(error)
+      : null;
     await recordGenLayerTransactionStatus({
       preparedId,
       status: terminalStatus ?? (error.retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
-      lifecycleStatus: null,
-      executionResult: null,
+      lifecycleStatus: terminalTransaction?.lifecycleStatus ?? null,
+      executionResult: terminalTransaction?.executionResult ?? null,
       errorCode: error.code,
       nowMs,
       retryAtMs: error.retryable ? nowMs + 15_000 : 0,

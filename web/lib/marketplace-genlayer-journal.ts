@@ -24,8 +24,10 @@ import {
 import {
   MarketplaceGenLayerFinalityError,
   assertTransactionMatchesPreparedCall,
+  exactTerminalMarketplaceTransaction,
   loadFinalizedMarketplaceTransaction,
   terminalMarketplaceTransactionStatus,
+  type FinalizedMarketplaceTransaction,
 } from "./marketplace-genlayer-rpc.ts";
 import { confirmGenLayerCampaignFunding } from "./marketplace-genlayer-service.ts";
 import { ApiProblem } from "./verification-api.ts";
@@ -106,14 +108,31 @@ export async function runGenLayerJournalReconciliationBatch(options: {
         else manual += 1;
         continue;
       }
-      const retryable = journalErrorIsRetryable(error);
-      const terminalStatus = terminalMarketplaceTransactionStatus(error);
+      let classifiedError = error;
+      let terminalTransaction: FinalizedMarketplaceTransaction | null = null;
+      if (terminalMarketplaceTransactionStatus(error)) {
+        try {
+          terminalTransaction = exactTerminalMarketplaceTransaction(error, {
+            call: exactGenLayerJournalCall(row),
+            actorWallet: row.actorWallet,
+            transactionHash: row.transactionHash ?? "",
+          });
+        } catch {
+          classifiedError = new GenLayerJournalPoisonError(
+            "The terminal transaction does not match the immutable journal call.",
+          );
+        }
+      }
+      const retryable = journalErrorIsRetryable(classifiedError);
+      const terminalStatus = terminalTransaction
+        ? terminalMarketplaceTransactionStatus(classifiedError)
+        : null;
       const recorded = await (dependencies.record ?? recordGenLayerTransactionStatus)({
         preparedId: row.preparedId,
         status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
-        lifecycleStatus: null,
-        executionResult: null,
-        errorCode: journalErrorCode(error),
+        lifecycleStatus: terminalTransaction?.lifecycleStatus ?? null,
+        executionResult: terminalTransaction?.executionResult ?? null,
+        errorCode: journalErrorCode(classifiedError),
         retryAtMs: retryable
           ? nowMs + journalRetryDelayMs(row.reconciliationAttempts)
           : 0,

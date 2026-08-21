@@ -45,11 +45,13 @@ import {
   MarketplaceGenLayerFinalityError,
   assertTransactionMatchesPreparedCall,
   canonicalHash,
+  exactTerminalMarketplaceTransaction,
   loadFinalizedMarketplaceTransaction,
   marketplaceCalldataAddress,
   marketplaceContractAddress,
   readMarketplaceState,
   terminalMarketplaceTransactionStatus,
+  type FinalizedMarketplaceTransaction,
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem } from "./verification-api.ts";
@@ -805,20 +807,40 @@ async function confirmLegacyGenLayerCreatorActivation(input: {
     finalized = await loadFinalizedMarketplaceTransaction(transactionHash);
     assertTransactionMatchesPreparedCall({ transaction: finalized, call, actorWallet: row.wallet });
   } catch (error) {
-    const retryable = error instanceof MarketplaceGenLayerFinalityError && error.retryable;
-    const terminalStatus = terminalMarketplaceTransactionStatus(error);
+    let classifiedError = error;
+    let terminalTransaction: FinalizedMarketplaceTransaction | null = null;
+    try {
+      terminalTransaction = exactTerminalMarketplaceTransaction(error, {
+        call,
+        actorWallet: row.wallet,
+        transactionHash,
+      });
+    } catch (bindingError) {
+      classifiedError = bindingError;
+    }
+    const retryable = classifiedError instanceof MarketplaceGenLayerFinalityError
+      && classifiedError.retryable;
+    const terminalStatus = terminalTransaction
+      ? terminalMarketplaceTransactionStatus(classifiedError)
+      : null;
     await recordGenLayerTransactionStatus({
       preparedId,
       status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
-      lifecycleStatus: null,
-      executionResult: null,
-      errorCode: error instanceof MarketplaceGenLayerFinalityError ? error.code : "GENLAYER_TRANSACTION_MISMATCH",
+      lifecycleStatus: terminalTransaction?.lifecycleStatus ?? null,
+      executionResult: terminalTransaction?.executionResult ?? null,
+      errorCode: classifiedError instanceof MarketplaceGenLayerFinalityError
+        ? classifiedError.code
+        : "GENLAYER_TRANSACTION_MISMATCH",
       retryAtMs: retryable ? nowMs + 15_000 : 0,
       nowMs,
       fenceToken: input.reconciliationFenceToken,
     });
-    if (error instanceof MarketplaceGenLayerFinalityError) {
-      throw problem(retryable ? 202 : 409, error.code, error.message);
+    if (classifiedError instanceof MarketplaceGenLayerFinalityError) {
+      throw problem(
+        retryable ? 202 : 409,
+        classifiedError.code,
+        classifiedError.message,
+      );
     }
     throw problem(409, "GENLAYER_TRANSACTION_MISMATCH", "The finalized activation does not match the prepared call.");
   }
@@ -1023,24 +1045,41 @@ async function confirmGenLayerIdentityBundleActivation(input: {
       actorWallet: row.wallet,
     });
   } catch (error) {
-    const retryable =
-      error instanceof MarketplaceGenLayerFinalityError && error.retryable;
-    const terminalStatus = terminalMarketplaceTransactionStatus(error);
+    let classifiedError = error;
+    let terminalTransaction: FinalizedMarketplaceTransaction | null = null;
+    try {
+      terminalTransaction = exactTerminalMarketplaceTransaction(error, {
+        call,
+        actorWallet: row.wallet,
+        transactionHash,
+      });
+    } catch (bindingError) {
+      classifiedError = bindingError;
+    }
+    const retryable = classifiedError instanceof MarketplaceGenLayerFinalityError
+      && classifiedError.retryable;
+    const terminalStatus = terminalTransaction
+      ? terminalMarketplaceTransactionStatus(classifiedError)
+      : null;
     await recordGenLayerTransactionStatus({
       preparedId,
       status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
-      lifecycleStatus: null,
-      executionResult: null,
+      lifecycleStatus: terminalTransaction?.lifecycleStatus ?? null,
+      executionResult: terminalTransaction?.executionResult ?? null,
       errorCode:
-        error instanceof MarketplaceGenLayerFinalityError
-          ? error.code
+        classifiedError instanceof MarketplaceGenLayerFinalityError
+          ? classifiedError.code
           : "GENLAYER_TRANSACTION_MISMATCH",
       retryAtMs: retryable ? nowMs + 15_000 : 0,
       nowMs,
       fenceToken: input.reconciliationFenceToken,
     });
-    if (error instanceof MarketplaceGenLayerFinalityError) {
-      throw problem(retryable ? 202 : 409, error.code, error.message);
+    if (classifiedError instanceof MarketplaceGenLayerFinalityError) {
+      throw problem(
+        retryable ? 202 : 409,
+        classifiedError.code,
+        classifiedError.message,
+      );
     }
     throw problem(
       409,

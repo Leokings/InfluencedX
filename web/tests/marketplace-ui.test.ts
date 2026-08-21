@@ -550,8 +550,41 @@ test("UNDETERMINED exposes bounded retry and refund paths", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
   assert.match(source, /application\.resolutionOutcome === "undetermined"/);
   assert.match(source, /RETRY RESOLUTION/);
-  assert.match(source, /REFUND AFTER RETRY CEILING/);
-  assert.match(source, /No payout or refund was assigned/);
+  assert.match(source, /timing\.retriesExhausted \? <button[\s\S]*>REFUND<\/button>/);
+  assert.match(source, /Retry unlocks/);
+  assert.doesNotMatch(source, /No payout or refund was assigned/);
+});
+
+test("resolution and cancellation controls fail closed on authoritative eligibility", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /const canCancel = isBrand && state\.detail\.canCancel/);
+  assert.doesNotMatch(source, /const canCancel = isBrand && \["funding", "open"\]/);
+  assert.match(source, /application\.resolutionEligibleAt/);
+  assert.match(source, /application\.resolutionAttempts >= campaign\.maxUndeterminedRetries/);
+  assert.match(source, /timing\.canResolve \? <button[\s\S]*REQUEST RESOLUTION/);
+  assert.doesNotMatch(source, /if \(application\.requestId \|\| application\.genlayerTxHash\)/);
+  assert.match(source, /deadlineMs - Date\.now\(\) \+ 50/);
+});
+
+test("exact wallet-rejected cancel and resolution plans survive detail and deadline refresh", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  const loadStart = source.indexOf("const loadDetail = useCallback");
+  const executeStart = source.indexOf("async function executePrepared", loadStart);
+  const refreshPath = source.slice(loadStart, executeStart);
+  assert.doesNotMatch(refreshPath, /delete readyRetries\.current/);
+  assert.match(refreshPath, /deadlineMs <= Date\.now\(\)[\s\S]*refresh\(\)/);
+  assert.match(refreshPath, /const refresh = \(\) => \{[\s\S]*void loadDetail\(\)/);
+
+  const executeEnd = source.indexOf("async function apply", executeStart);
+  const execute = source.slice(executeStart, executeEnd);
+  assert.match(execute, /matchingMarketplaceReadyRetry\(readyRetry, actor, requestBody\)/);
+  assert.match(execute, /if \(!isExplicitEip1193UserRejection\(error\)\)[\s\S]*delete readyRetries\.current\[input\.key\]/);
+  assert.doesNotMatch(execute, /revalidateOnRetry/);
+
+  const cancelStart = source.indexOf("async function cancelCampaign");
+  const cancelEnd = source.indexOf('if (state.phase === "loading"', cancelStart);
+  const actionCalls = source.slice(source.indexOf("async function requestResolution"), cancelEnd);
+  assert.doesNotMatch(actionCalls, /revalidateOnRetry|delete readyRetries\.current/);
 });
 
 test("resolution UI shows deterministic contract checks without a generated narrative", async () => {

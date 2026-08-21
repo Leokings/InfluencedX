@@ -140,10 +140,18 @@ export async function loadFinalizedMarketplaceTransaction(
       lifecycle === TransactionStatus.VALIDATORS_TIMEOUT ||
       lifecycle === TransactionStatus.LEADER_TIMEOUT
     ) {
+      const terminalTransaction = marketplaceTransactionEnvelope({
+        hash: normalizedHash,
+        transaction,
+        transactionRecord,
+        lifecycle,
+        valueAtto,
+      });
       throw new MarketplaceGenLayerFinalityError(
         "GENLAYER_TRANSACTION_TERMINATED",
         `The StudioNet transaction terminated with ${lifecycle}.`,
         false,
+        terminalTransaction,
       );
     }
     throw new MarketplaceGenLayerFinalityError(
@@ -153,35 +161,55 @@ export async function loadFinalizedMarketplaceTransaction(
     );
   }
   const execution = finalizedExecution(transactionRecord);
+  const finalized = marketplaceTransactionEnvelope({
+    hash: normalizedHash,
+    transaction,
+    transactionRecord,
+    lifecycle,
+    valueAtto,
+    execution,
+  });
   if (!execution.success) {
     throw new MarketplaceGenLayerFinalityError(
       "GENLAYER_EXECUTION_FAILED",
       "The finalized StudioNet transaction did not execute successfully.",
       false,
+      finalized,
     );
   }
+  return finalized;
+}
 
+function marketplaceTransactionEnvelope(input: {
+  hash: string;
+  transaction: GenLayerTransaction;
+  transactionRecord: GenLayerTransaction & Record<string, unknown>;
+  lifecycle: string;
+  valueAtto: string;
+  execution?: ReturnType<typeof finalizedExecution>;
+}): FinalizedMarketplaceTransaction {
   const sender = normalizeAddress(
-    transaction.sender ?? transaction.from_address,
+    input.transaction.sender ?? input.transaction.from_address,
     "transaction sender",
   );
   const recipient = normalizeAddress(
-    transaction.recipient ?? transaction.to_address,
+    input.transaction.recipient ?? input.transaction.to_address,
     "transaction recipient",
   );
-  const decoded = decodeMarketplaceCall(transaction, recipient);
-  return {
-    hash: normalizedHash,
+  const decoded = decodeMarketplaceCall(input.transaction, recipient);
+  const execution = input.execution ?? finalizedExecution(input.transactionRecord);
+  return Object.freeze({
+    hash: input.hash,
     sender,
     recipient,
     functionName: decoded?.functionName ?? null,
     args: decoded?.args ?? null,
-    lifecycleStatus: lifecycle,
+    lifecycleStatus: input.lifecycle,
     executionResult: execution.executionResult,
     consensusResult: execution.consensusResult,
-    valueAtto,
-    finalizedAt: transactionTimestamp(transaction),
-  };
+    valueAtto: input.valueAtto,
+    finalizedAt: transactionTimestamp(input.transaction),
+  });
 }
 
 export async function readMarketplaceState(
@@ -328,13 +356,48 @@ export function marketplaceCalldataAddress(value: string): CalldataAddress {
 export class MarketplaceGenLayerFinalityError extends Error {
   readonly code: string;
   readonly retryable: boolean;
+  readonly transaction: FinalizedMarketplaceTransaction | null;
 
-  constructor(code: string, message: string, retryable: boolean) {
+  constructor(
+    code: string,
+    message: string,
+    retryable: boolean,
+    transaction: FinalizedMarketplaceTransaction | null = null,
+  ) {
     super(message);
     this.name = "MarketplaceGenLayerFinalityError";
     this.code = code;
     this.retryable = retryable;
+    this.transaction = transaction;
   }
+}
+
+/**
+ * Returns the immutable terminal receipt only after it is proven to be the
+ * exact prepared call. Callers must perform this check before persisting a
+ * terminal journal status or deleting client-side recovery state.
+ */
+export function exactTerminalMarketplaceTransaction(
+  error: unknown,
+  input: Readonly<{
+    call: MarketplaceGenLayerCall;
+    actorWallet: string;
+    transactionHash: string;
+  }>,
+): FinalizedMarketplaceTransaction | null {
+  if (terminalMarketplaceTransactionStatus(error) === null) return null;
+  if (!(error instanceof MarketplaceGenLayerFinalityError) || !error.transaction) {
+    throw new Error("The terminal StudioNet transaction has no verifiable envelope.");
+  }
+  if (error.transaction.hash !== normalizeHash(input.transactionHash, "transaction hash")) {
+    throw new Error("The terminal StudioNet transaction hash does not match.");
+  }
+  assertTransactionMatchesPreparedCall({
+    transaction: error.transaction,
+    call: input.call,
+    actorWallet: input.actorWallet,
+  });
+  return error.transaction;
 }
 
 export function terminalMarketplaceTransactionStatus(

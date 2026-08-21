@@ -7,6 +7,8 @@ import {
   deriveAssignmentId,
   deriveResolutionRequestId,
   deriveWithdrawalId,
+  genLayerCampaignCancellationAvailability,
+  genLayerResolutionAvailability,
   normalizeContentSource,
   parseApplicationState,
   parseAssignmentState,
@@ -55,6 +57,7 @@ import {
   MarketplaceGenLayerFinalityError,
   assertTransactionMatchesPreparedCall,
   canonicalHash,
+  exactTerminalMarketplaceTransaction,
   loadFinalizedMarketplaceTransaction,
   marketplaceCalldataAddress,
   marketplaceContractAddress,
@@ -439,7 +442,21 @@ export async function prepareGenLayerResolution(input: ActionInput) {
   const context = await applicationContext(input);
   if (!context.assignment?.resolutionRequestId) invalidState();
   if (![context.draft.brandWallet, context.application.creatorWallet].includes(input.session.wallet.toLowerCase())) forbidden();
-  const call = callPlan("resolve_assignment", [context.assignment.assignmentId, context.assignment.resolutionRequestId], ["string", "string"]);
+  const [assignment, campaign] = await Promise.all([
+    readMarketplaceState("get_assignment", [context.assignment.assignmentId]).then(parseAssignmentState),
+    readMarketplaceState("get_campaign", [context.campaign.campaignId]).then(parseCampaignState),
+  ]);
+  assertOperatorAssignmentBinding(context.assignment, assignment, campaign);
+  assertResolutionPreparationBinding(context.assignment, assignment);
+  const availability = genLayerResolutionAvailability(assignment, campaign);
+  if (availability.reason === "EARLY") {
+    throw problem(409, "RETENTION", `Resolution unlocks ${availability.unlocksAt}.`);
+  }
+  if (availability.reason === "RETRIES_EXHAUSTED") {
+    throw problem(409, "RETRIES_EXHAUSTED", "Resolution retries are exhausted. Use refund instead.");
+  }
+  if (!availability.canResolve || !assignment.resolutionRequestId) invalidState();
+  const call = callPlan("resolve_assignment", [assignment.assignmentId, assignment.resolutionRequestId], ["string", "string"]);
   const prepared = await prepareAction("RESOLVE_ASSIGNMENT", call, context, input.session.wallet, context.assignment.assignmentId);
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
@@ -647,11 +664,40 @@ export async function confirmGenLayerRefundUndetermined(input: ActionInput) {
 }
 
 export async function prepareGenLayerCampaignCancel(input: CampaignActionInput) {
-  return prepareCampaignSimple(input, "CANCEL_CAMPAIGN", "cancel_campaign");
+  assertExactJsonKeys(input.body, []);
+  const context = await campaignContext(input.campaignId);
+  assertBrand(context.draft, input.session.wallet);
+  const state = parseCampaignState(
+    await readMarketplaceState("get_campaign", [context.projection.campaignId]),
+  );
+  assertOperatorCampaignBinding(context.projection, state);
+  const availability = genLayerCampaignCancellationAvailability(state);
+  if (availability.reason === "LATE") {
+    throw problem(409, "CANCEL_TOO_LATE", "Cancellation closed when applications closed.");
+  }
+  if (availability.reason === "RESERVED") {
+    throw problem(409, "CAMPAIGN_RESERVED", "Active assignments must be settled first.");
+  }
+  if (!availability.canCancel) invalidState();
+  const call = callPlan("cancel_campaign", [state.campaignId], ["string"]);
+  const prepared = await prepareGenLayerMarketplaceTransaction({
+    operation: "CANCEL_CAMPAIGN",
+    call,
+    actorWallet: input.session.wallet,
+    localCampaignId: context.draft.id,
+    onchainEntityId: state.campaignId,
+  });
+  return {
+    campaign: (await getGenLayerMarketplaceCampaignDetail({
+      campaignId: context.draft.id,
+      viewerWallet: input.session.wallet,
+    })).campaign,
+    ...preparedMutationFields(prepared),
+  };
 }
 
 export async function confirmGenLayerCampaignCancel(input: CampaignActionInput) {
-  return confirmCampaignSimple(input, "CANCEL_CAMPAIGN", "cancel_campaign", "CANCELLED");
+  return confirmCampaignSimple(input, "CANCEL_CAMPAIGN", "cancel_campaign");
 }
 
 export async function prepareGenLayerRefundUnallocated(input: CampaignActionInput) {
@@ -695,7 +741,19 @@ export async function prepareGenLayerRefundUnallocated(input: CampaignActionInpu
 }
 
 export async function confirmGenLayerRefundUnallocated(input: CampaignActionInput) {
-  return confirmCampaignSimple(input, "REFUND_UNALLOCATED", "refund_unallocated", "OPEN");
+  return confirmCampaignSimple(input, "REFUND_UNALLOCATED", "refund_unallocated");
+}
+
+export function genLayerCampaignActionPostcondition(
+  method: "cancel_campaign" | "refund_unallocated",
+  state: Pick<GenLayerCampaignState, "status" | "availableAtto" | "reservedAtto">,
+): boolean {
+  if (method === "refund_unallocated") {
+    return ["OPEN", "CLOSED"].includes(state.status) && state.availableAtto === "0";
+  }
+  return state.status === "CANCELLED"
+    && state.availableAtto === "0"
+    && state.reservedAtto === "0";
 }
 
 export async function getGenLayerSettlement(input: CampaignActionInput) {
@@ -931,24 +989,10 @@ async function confirmAssignmentSimple(
   return mutationResponse(context.draft, context.campaign, context.application, projected);
 }
 
-async function prepareCampaignSimple(
-  input: CampaignActionInput,
-  operation: Parameters<typeof prepareGenLayerMarketplaceTransaction>[0]["operation"],
-  method: string,
-) {
-  assertExactJsonKeys(input.body, []);
-  const context = await campaignContext(input.campaignId);
-  assertBrand(context.draft, input.session.wallet);
-  const call = callPlan(method, [context.projection.campaignId], ["string"]);
-  const prepared = await prepareGenLayerMarketplaceTransaction({ operation, call, actorWallet: input.session.wallet, localCampaignId: context.draft.id, onchainEntityId: context.projection.campaignId });
-  return { campaign: (await getGenLayerMarketplaceCampaignDetail({ campaignId: context.draft.id, viewerWallet: input.session.wallet })).campaign, ...preparedMutationFields(prepared) };
-}
-
 async function confirmCampaignSimple(
   input: CampaignActionInput,
   operation: Parameters<typeof prepareGenLayerMarketplaceTransaction>[0]["operation"],
-  method: string,
-  expectedStatus: GenLayerCampaignState["status"],
+  method: "cancel_campaign" | "refund_unallocated",
 ) {
   const context = await campaignContext(input.campaignId);
   assertBrand(context.draft, input.session.wallet);
@@ -957,9 +1001,9 @@ async function confirmCampaignSimple(
   if (prepared.operation !== operation || prepared.localCampaignId !== context.draft.id) preparedMismatch();
   const finalized = await confirmPrepared(input.body, prepared, call, input.session.wallet, input.reconciliationFenceToken);
   const state = parseCampaignState(await readMarketplaceState("get_campaign", [context.projection.campaignId]));
-  if (state.status !== expectedStatus || (method === "refund_unallocated" && state.availableAtto !== "0")) stateMismatch();
+  if (!genLayerCampaignActionPostcondition(method, state)) stateMismatch();
   const projected = await projectCampaign(context.draft, context.projection, state, finalized.hash, finalized.finalizedAt * 1_000);
-  if (expectedStatus !== "OPEN") await setGenLayerCampaignDraftStatus({ id: context.draft.id, expectedStatus: context.draft.status, status: expectedStatus, nowMs: finalized.finalizedAt * 1_000 });
+  if (state.status !== "OPEN") await setGenLayerCampaignDraftStatus({ id: context.draft.id, expectedStatus: context.draft.status, status: state.status, nowMs: finalized.finalizedAt * 1_000 });
   await projectClaimable(context.draft.brandWallet, finalized.hash, finalized.finalizedAt * 1_000);
   await finalizePrepared(input, finalized, canonicalHash(state));
   return { campaign: (await getGenLayerMarketplaceCampaignDetail({ campaignId: context.draft.id, viewerWallet: input.session.wallet })).campaign, projection: projected };
@@ -1001,11 +1045,45 @@ async function confirmPrepared(
     assertTransactionMatchesPreparedCall({ transaction: finalized, call, actorWallet: actor });
     return finalized;
   } catch (error) {
-    const retryable = error instanceof MarketplaceGenLayerFinalityError && error.retryable;
-    const terminalStatus = terminalMarketplaceTransactionStatus(error);
-    await recordGenLayerTransactionStatus({ preparedId: prepared.preparedId, status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"), lifecycleStatus: null, executionResult: null, errorCode: error instanceof MarketplaceGenLayerFinalityError ? error.code : "GENLAYER_TRANSACTION_MISMATCH", retryAtMs: retryable ? Date.now() + 15_000 : 0, fenceToken: reconciliationFenceToken });
-    if (error instanceof MarketplaceGenLayerFinalityError) throw new ApiProblem(retryable ? 202 : 409, error.code, error.message);
-    throw problem(409, "GENLAYER_TRANSACTION_MISMATCH", error instanceof Error ? error.message : "Transaction mismatch.");
+    let classifiedError = error;
+    let terminalTransaction: FinalizedMarketplaceTransaction | null = null;
+    try {
+      terminalTransaction = exactTerminalMarketplaceTransaction(error, {
+        call,
+        actorWallet: actor,
+        transactionHash: txHash,
+      });
+    } catch (bindingError) {
+      classifiedError = bindingError;
+    }
+    const retryable = classifiedError instanceof MarketplaceGenLayerFinalityError
+      && classifiedError.retryable;
+    const terminalStatus = terminalTransaction
+      ? terminalMarketplaceTransactionStatus(classifiedError)
+      : null;
+    await recordGenLayerTransactionStatus({
+      preparedId: prepared.preparedId,
+      status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
+      lifecycleStatus: terminalTransaction?.lifecycleStatus ?? null,
+      executionResult: terminalTransaction?.executionResult ?? null,
+      errorCode: classifiedError instanceof MarketplaceGenLayerFinalityError
+        ? classifiedError.code
+        : "GENLAYER_TRANSACTION_MISMATCH",
+      retryAtMs: retryable ? Date.now() + 15_000 : 0,
+      fenceToken: reconciliationFenceToken,
+    });
+    if (classifiedError instanceof MarketplaceGenLayerFinalityError) {
+      throw new ApiProblem(
+        retryable ? 202 : 409,
+        classifiedError.code,
+        classifiedError.message,
+      );
+    }
+    throw problem(
+      409,
+      "GENLAYER_TRANSACTION_MISMATCH",
+      classifiedError instanceof Error ? classifiedError.message : "Transaction mismatch.",
+    );
   }
 }
 
@@ -1098,6 +1176,8 @@ function assertOperatorAssignmentBinding(
     assignment.brand !== existing.brandWallet ||
     assignment.creator !== existing.creatorWallet ||
     assignment.contentSource !== existing.contentSource ||
+    assignment.creatorHandle !== existing.creatorHandle ||
+    assignment.creatorExternalUserId !== existing.creatorExternalUserId ||
     assignment.creatorIdentityHash !== existing.creatorIdentityHash ||
     assignment.applicationId !== existing.applicationId ||
     assignment.agreementHash !== existing.agreementHash ||
@@ -1106,6 +1186,20 @@ function assertOperatorAssignmentBinding(
     campaign.brand !== existing.brandWallet ||
     campaign.contentSource !== existing.contentSource ||
     campaign.maxUndeterminedRetries !== existing.maxUndeterminedRetries
+  ) stateMismatch();
+}
+
+function assertResolutionPreparationBinding(
+  existing: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+): void {
+  if (
+    assignment.postId !== existing.postId ||
+    assignment.submissionHash !== existing.submissionHash ||
+    assignment.resolutionRequestId !== existing.resolutionRequestId ||
+    assignment.resolutionRound !== existing.resolutionRound ||
+    assignment.resolutionAttempts !== existing.resolutionAttempts ||
+    assignment.resolutionEligibleAtEpoch !== existing.resolutionEligibleAtEpoch
   ) stateMismatch();
 }
 
@@ -1312,6 +1406,10 @@ function applicationDto(
     submittedAt: assignment?.submittedAtEpoch ? new Date(assignment.submittedAtEpoch * 1_000).toISOString() : null,
     requestId: assignment?.resolutionRequestId ?? null,
     resolutionRound: assignment?.resolutionRound ?? 0,
+    resolutionAttempts: assignment?.resolutionAttempts ?? 0,
+    resolutionEligibleAt: assignment?.resolutionEligibleAtEpoch
+      ? new Date(assignment.resolutionEligibleAtEpoch * 1_000).toISOString()
+      : null,
     resolutionOutcome: assignment?.outcome?.toLowerCase() ?? null,
     resolutionEvidenceHash: assignment?.evidenceHash ?? null,
     resolutionTxHash: assignment?.outcome ? assignment.lastTxHash : null,

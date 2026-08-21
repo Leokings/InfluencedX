@@ -508,7 +508,7 @@ function recoverOrRejectExistingPreparedTransaction(
   throw new ApiProblem(
     409,
     "MARKETPLACE_TRANSACTION_STATE_UNKNOWN",
-    "A prior wallet request may still be pending. Recover its submitted transaction.",
+    "Transaction status unknown. Do not resend. Contact support.",
   );
 }
 

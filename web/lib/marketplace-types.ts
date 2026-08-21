@@ -152,6 +152,8 @@ export type MarketplaceApplicationDto = Readonly<{
   submittedAt: string | null;
   requestId: string | null;
   resolutionRound: number;
+  resolutionAttempts: number;
+  resolutionEligibleAt: string | null;
   resolutionOutcome: "pass" | "fail" | "undetermined" | null;
   resolutionEvidenceHash: string | null;
   resolutionTxHash: string | null;
@@ -170,6 +172,7 @@ export type CampaignDetailResponse = Readonly<{
   campaign: MarketplaceCampaignDto;
   applications: MarketplaceApplicationDto[];
   viewerApplication: MarketplaceApplicationDto | null;
+  canCancel: boolean;
   viewerRecovery: Readonly<{
     preparedId: string;
     txHash: string;

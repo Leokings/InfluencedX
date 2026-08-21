@@ -183,6 +183,62 @@ export type GenLayerAssignmentState = Readonly<{
   closedAtEpoch: number;
 }>;
 
+export function genLayerResolutionAvailability(
+  assignment: Pick<
+    GenLayerAssignmentState,
+    "status" | "resolutionEligibleAtEpoch" | "resolutionAttempts"
+  >,
+  campaign: Pick<GenLayerCampaignState, "maxUndeterminedRetries">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canResolve: boolean;
+  reason: "STATE" | "EARLY" | "RETRIES_EXHAUSTED" | null;
+  unlocksAt: string;
+}> {
+  if (!Number.isSafeInteger(nowEpoch) || nowEpoch < 0) {
+    throw new Error("The resolution eligibility clock is invalid.");
+  }
+  const unlocksAt = new Date(assignment.resolutionEligibleAtEpoch * 1_000).toISOString();
+  if (!["SUBMITTED", "UNDETERMINED"].includes(assignment.status)) {
+    return Object.freeze({ canResolve: false, reason: "STATE", unlocksAt });
+  }
+  if (nowEpoch < assignment.resolutionEligibleAtEpoch) {
+    return Object.freeze({ canResolve: false, reason: "EARLY", unlocksAt });
+  }
+  if (
+    assignment.status === "UNDETERMINED"
+    && assignment.resolutionAttempts >= campaign.maxUndeterminedRetries
+  ) {
+    return Object.freeze({ canResolve: false, reason: "RETRIES_EXHAUSTED", unlocksAt });
+  }
+  return Object.freeze({ canResolve: true, reason: null, unlocksAt });
+}
+
+export function genLayerCampaignCancellationAvailability(
+  campaign: Pick<
+    GenLayerCampaignState,
+    "status" | "applicationDeadlineEpoch" | "reservedAtto"
+  >,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canCancel: boolean;
+  reason: "STATE" | "LATE" | "RESERVED" | null;
+}> {
+  if (!Number.isSafeInteger(nowEpoch) || nowEpoch < 0) {
+    throw new Error("The cancellation eligibility clock is invalid.");
+  }
+  if (campaign.status !== "OPEN") {
+    return Object.freeze({ canCancel: false, reason: "STATE" });
+  }
+  if (nowEpoch >= campaign.applicationDeadlineEpoch) {
+    return Object.freeze({ canCancel: false, reason: "LATE" });
+  }
+  if (BigInt(campaign.reservedAtto) !== 0n) {
+    return Object.freeze({ canCancel: false, reason: "RESERVED" });
+  }
+  return Object.freeze({ canCancel: true, reason: null });
+}
+
 export function normalizeMarketplaceAddress(value: unknown, label: string): string {
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value.trim())) {
     throw new Error(`${label} is not a valid address.`);

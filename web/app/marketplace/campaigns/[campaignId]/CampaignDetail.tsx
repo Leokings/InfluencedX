@@ -158,6 +158,27 @@ function CampaignDetailSession({
     return () => window.clearInterval(timer);
   }, [loadDetail, state]);
 
+  const cancelDeadline = state.phase === "ready" && state.detail.canCancel
+    ? state.detail.campaign.deadline
+    : null;
+  useEffect(() => {
+    if (!cancelDeadline) return;
+    const deadlineMs = Date.parse(cancelDeadline);
+    if (!Number.isFinite(deadlineMs)) return;
+    const refresh = () => {
+      void loadDetail();
+    };
+    if (deadlineMs <= Date.now()) {
+      refresh();
+      return;
+    }
+    const timer = window.setTimeout(
+      refresh,
+      Math.min(2_147_000_000, Math.max(50, deadlineMs - Date.now() + 50)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [cancelDeadline, loadDetail]);
+
   async function executePrepared(input: {
     key: string;
     expectedFunctionName: UserMarketplaceFunctionName;
@@ -388,7 +409,7 @@ function CampaignDetailSession({
     && campaign.fundingStatus === "funded"
     && !isBrand
     && !viewerApplication;
-  const canCancel = isBrand && ["funding", "open"].includes(campaign.status);
+  const canCancel = isBrand && state.detail.canCancel;
   const walletSwitchLocked = action.key !== null || fundingBusy || settlementBusy;
 
   return (
@@ -420,6 +441,8 @@ function CampaignDetailSession({
             <BrandApplications
               applications={applications}
               actionKey={action.key}
+              campaign={campaign}
+              loadedAt={state.loadedAt}
               onSelect={select}
               onResolve={requestResolution}
             />
@@ -532,9 +555,11 @@ function CreatorApplication({ application, campaign, actionKey, loadedAt, onAcce
   );
 }
 
-function BrandApplications({ applications, actionKey, onSelect, onResolve }: {
+function BrandApplications({ applications, actionKey, campaign, loadedAt, onSelect, onResolve }: {
   applications: MarketplaceApplication[];
   actionKey: string | null;
+  campaign: MarketplaceCampaign;
+  loadedAt: number;
   onSelect: (application: MarketplaceApplication) => Promise<void>;
   onResolve: (application: MarketplaceApplication) => Promise<void>;
 }) {
@@ -542,14 +567,18 @@ function BrandApplications({ applications, actionKey, onSelect, onResolve }: {
     <section className="campaign-detail-panel application-list-panel">
       <div className="detail-panel-head"><span>PRIVATE BRAND VIEW</span><strong>{applications.length} APPLICATIONS</strong></div>
       {applications.length === 0 ? <p className="panel-empty">No creator applications have been submitted.</p> : null}
-      {applications.map((application) => (
-        <article className="brand-application" key={application.id}>
-          <div><Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>{application.creatorHandle ?? shortenAddress(application.creatorWallet)}</Link><strong>{genAtomsToDisplay(applicationRateAtoms(application))} TEST GEN</strong></div>
-          <p>{application.pitch}</p>
-          <div><small>{application.status.toUpperCase()} · {formatDate(application.createdAt)}</small>{application.status === "applied" ? <button className="verify-secondary" type="button" disabled={actionKey === `select:${application.id}`} onClick={() => void onSelect(application)}>{actionKey === `select:${application.id}` ? "WAITING FOR FINALITY…" : "SELECT CREATOR"}</button> : null}</div>
-          {application.submissionTxHash ? <button className="verify-secondary" type="button" disabled={actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>REQUEST RESOLUTION</button> : null}
-        </article>
-      ))}
+      {applications.map((application) => {
+        const timing = resolutionTiming(application, campaign, loadedAt);
+        return (
+          <article className="brand-application" key={application.id}>
+            <div><Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>{application.creatorHandle ?? shortenAddress(application.creatorWallet)}</Link><strong>{genAtomsToDisplay(applicationRateAtoms(application))} TEST GEN</strong></div>
+            <p>{application.pitch}</p>
+            <div><small>{application.status.toUpperCase()} · {formatDate(application.createdAt)}</small>{application.status === "applied" ? <button className="verify-secondary" type="button" disabled={actionKey === `select:${application.id}`} onClick={() => void onSelect(application)}>{actionKey === `select:${application.id}` ? "WAITING FOR FINALITY…" : "SELECT CREATOR"}</button> : null}</div>
+            {timing.canResolve ? <button className="verify-secondary" type="button" disabled={actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>REQUEST RESOLUTION</button> : null}
+            {timing.waiting ? <small>RESOLUTION UNLOCKS {formatDate(timing.unlocksAt!)}</small> : null}
+          </article>
+        );
+      })}
     </section>
   );
 }
@@ -728,19 +757,40 @@ function EvidenceSubmissionForm({ application, campaign, busy, onSubmit }: { app
 function ResolutionControl({ application, campaign, actionKey, loadedAt, onResolve, onRefund }: { application: MarketplaceApplication; campaign: MarketplaceCampaign; actionKey: string | null; loadedAt: number; onResolve: (application: MarketplaceApplication) => Promise<void>; onRefund: (application: MarketplaceApplication) => Promise<void> }) {
   const transaction = application.resolutionTxHash ?? application.genlayerTxHash;
   const transactionUrl = studioNetExplorerLink("tx", transaction);
+  const timing = resolutionTiming(application, campaign, loadedAt);
   if (application.resolutionOutcome === "undetermined") {
-    return <div className="resolution-control undetermined"><span>PREVIOUS ROUND</span><strong>UNDETERMINED.</strong><p>No payout or refund was assigned. Retry, or refund after the retry ceiling.</p><ResolutionChecks application={application} />{transactionUrl ? <a href={transactionUrl} target="_blank" rel="noreferrer">VIEW STUDIONET TRANSACTION →</a> : null}<button className="verify-secondary" type="button" disabled={actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>RETRY RESOLUTION</button><button className="recovery-retry" type="button" disabled={actionKey === `refund:${application.id}`} onClick={() => void onRefund(application)}>REFUND AFTER RETRY CEILING</button></div>;
+    return <div className="resolution-control undetermined"><span>PREVIOUS ROUND</span><strong>UNDETERMINED.</strong><p>{timing.retriesExhausted ? "Retries exhausted." : timing.canResolve ? "Retry ready." : timing.waiting ? `Retry unlocks ${formatDate(timing.unlocksAt!)}.` : "Retry unavailable."}</p><ResolutionChecks application={application} />{transactionUrl ? <a href={transactionUrl} target="_blank" rel="noreferrer">VIEW STUDIONET TRANSACTION →</a> : null}{!timing.retriesExhausted ? <button className="verify-secondary" type="button" disabled={!timing.canResolve || actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>RETRY RESOLUTION</button> : null}{timing.retriesExhausted ? <button className="recovery-retry" type="button" disabled={actionKey === `refund:${application.id}`} onClick={() => void onRefund(application)}>REFUND</button> : null}</div>;
   }
   if (application.resolutionOutcome) {
     return <div className="resolution-control confirmed"><span>FINAL RESOLUTION</span><strong>{application.resolutionOutcome.toUpperCase()}</strong><ResolutionChecks application={application} />{transactionUrl ? <a href={transactionUrl} target="_blank" rel="noreferrer">VIEW FINAL TRANSACTION →</a> : null}</div>;
   }
-  if (application.requestId || application.genlayerTxHash) {
-    return <div className="resolution-control confirmed"><span>GENLAYER REQUEST</span><strong>{application.status.replaceAll("_", " ").toUpperCase()}</strong>{application.requestId ? <code>{application.requestId}</code> : null}{application.genlayerTxHash ? <code>{application.genlayerTxHash}</code> : null}</div>;
-  }
   if (!application.submittedAt) return null;
-  const availableAt = new Date(application.submittedAt).getTime() + Number(campaign.retentionSeconds) * 1_000;
-  const ready = Number.isFinite(availableAt) && availableAt <= loadedAt;
-  return <div className="resolution-control"><span>GENLAYER RESOLUTION</span><strong>{ready ? "READY TO RESOLVE." : "RETENTION WINDOW ACTIVE."}</strong><p>{ready ? "Either participant may resolve." : `Unlocks ${formatDate(new Date(availableAt).toISOString())}.`}</p><button className="verify-secondary" type="button" disabled={!ready || actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>{actionKey === `resolve:${application.id}` ? "WAITING FOR FINALITY…" : "REQUEST RESOLUTION"}</button></div>;
+  return <div className="resolution-control"><span>GENLAYER RESOLUTION</span><strong>{timing.canResolve ? "READY." : "RETENTION ACTIVE."}</strong><p>{timing.canResolve ? "Ready to resolve." : timing.waiting ? `Unlocks ${formatDate(timing.unlocksAt!)}.` : "Resolution unavailable."}</p><button className="verify-secondary" type="button" disabled={!timing.canResolve || actionKey === `resolve:${application.id}`} onClick={() => void onResolve(application)}>{actionKey === `resolve:${application.id}` ? "WAITING FOR FINALITY…" : "REQUEST RESOLUTION"}</button></div>;
+}
+
+function resolutionTiming(
+  application: MarketplaceApplication,
+  campaign: MarketplaceCampaign,
+  loadedAt: number,
+): Readonly<{
+  canResolve: boolean;
+  retriesExhausted: boolean;
+  waiting: boolean;
+  unlocksAt: string | null;
+}> {
+  const unlocksAt = application.resolutionEligibleAt;
+  const unlocksAtMs = Date.parse(unlocksAt ?? "");
+  const resolvableState = ["submitted", "undetermined"].includes(application.status);
+  const retriesExhausted = application.status === "undetermined"
+    && application.resolutionAttempts >= campaign.maxUndeterminedRetries;
+  const timingKnown = Number.isFinite(unlocksAtMs);
+  const waiting = resolvableState && !retriesExhausted && timingKnown && unlocksAtMs > loadedAt;
+  return {
+    canResolve: resolvableState && !retriesExhausted && timingKnown && unlocksAtMs <= loadedAt,
+    retriesExhausted,
+    waiting,
+    unlocksAt,
+  };
 }
 
 function ResolutionChecks({ application }: { application: MarketplaceApplication }) {
