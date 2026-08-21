@@ -58,6 +58,7 @@ import {
   marketplaceCalldataAddress,
   marketplaceContractAddress,
   readMarketplaceState,
+  terminalMarketplaceTransactionStatus,
   type FinalizedMarketplaceTransaction,
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
@@ -661,7 +662,43 @@ export async function confirmGenLayerCampaignCancel(input: CampaignActionInput) 
 }
 
 export async function prepareGenLayerRefundUnallocated(input: CampaignActionInput) {
-  return prepareCampaignSimple(input, "REFUND_UNALLOCATED", "refund_unallocated");
+  assertExactJsonKeys(input.body, []);
+  const context = await campaignContext(input.campaignId);
+  assertBrand(context.draft, input.session.wallet);
+  const state = parseCampaignState(
+    await readMarketplaceState("get_campaign", [context.projection.campaignId]),
+  );
+  assertOperatorCampaignBinding(context.projection, state);
+  const availability = genLayerUnallocatedRefundAvailability(state);
+  if (availability.reason === "EARLY") {
+    throw problem(
+      409,
+      "REFUND_EARLY",
+      `Unused GEN unlocks ${availability.unlocksAt}.`,
+    );
+  }
+  if (availability.reason === "EMPTY") {
+    throw problem(409, "NO_UNALLOCATED", "No unused GEN remains.");
+  }
+  const call = callPlan(
+    "refund_unallocated",
+    [context.projection.campaignId],
+    ["string"],
+  );
+  const prepared = await prepareGenLayerMarketplaceTransaction({
+    operation: "REFUND_UNALLOCATED",
+    call,
+    actorWallet: input.session.wallet,
+    localCampaignId: context.draft.id,
+    onchainEntityId: context.projection.campaignId,
+  });
+  return {
+    campaign: (await getGenLayerMarketplaceCampaignDetail({
+      campaignId: context.draft.id,
+      viewerWallet: input.session.wallet,
+    })).campaign,
+    ...preparedMutationFields(prepared),
+  };
 }
 
 export async function confirmGenLayerRefundUnallocated(input: CampaignActionInput) {
@@ -681,7 +718,14 @@ export async function getGenLayerSettlement(input: CampaignActionInput) {
       ? "creator"
       : null;
   if (!role) forbidden();
-  const claimable = parseClaimableState(await readMarketplaceState("get_claimable", [marketplaceCalldataAddress(wallet)]));
+  const [claimable, authoritativeCampaign] = await Promise.all([
+    readMarketplaceState("get_claimable", [marketplaceCalldataAddress(wallet)])
+      .then(parseClaimableState),
+    readMarketplaceState("get_campaign", [context.projection.campaignId])
+      .then(parseCampaignState),
+  ]);
+  assertOperatorCampaignBinding(context.projection, authoritativeCampaign);
+  const refundAvailability = genLayerUnallocatedRefundAvailability(authoritativeCampaign);
   let latestWithdrawal = await findLatestGenLayerWithdrawalProjection(wallet);
   const withdrawalReconciliation = latestWithdrawal &&
     ["EMITTED_UNCONFIRMED", "CONFIRMED"].includes(latestWithdrawal.status)
@@ -709,11 +753,11 @@ export async function getGenLayerSettlement(input: CampaignActionInput) {
       role,
       claimableGen: claimable.claimableAtto,
       claimableAtto: claimable.claimableAtto,
-      unallocatedGen: role === "brand" ? context.projection.availableAtto : "0",
-      unallocatedAtto: role === "brand" ? context.projection.availableAtto : "0",
+      unallocatedGen: role === "brand" ? authoritativeCampaign.availableAtto : "0",
+      unallocatedAtto: role === "brand" ? authoritativeCampaign.availableAtto : "0",
       canClaim: BigInt(claimable.claimableAtto) > 0n,
-      canRefundUnallocated: role === "brand" && BigInt(context.projection.availableAtto) > 0n,
-      selectionDeadline: new Date(context.projection.selectionDeadlineEpoch * 1_000).toISOString(),
+      canRefundUnallocated: role === "brand" && refundAvailability.canRefund,
+      selectionDeadline: refundAvailability.unlocksAt,
       withdrawalId: latestWithdrawal?.withdrawalId ?? null,
       withdrawalStatus: latestWithdrawal?.status ?? null,
       withdrawalDelivered: latestWithdrawal?.status === "CONFIRMED",
@@ -965,10 +1009,32 @@ async function confirmPrepared(
     return finalized;
   } catch (error) {
     const retryable = error instanceof MarketplaceGenLayerFinalityError && error.retryable;
-    await recordGenLayerTransactionStatus({ preparedId: prepared.preparedId, status: retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED", lifecycleStatus: null, executionResult: null, errorCode: error instanceof MarketplaceGenLayerFinalityError ? error.code : "GENLAYER_TRANSACTION_MISMATCH", retryAtMs: retryable ? Date.now() + 15_000 : 0, fenceToken: reconciliationFenceToken });
+    const terminalStatus = terminalMarketplaceTransactionStatus(error);
+    await recordGenLayerTransactionStatus({ preparedId: prepared.preparedId, status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"), lifecycleStatus: null, executionResult: null, errorCode: error instanceof MarketplaceGenLayerFinalityError ? error.code : "GENLAYER_TRANSACTION_MISMATCH", retryAtMs: retryable ? Date.now() + 15_000 : 0, fenceToken: reconciliationFenceToken });
     if (error instanceof MarketplaceGenLayerFinalityError) throw new ApiProblem(retryable ? 202 : 409, error.code, error.message);
     throw problem(409, "GENLAYER_TRANSACTION_MISMATCH", error instanceof Error ? error.message : "Transaction mismatch.");
   }
+}
+
+export function genLayerUnallocatedRefundAvailability(
+  campaign: Pick<GenLayerCampaignState, "availableAtto" | "selectionDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canRefund: boolean;
+  reason: "EARLY" | "EMPTY" | null;
+  unlocksAt: string;
+}> {
+  if (!Number.isSafeInteger(nowEpoch) || nowEpoch < 0) {
+    throw new Error("The refund eligibility clock is invalid.");
+  }
+  const unlocksAt = new Date(campaign.selectionDeadlineEpoch * 1_000).toISOString();
+  if (BigInt(campaign.availableAtto) <= 0n) {
+    return Object.freeze({ canRefund: false, reason: "EMPTY", unlocksAt });
+  }
+  if (nowEpoch < campaign.selectionDeadlineEpoch) {
+    return Object.freeze({ canRefund: false, reason: "EARLY", unlocksAt });
+  }
+  return Object.freeze({ canRefund: true, reason: null, unlocksAt });
 }
 
 async function finalizePrepared(

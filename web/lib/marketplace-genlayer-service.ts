@@ -50,6 +50,7 @@ import {
   loadFinalizedMarketplaceTransaction,
   marketplaceContractAddress,
   readMarketplaceState,
+  terminalMarketplaceTransactionStatus,
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem, assertExactJsonKeys } from "./verification-api.ts";
@@ -644,9 +645,10 @@ async function recordConfirmationFailure(
   fenceToken?: string,
 ): Promise<void> {
   if (error instanceof MarketplaceGenLayerFinalityError) {
+    const terminalStatus = terminalMarketplaceTransactionStatus(error);
     await recordGenLayerTransactionStatus({
       preparedId,
-      status: error.retryable ? "ACCEPTED" : "NETWORK_TERMINATED",
+      status: terminalStatus ?? (error.retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
       lifecycleStatus: null,
       executionResult: null,
       errorCode: error.code,

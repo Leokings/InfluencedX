@@ -1475,6 +1475,22 @@ def test_unallocated_refund_credits_brand(direct_vm, direct_deploy, direct_owner
     assert_global_invariant(contract)
 
 
+def test_unallocated_refund_rejects_before_selection_deadline(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    campaign_id = create_campaign(direct_vm, contract, direct_alice, nonce="campaign-nonce-early-refund")
+    direct_vm.sender = as_address(direct_alice)
+
+    with direct_vm.expect_revert("Selection deadline has not passed"):
+        contract.refund_unallocated(campaign_id)
+
+    campaign = contract.get_campaign(campaign_id)
+    assert campaign["available_atto"] == BUDGET
+    assert campaign["brand_refunded_atto"] == 0
+    assert contract.get_claimable(as_address(direct_alice))["claimable_atto"] == 0
+    assert_campaign_invariant(contract, campaign_id)
+    assert_global_invariant(contract)
+
+
 def test_permissionless_finalize_closes_and_refunds_remaining_budget(direct_vm, direct_deploy, direct_owner, direct_alice, direct_bob):
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
     campaign_id = create_campaign(direct_vm, contract, direct_alice, nonce="campaign-nonce-0003")

@@ -5,6 +5,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   broadcastMarketplaceTransaction,
   isExplicitEip1193UserRejection,
+  isTerminalMarketplaceTransactionError,
   type GenLayerTransactionStage,
 } from "../marketplace/marketplace-transaction";
 import {
@@ -405,6 +406,10 @@ export default function VerifyFlow() {
     } catch (activationError) {
       if (!(readyMayBeRetried && isExplicitEip1193UserRejection(activationError))) {
         activationReadyRetryRef.current = null;
+      }
+      if (isTerminalMarketplaceTransactionError(activationError)) {
+        clearRecovery();
+        setRecovery(null);
       }
       if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
         setError(walletPromptRejected(activationError)

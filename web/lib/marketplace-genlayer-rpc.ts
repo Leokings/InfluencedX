@@ -337,6 +337,15 @@ export class MarketplaceGenLayerFinalityError extends Error {
   }
 }
 
+export function terminalMarketplaceTransactionStatus(
+  error: unknown,
+): "EXECUTION_FAILED" | "NETWORK_TERMINATED" | null {
+  if (!(error instanceof MarketplaceGenLayerFinalityError)) return null;
+  if (error.code === "GENLAYER_EXECUTION_FAILED") return "EXECUTION_FAILED";
+  if (error.code === "GENLAYER_TRANSACTION_TERMINATED") return "NETWORK_TERMINATED";
+  return null;
+}
+
 export function finalizedExecution(transaction: Record<string, unknown>): {
   success: boolean;
   executionResult: string;

@@ -10,9 +10,11 @@ import {
   studioNetExplorerLink,
 } from "../app/marketplace/marketplace-types.ts";
 import {
+  assertMarketplaceTransactionConsensusFinality,
   assertMarketplaceTransactionFinality,
   assertMarketplaceWalletContext,
   hydrateArgs,
+  isTerminalMarketplaceTransactionError,
   validatePlan,
 } from "../app/marketplace/marketplace-transaction.ts";
 import { farcasterCastUrlForHash } from "../app/verify/farcaster-cast-url.ts";
@@ -172,6 +174,24 @@ test("accepts only StudioNet FINALIZED majority agreement with one successful le
     { mode: "leader", execution_result: "SUCCESS", result: { status: "return" } },
     { mode: "leader", execution_result: "SUCCESS", result: { status: "return" } },
   ] } }), /without a successful contract return/);
+
+  const rolledBack = {
+    ...finalized,
+    consensus_data: {
+      leader_receipt: [{ mode: "leader", execution_result: "ERROR", result: { status: "rollback" } }],
+    },
+  };
+  assert.doesNotThrow(() => assertMarketplaceTransactionConsensusFinality(rolledBack));
+  assert.throws(() => assertMarketplaceTransactionFinality(rolledBack), /without a successful contract return/);
+});
+
+test("clears recovery only for exact terminal marketplace outcomes", () => {
+  assert.equal(isTerminalMarketplaceTransactionError({ code: "GENLAYER_EXECUTION_FAILED" }), true);
+  assert.equal(isTerminalMarketplaceTransactionError({ code: "GENLAYER_TRANSACTION_TERMINATED" }), true);
+  assert.equal(isTerminalMarketplaceTransactionError({ code: "GENLAYER_FINALITY_PENDING" }), false);
+  assert.equal(isTerminalMarketplaceTransactionError({ code: "REFUND_EARLY" }), false);
+  assert.equal(isTerminalMarketplaceTransactionError({ code: 4_001 }), false);
+  assert.equal(isTerminalMarketplaceTransactionError(new Error("failed")), false);
 });
 
 test("hydrates prepared u256 and address arguments into GenLayer calldata types", () => {
@@ -471,6 +491,11 @@ test("GenLayer settlement UI confirms contract state before displaying a claim o
   assert.match(source, /GENLAYER BALANCES/);
   assert.match(source, /preparedId: prepared\.preparedId, txHash/);
   assert.match(source, /REFUND UNUSED GEN/);
+  assert.match(source, /REFUND UNLOCKS/);
+  assert.match(source, /unallocated !== "0" && view\.canRefundUnallocated/);
+  assert.match(source, /Math\.min\(2_147_000_000, Math\.max\(15_000, deadlineMs - Date\.now\(\) \+ 250\)\)/);
+  assert.match(source, /isTerminalMarketplaceTransactionError\(settlementError\)[\s\S]*localStorage\.removeItem\(recoveryKey\)/);
+  assert.match(source, /Promise\.allSettled\(\[load\(\), onUpdated\(\)\]\)/);
   assert.match(source, /REQUEST GEN WITHDRAWAL/);
   assert.match(source, /EXECUTE GEN WITHDRAWAL/);
   assert.match(source, /EMITTED_UNCONFIRMED/);
@@ -478,6 +503,17 @@ test("GenLayer settlement UI confirms contract state before displaying a claim o
   assert.match(source, /studionet-settlement/);
   assert.doesNotMatch(source, /set(?:Campaign|Application).*paid|set(?:Campaign|Application).*refunded/i);
   assert.match(source, /\["RESTORED_FAILED", "CONFIRMED"\]\.includes\(view\.withdrawalStatus\)/);
+});
+
+test("terminal transaction cleanup is actor-scoped and followed by authoritative reload", async () => {
+  const [detail, funding, verification] = await Promise.all([
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/verify/VerifyFlow.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(detail, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*clearRecovery\(activeActor, input\.key\)[\s\S]*await loadDetail\(\)/);
+  assert.match(funding, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*localStorage\.removeItem\(recoveryKey\)[\s\S]*setSubmitted\(null\)[\s\S]*await onFunded\(\)/);
+  assert.match(verification, /isTerminalMarketplaceTransactionError\(activationError\)[\s\S]*clearRecovery\(\)[\s\S]*setRecovery\(null\)/);
 });
 
 test("UNDETERMINED exposes bounded retry and refund paths", async () => {

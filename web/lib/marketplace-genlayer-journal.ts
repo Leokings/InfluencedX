@@ -25,6 +25,7 @@ import {
   MarketplaceGenLayerFinalityError,
   assertTransactionMatchesPreparedCall,
   loadFinalizedMarketplaceTransaction,
+  terminalMarketplaceTransactionStatus,
 } from "./marketplace-genlayer-rpc.ts";
 import { confirmGenLayerCampaignFunding } from "./marketplace-genlayer-service.ts";
 import { ApiProblem } from "./verification-api.ts";
@@ -67,6 +68,7 @@ export async function runGenLayerJournalReconciliationBatch(options: {
   let claimed = 0;
   let finalized = 0;
   let retryScheduled = 0;
+  let terminal = 0;
   let manual = 0;
 
   while (claimed < limit) {
@@ -105,9 +107,10 @@ export async function runGenLayerJournalReconciliationBatch(options: {
         continue;
       }
       const retryable = journalErrorIsRetryable(error);
+      const terminalStatus = terminalMarketplaceTransactionStatus(error);
       const recorded = await (dependencies.record ?? recordGenLayerTransactionStatus)({
         preparedId: row.preparedId,
-        status: retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED",
+        status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
         lifecycleStatus: null,
         executionResult: null,
         errorCode: journalErrorCode(error),
@@ -118,6 +121,7 @@ export async function runGenLayerJournalReconciliationBatch(options: {
         fenceToken: row.fenceToken,
       });
       if (recorded?.status === "FINALIZED") finalized += 1;
+      else if (recorded?.status === "EXECUTION_FAILED" || recorded?.status === "NETWORK_TERMINATED") terminal += 1;
       else if (retryable) retryScheduled += 1;
       else manual += 1;
     }
@@ -127,6 +131,7 @@ export async function runGenLayerJournalReconciliationBatch(options: {
     claimed,
     finalized,
     retryScheduled,
+    terminal,
     manual,
     capped: claimed === limit,
   });

@@ -49,6 +49,7 @@ import {
   marketplaceCalldataAddress,
   marketplaceContractAddress,
   readMarketplaceState,
+  terminalMarketplaceTransactionStatus,
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem } from "./verification-api.ts";
@@ -805,9 +806,10 @@ async function confirmLegacyGenLayerCreatorActivation(input: {
     assertTransactionMatchesPreparedCall({ transaction: finalized, call, actorWallet: row.wallet });
   } catch (error) {
     const retryable = error instanceof MarketplaceGenLayerFinalityError && error.retryable;
+    const terminalStatus = terminalMarketplaceTransactionStatus(error);
     await recordGenLayerTransactionStatus({
       preparedId,
-      status: retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED",
+      status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
       lifecycleStatus: null,
       executionResult: null,
       errorCode: error instanceof MarketplaceGenLayerFinalityError ? error.code : "GENLAYER_TRANSACTION_MISMATCH",
@@ -1023,9 +1025,10 @@ async function confirmGenLayerIdentityBundleActivation(input: {
   } catch (error) {
     const retryable =
       error instanceof MarketplaceGenLayerFinalityError && error.retryable;
+    const terminalStatus = terminalMarketplaceTransactionStatus(error);
     await recordGenLayerTransactionStatus({
       preparedId,
-      status: retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED",
+      status: terminalStatus ?? (retryable ? "ACCEPTED" : "RECONCILIATION_REQUIRED"),
       lifecycleStatus: null,
       executionResult: null,
       errorCode:

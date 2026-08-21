@@ -46,12 +46,25 @@ export type UserMarketplaceFunctionName = keyof typeof USER_MARKETPLACE_CALLS;
 
 export type GenLayerTransactionStage = "wallet" | "submitted" | "finality" | "finalized";
 
+const TERMINAL_MARKETPLACE_TRANSACTION_CODES = new Set([
+  "GENLAYER_EXECUTION_FAILED",
+  "GENLAYER_TRANSACTION_TERMINATED",
+]);
+
 export function isExplicitEip1193UserRejection(error: unknown): boolean {
   return typeof error === "object"
     && error !== null
     && "code" in error
     && typeof error.code === "number"
     && error.code === 4_001;
+}
+
+export function isTerminalMarketplaceTransactionError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && typeof error.code === "string"
+    && TERMINAL_MARKETPLACE_TRANSACTION_CODES.has(error.code);
 }
 
 export async function broadcastMarketplaceTransaction(
@@ -109,7 +122,11 @@ export async function broadcastMarketplaceTransaction(
     interval: 3_000,
     retries: 120,
   });
-  assertMarketplaceTransactionFinality(receipt, types.ExecutionResult.FINISHED_WITH_RETURN);
+  // The backend owns execution-result validation and durable terminal
+  // classification. Reaching consensus finality here lets the exact submitted
+  // hash continue to confirmation even when the contract intentionally rolls
+  // back, so the journal cannot remain stuck in recovery forever.
+  assertMarketplaceTransactionConsensusFinality(receipt);
   options.onStage?.("finalized");
   return hash;
 }
@@ -226,15 +243,8 @@ export function assertMarketplaceTransactionFinality(
   receipt: unknown,
   successfulExecutionName = "FINISHED_WITH_RETURN",
 ): void {
+  assertMarketplaceTransactionConsensusFinality(receipt);
   const record = asRecord(receipt);
-  const status = record.status_name ?? record.statusName;
-  if (status !== "FINALIZED") {
-    throw new Error("The StudioNet transaction did not reach validator finality.");
-  }
-  const consensusResult = record.result_name ?? record.resultName;
-  if (consensusResult !== "MAJORITY_AGREE") {
-    throw new Error("The StudioNet transaction did not finalize with majority agreement.");
-  }
 
   // genlayer-js 1.1.x simplifies StudioNet receipts into the RPC's snake_case
   // shape. The authoritative execution result lives in the leader receipt;
@@ -265,6 +275,18 @@ export function assertMarketplaceTransactionFinality(
   });
   if (!leaderSucceeded) {
     throw new Error("The StudioNet transaction finalized without a successful contract return.");
+  }
+}
+
+export function assertMarketplaceTransactionConsensusFinality(receipt: unknown): void {
+  const record = asRecord(receipt);
+  const status = record.status_name ?? record.statusName;
+  if (status !== "FINALIZED") {
+    throw new Error("The StudioNet transaction did not reach validator finality.");
+  }
+  const consensusResult = record.result_name ?? record.resultName;
+  if (consensusResult !== "MAJORITY_AGREE") {
+    throw new Error("The StudioNet transaction did not finalize with majority agreement.");
   }
 }
 

@@ -9,7 +9,10 @@ import {
   isExplicitEip1193UserRejection,
 } from "../app/marketplace/marketplace-transaction.ts";
 import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
-import { nextGenLayerResolutionProgression } from "../lib/marketplace-genlayer-actions.ts";
+import {
+  genLayerUnallocatedRefundAvailability,
+  nextGenLayerResolutionProgression,
+} from "../lib/marketplace-genlayer-actions.ts";
 import {
   assertFinalizedOwnershipTiming,
   projectIdentityActiveAt,
@@ -84,6 +87,7 @@ import {
   loadFinalizedMarketplaceTransaction,
   marketplaceRpcContractAddress,
   MarketplaceGenLayerFinalityError,
+  terminalMarketplaceTransactionStatus,
   type FinalizedMarketplaceTransaction,
   type MarketplaceGenLayerCall,
 } from "../lib/marketplace-genlayer-rpc.ts";
@@ -1011,6 +1015,7 @@ test("direct-write journal repair is fenced, bounded, and finalizes before ackno
     claimed: 1,
     finalized: 1,
     retryScheduled: 0,
+    terminal: 0,
     manual: 0,
     capped: false,
   });
@@ -1063,6 +1068,53 @@ test("journal retry writes retain the exact claim fence", async () => {
     executionResult: null,
     errorCode: "GENLAYER_FINALITY_PENDING",
     retryAtMs: 1_800_000_060_000,
+    nowMs: 1_800_000_000_000,
+    fenceToken: row.fenceToken,
+  }]);
+});
+
+test("finalized execution failures leave reconciliation and permit a new intent attempt", async () => {
+  const row = journalClaim();
+  const recorded: unknown[] = [];
+  let claimed = false;
+  const result = await runGenLayerJournalReconciliationBatch({
+    nowMs: 1_800_000_000_000,
+    limit: 1,
+    dependencies: {
+      claim: async () => {
+        if (claimed) return null;
+        claimed = true;
+        return row;
+      },
+      dispatch: async () => {
+        throw new MarketplaceGenLayerFinalityError(
+          "GENLAYER_EXECUTION_FAILED",
+          "rolled back",
+          false,
+        );
+      },
+      find: async () => row,
+      record: async (input) => {
+        recorded.push(input);
+        return {
+          ...row,
+          status: "EXECUTION_FAILED",
+          fenceToken: null,
+          fenceExpiresAt: null,
+        };
+      },
+    },
+  });
+  assert.equal(result.terminal, 1);
+  assert.equal(result.retryScheduled, 0);
+  assert.equal(result.manual, 0);
+  assert.deepEqual(recorded, [{
+    preparedId: row.preparedId,
+    status: "EXECUTION_FAILED",
+    lifecycleStatus: null,
+    executionResult: null,
+    errorCode: "GENLAYER_EXECUTION_FAILED",
+    retryAtMs: 0,
     nowMs: 1_800_000_000_000,
     fenceToken: row.fenceToken,
   }]);
@@ -1379,6 +1431,61 @@ test("StudioNet confirmation requires majority agreement and one successful lead
     }).success,
     false,
   );
+});
+
+test("unused GEN refund eligibility opens exactly at the authoritative selection deadline", () => {
+  const campaign = {
+    availableAtto: "3000000000000000000",
+    selectionDeadlineEpoch: 1_800_000_600,
+  };
+  assert.deepEqual(
+    genLayerUnallocatedRefundAvailability(campaign, 1_800_000_599),
+    {
+      canRefund: false,
+      reason: "EARLY",
+      unlocksAt: "2027-01-15T08:10:00.000Z",
+    },
+  );
+  assert.equal(
+    genLayerUnallocatedRefundAvailability(campaign, 1_800_000_600).canRefund,
+    true,
+  );
+  assert.deepEqual(
+    genLayerUnallocatedRefundAvailability({ ...campaign, availableAtto: "0" }, 1_800_000_600),
+    {
+      canRefund: false,
+      reason: "EMPTY",
+      unlocksAt: "2027-01-15T08:10:00.000Z",
+    },
+  );
+});
+
+test("only known finalized terminal outcomes leave the reconciliation fence", () => {
+  assert.equal(
+    terminalMarketplaceTransactionStatus(new MarketplaceGenLayerFinalityError(
+      "GENLAYER_EXECUTION_FAILED",
+      "rolled back",
+      false,
+    )),
+    "EXECUTION_FAILED",
+  );
+  assert.equal(
+    terminalMarketplaceTransactionStatus(new MarketplaceGenLayerFinalityError(
+      "GENLAYER_TRANSACTION_TERMINATED",
+      "terminated",
+      false,
+    )),
+    "NETWORK_TERMINATED",
+  );
+  assert.equal(
+    terminalMarketplaceTransactionStatus(new MarketplaceGenLayerFinalityError(
+      "GENLAYER_FINALITY_PENDING",
+      "pending",
+      true,
+    )),
+    null,
+  );
+  assert.equal(terminalMarketplaceTransactionStatus(new Error("mismatch")), null);
 });
 
 test("live-shaped StudioNet snake tx_data uses the immutable execution timestamp", async () => {
@@ -1804,6 +1911,32 @@ test("user marketplace hashes bind immediately and applicant settlement does not
   assert.match(detail, /viewerRecovery: boundRecovery/);
 });
 
+test("unused GEN refund preparation and settlement use authoritative deadline state", async () => {
+  const actions = await readFile(
+    new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
+    "utf8",
+  );
+  const prepareStart = actions.indexOf("export async function prepareGenLayerRefundUnallocated");
+  const prepareEnd = actions.indexOf("export async function confirmGenLayerRefundUnallocated", prepareStart);
+  const prepare = actions.slice(prepareStart, prepareEnd);
+  assert.match(prepare, /readMarketplaceState\("get_campaign"/);
+  assert.match(prepare, /assertOperatorCampaignBinding\(context\.projection, state\)/);
+  assert.match(prepare, /genLayerUnallocatedRefundAvailability\(state\)/);
+  assert.match(prepare, /"REFUND_EARLY"/);
+  assert.match(prepare, /"NO_UNALLOCATED"/);
+  assert.ok(
+    prepare.indexOf("genLayerUnallocatedRefundAvailability(state)")
+      < prepare.indexOf("prepareGenLayerMarketplaceTransaction"),
+  );
+
+  const settlementStart = actions.indexOf("export async function getGenLayerSettlement");
+  const settlementEnd = actions.indexOf("export async function prepareGenLayerWithdrawal", settlementStart);
+  const settlement = actions.slice(settlementStart, settlementEnd);
+  assert.match(settlement, /authoritativeCampaign/);
+  assert.match(settlement, /unallocatedAtto: role === "brand" \? authoritativeCampaign\.availableAtto/);
+  assert.match(settlement, /canRefundUnallocated: role === "brand" && refundAvailability\.canRefund/);
+});
+
 test("apply, select, accept, and submit preflight the exact active X plus Farcaster bundle", async () => {
   const actions = await readFile(
     new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
@@ -1856,7 +1989,7 @@ test("every reusable submitted marketplace journal returns confirm-only recovery
   assert.doesNotMatch(recoveryBranch, /transaction: prepared\.call/);
   assert.match(fields, /txHash: prepared\.recovery\.transactionHash/);
   assert.match(fields, /transaction: prepared\.call[\s\S]*recovery: null/);
-  assert.equal(actions.match(/preparedMutationFields\(prepared\)/g)?.length, 4);
+  assert.equal(actions.match(/preparedMutationFields\(prepared\)/g)?.length, 5);
 
   const fundingStart = service.indexOf("export async function prepareGenLayerCampaignFunding");
   const fundingEnd = service.indexOf("export async function confirmGenLayerCampaignFunding", fundingStart);

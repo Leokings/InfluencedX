@@ -12,6 +12,7 @@ import {
 import {
   broadcastMarketplaceTransaction,
   isExplicitEip1193UserRejection,
+  isTerminalMarketplaceTransactionError,
   type GenLayerTransactionStage,
   type UserMarketplaceFunctionName,
 } from "../../marketplace-transaction";
@@ -244,6 +245,10 @@ function CampaignDetailSession({
     } catch (error) {
       if (!isExplicitEip1193UserRejection(error)) {
         delete readyRetries.current[input.key];
+      }
+      if (activeActor && isTerminalMarketplaceTransactionError(error)) {
+        clearRecovery(activeActor, input.key);
+        await loadDetail();
       }
       setAction({ key: null, notice: null, error: marketplaceErrorMessage(error) });
     }
@@ -574,9 +579,25 @@ function SettlementControls({ actor, campaign, wallet, onUpdated, onBusyChange }
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [load]);
 
+  useEffect(() => {
+    if (
+      settlement?.role !== "brand"
+      || settlement.unallocatedAtto === "0"
+      || settlement.canRefundUnallocated
+    ) return;
+    const deadlineMs = new Date(settlement.selectionDeadline).getTime();
+    if (!Number.isFinite(deadlineMs)) return;
+    const timer = window.setTimeout(
+      () => void load(),
+      Math.min(2_147_000_000, Math.max(15_000, deadlineMs - Date.now() + 250)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [load, settlement]);
+
   useEffect(() => () => onBusyChange(false), [onBusyChange]);
 
   async function execute(kind: SettlementActionKind) {
+    const recoveryKey = settlementRecoveryStorageKey(campaign.id, actor, kind);
     onBusyChange(true);
     setPhase(kind === "claim" ? "claiming" : kind === "execute-claim" ? "executing" : "refunding"); setMessage(null); setError(null);
     try {
@@ -590,7 +611,6 @@ function SettlementControls({ actor, campaign, wallet, onUpdated, onBusyChange }
         : kind === "execute-claim"
           ? `${basePath}/claim/execute`
           : `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/refund-unallocated`;
-      const recoveryKey = settlementRecoveryStorageKey(campaign.id, actor, kind);
       const recovery = readRecovery(recoveryKey);
       if (recovery) {
         setMessage("Recovering finalized transaction…");
@@ -647,6 +667,10 @@ function SettlementControls({ actor, campaign, wallet, onUpdated, onBusyChange }
       if (!isExplicitEip1193UserRejection(settlementError)) {
         delete readyRetries.current[kind];
       }
+      if (isTerminalMarketplaceTransactionError(settlementError)) {
+        window.localStorage.removeItem(recoveryKey);
+        await Promise.allSettled([load(), onUpdated()]);
+      }
       setError(marketplaceErrorMessage(settlementError));
     }
     finally { setPhase("idle"); onBusyChange(false); }
@@ -661,7 +685,8 @@ function SettlementControls({ actor, campaign, wallet, onUpdated, onBusyChange }
       <span>GENLAYER BALANCES</span><strong>NATIVE GEN</strong>
       {view ? <dl><div><dt>CLAIMABLE</dt><dd>{genAtomsToDisplay(claimable)} TEST GEN</dd></div>{view.role === "brand" ? <div><dt>UNUSED BUDGET</dt><dd>{genAtomsToDisplay(unallocated)} TEST GEN</dd></div> : null}{view.withdrawalStatus ? <div><dt>WITHDRAWAL</dt><dd>{view.withdrawalStatus.replaceAll("_", " ")}</dd></div> : null}</dl> : null}
       {phase === "loading" ? <p>READING GENLAYER STATE…</p> : null}
-      {view?.role === "brand" && unallocated !== "0" ? <button className="verify-secondary" type="button" disabled={busy || !view.canRefundUnallocated} onClick={() => void execute("refund-unallocated")}>{phase === "refunding" ? "WAITING FOR FINALITY…" : "REFUND UNUSED GEN"}</button> : null}
+      {view?.role === "brand" && unallocated !== "0" && view.canRefundUnallocated ? <button className="verify-secondary" type="button" disabled={busy} onClick={() => void execute("refund-unallocated")}>{phase === "refunding" ? "WAITING FOR FINALITY…" : "REFUND UNUSED GEN"}</button> : null}
+      {view?.role === "brand" && unallocated !== "0" && !view.canRefundUnallocated ? <p className="form-message">REFUND UNLOCKS {formatDate(view.selectionDeadline).toUpperCase()}</p> : null}
       {view?.withdrawalStatus === "PENDING" ? <button className="button" type="button" disabled={busy} onClick={() => void execute("execute-claim")}>{phase === "executing" ? "WAITING FOR FINALITY…" : "EXECUTE GEN WITHDRAWAL →"}</button> : null}
       {view?.withdrawalStatus === "EMITTED_UNCONFIRMED" ? <p className="form-message">TRANSFER EMITTED · AWAITING DELIVERY CONFIRMATION · NOT YET PAID</p> : null}
       {view?.withdrawalStatus === "CONFIRMED" ? <p className="form-message success">WITHDRAWAL DELIVERY CONFIRMED</p> : null}

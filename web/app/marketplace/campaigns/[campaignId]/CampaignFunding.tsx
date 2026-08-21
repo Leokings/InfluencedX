@@ -10,6 +10,7 @@ import {
 import {
   broadcastMarketplaceTransaction,
   isExplicitEip1193UserRejection,
+  isTerminalMarketplaceTransactionError,
   type GenLayerTransactionStage,
 } from "../../marketplace-transaction";
 import {
@@ -124,6 +125,11 @@ export function CampaignFunding({ actor, campaign, onFunded, onBusyChange }: { a
     } catch (error) {
       if (!isExplicitEip1193UserRejection(error)) {
         readyRetry.current = null;
+      }
+      if (isTerminalMarketplaceTransactionError(error)) {
+        window.localStorage.removeItem(recoveryKey);
+        setSubmitted(null);
+        await onFunded();
       }
       setPhase("error");
       setMessage(marketplaceErrorMessage(error));
