@@ -53,12 +53,11 @@ export function MarketplaceDashboard() {
         <div>
           <p className="eyebrow"><span /> WALLET WORKSPACE / GENLAYER</p>
           <h1>YOUR<br /><em>ACTIVITY.</em></h1>
-          <p>Track campaigns, applications, finalized outcomes, and native GEN available to claim.</p>
         </div>
         <aside className="campaign-terms-card">
           <div><span>WALLET</span><strong>{shortenAddress(wallet.address)}</strong></div>
           <div><span>CLAIMABLE</span><strong>{data ? genAtomsToDisplay(data.claimableAtto ?? data.claimableGen ?? "0") : "—"} <small>GEN</small></strong></div>
-          {data?.withdrawalStatus ? <div><span>WITHDRAWAL</span><strong>{data.withdrawalStatus.replaceAll("_", " ")}</strong><small>{data.withdrawalStatus === "CONFIRMED" ? "DELIVERY CONFIRMED" : "NOT YET CONFIRMED AS PAID"}</small></div> : null}
+          {data?.withdrawalStatus ? <div><span>WITHDRAWAL</span><strong>{data.withdrawalStatus.replaceAll("_", " ")}</strong>{data.withdrawalStatus !== "CONFIRMED" ? <small>NOT YET PAID</small> : null}</div> : null}
           <div><span>BRAND CAMPAIGNS</span><strong>{data?.brandCampaigns.length ?? "—"}</strong></div>
           <div><span>CREATOR APPLICATIONS</span><strong>{data?.creatorApplications.length ?? "—"}</strong></div>
         </aside>
@@ -67,7 +66,7 @@ export function MarketplaceDashboard() {
       {phase !== "ready" ? (
         <div className="campaign-detail-panel dashboard-connect-panel">
           <h2>{wallet.address ? "LOAD YOUR PRIVATE VIEW" : "CONNECT YOUR WALLET"}</h2>
-          <p>The dashboard is scoped to the wallet’s authenticated session. Other creators’ pitches remain private.</p>
+          <p>Private pitches stay visible only to the brand.</p>
           <button className="button" type="button" disabled={phase === "loading" || wallet.authenticating} onClick={() => void load()}>
             {phase === "loading" || wallet.authenticating ? "LOADING…" : "CONNECT + LOAD DASHBOARD →"}
           </button>

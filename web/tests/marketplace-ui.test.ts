@@ -57,7 +57,7 @@ test("uses the live StudioNet explorer route shapes", () => {
 
 test("adds wallet recovery guidance only to wallet-session conflicts", () => {
   assert.equal(marketplaceErrorMessage(new MarketplaceApiError(409, "Deadline passed.", "INVALID_MARKETPLACE_STATE")), "Deadline passed.");
-  assert.match(marketplaceErrorMessage(new MarketplaceApiError(409, "Wallet mismatch.", "SESSION_WALLET_MISMATCH")), /Sign out, then reconnect/);
+  assert.equal(marketplaceErrorMessage(new MarketplaceApiError(409, "Wallet mismatch.", "SESSION_WALLET_MISMATCH")), "Wallet changed. Sign out and reconnect.");
 });
 
 test("rejects a wrong active account and a non-StudioNet wallet chain", () => {
@@ -318,7 +318,7 @@ test("resolution UI shows deterministic contract checks without a generated narr
   assert.match(source, /CONTENT ID MATCH/);
   assert.match(source, /DISCLOSURE PRESENT/);
   assert.match(source, /SEMANTIC PASS/);
-  assert.match(source, /no generated narrative is shown/i);
+  assert.doesNotMatch(source, /generated narrative/i);
   assert.doesNotMatch(source, /application\.(?:reasoning|narrative)/);
 });
 

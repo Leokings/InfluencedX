@@ -107,10 +107,10 @@ type ActivationRecovery = BoundIdentityBundleRecovery;
 type ApiErrorBody = { error?: string | { code?: string; message?: string }; code?: string; message?: string };
 
 const ACTIVE_STEPS = [
-  ["01", "CONNECT"],
-  ["02", "ADD ACCOUNTS"],
-  ["03", "POST BOTH"],
-  ["04", "VERIFY BOTH"],
+  ["01", "WALLET"],
+  ["02", "ACCOUNTS"],
+  ["03", "POSTS"],
+  ["04", "VERIFY"],
 ] as const;
 
 export default function VerifyFlow() {
@@ -307,7 +307,7 @@ export default function VerifyFlow() {
       setPostUrl("");
       setFarcasterCastUrl("");
     } catch (challengeError) {
-      setError(readError(challengeError, "Could not create the challenges."));
+      setError(readError(challengeError, "Could not create challenges."));
     } finally { setBusy(null); }
   }
 
@@ -388,7 +388,7 @@ export default function VerifyFlow() {
     setRequest(confirmed.request);
     setRecovery(null); clearRecovery();
     if (!("bundle" in confirmed)) {
-      setNotice("Previous run recovered. Add both accounts.");
+      setNotice("Recovered. Add both accounts.");
       return;
     }
     const result = { ...confirmed.bundle, transactionHash: value.txHash };
@@ -398,7 +398,7 @@ export default function VerifyFlow() {
       if (result.retryable) {
         return;
       }
-      throw new Error("Undetermined. Start again.");
+      throw new Error("Could not verify. Start again.");
     }
     if (result.outcome !== "VERIFIED" || !confirmed.profiles.x?.active || !confirmed.profiles.farcaster?.active) {
       throw new Error("Proof rejected. Start again.");
@@ -474,7 +474,7 @@ export default function VerifyFlow() {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      setNotice(`${source === "X" ? "X" : "Farcaster"} text copied.`);
+      setNotice(`${source === "X" ? "X" : "Farcaster"} copied.`);
     } catch {
       setError("Copy failed. Select the text manually.");
     }
@@ -500,7 +500,7 @@ export default function VerifyFlow() {
 
       <section className="verify-layout">
         <aside className="verify-overview">
-          <Link className="verify-back" href="/">← MARKET</Link><p className="eyebrow"><span /> CREATOR IDENTITY</p><h1>VERIFY<br /><em>BOTH.</em></h1>
+          <Link className="verify-back" href="/">← MARKET</Link><p className="eyebrow"><span /> IDENTITY</p><h1>VERIFY<br /><em>BOTH.</em></h1>
           <p className="verify-lead">Link X + Farcaster to one wallet.</p>
           <ol className="verify-progress" aria-label="Verification progress">{progress.map((item) => <li className={item.state} aria-current={item.state === "active" ? "step" : undefined} key={item.number}><strong>{item.number}</strong><span>{item.label}</span><em>{item.state === "complete" ? "DONE" : item.state === "active" ? "NOW" : "NEXT"}</em></li>)}</ol>
         </aside>
@@ -521,7 +521,6 @@ export default function VerifyFlow() {
 
           {activeStep === 1 ? (
             <div className="verify-card">
-              <p className="card-index">01 / WALLET</p>
               <h2>{expired || terminalOutcome ? "START AGAIN" : walletChallenge ? "SIGN MESSAGE" : "CONNECT WALLET"}</h2>
               {effectiveWallet ? <div className="connected-wallet"><span>WALLET</span><strong title={effectiveWallet}>{shorten(effectiveWallet)}</strong><small>GENLAYER STUDIONET</small></div> : null}
               <button className="button verify-primary" type="button" disabled={Boolean(busy)} onClick={walletChallenge ? signWalletChallenge : connectWallet}>{busy === "connect" ? "CONNECTING…" : busy === "wallet-sign" ? "SIGNING…" : walletChallenge ? "SIGN →" : "CONNECT →"}</button>
@@ -530,21 +529,19 @@ export default function VerifyFlow() {
 
           {activeStep === 2 ? (
             <form className="verify-card" onSubmit={createIdentityChallenges}>
-              <p className="card-index">02 / ACCOUNTS</p>
-              <h2>ADD BOTH.</h2>
+              <h2>ADD ACCOUNTS.</h2>
               <div className="identity-grid">
                 <label className="verify-field"><span>X HANDLE</span><input autoComplete="off" maxLength={16} name="handle" onChange={(event) => setHandle(event.target.value)} placeholder="@handle" required value={handle} /></label>
                 <label className="verify-field"><span>FARCASTER USERNAME</span><input autoComplete="off" maxLength={16} name="farcasterUsername" onChange={(event) => setFarcasterUsername(event.target.value)} pattern="[a-z0-9][a-z0-9-]{0,15}" placeholder="username" required value={farcasterUsername} /></label>
               </div>
               <label className="consent-row"><input checked={consent} onChange={(event) => setConsent(event.target.checked)} type="checkbox" /><span>Verify these public accounts.</span></label>
-              <button className="button verify-primary" type="submit" disabled={!consent || Boolean(busy)}>{busy === "identity-challenge" ? "CREATING…" : "CREATE BOTH CHALLENGES →"}</button>
+              <button className="button verify-primary" type="submit" disabled={!consent || Boolean(busy)}>{busy === "identity-challenge" ? "CREATING…" : "CREATE CHALLENGES →"}</button>
             </form>
           ) : null}
 
           {activeStep === 3 ? (
             <form className="verify-card" onSubmit={activateBundle}>
-              <p className="card-index">03 / PUBLIC POSTS</p>
-              <h2>{retryableUndetermined ? "RETRY BOTH." : "POST BOTH."}</h2>
+              <h2>{retryableUndetermined ? "RETRY." : "POST BOTH."}</h2>
               <p>{retryableUndetermined ? "Use the same posts." : `Post both before ${epochLabel(challengeExpiry)}.`}</p>
               <div className="bundle-proofs">
                 <ChallengeProof source="X" account={`@${request?.handle ?? handle}`} text={request?.tweetText ?? ""} composeUrl={`https://x.com/intent/post?text=${encodeURIComponent(request?.tweetText ?? "")}`} onCopy={() => void copyChallengeText("X")} />
@@ -561,8 +558,7 @@ export default function VerifyFlow() {
 
           {activeStep === 4 ? (
             <div className="verify-card">
-              <p className="card-index">04 / FINALITY</p>
-              <h2>{bundleActive ? "BOTH VERIFIED." : "FINISH VERIFYING."}</h2>
+              <h2>{bundleActive ? "VERIFIED." : "FINALIZING."}</h2>
               <div className="resolution-board">{resultRows.map(([label, rowState, detail]) => <div className={rowState} key={label}><span><i /> {label}</span><strong>{detail}</strong></div>)}</div>
               {!bundleActive ? <button className="button verify-primary" type="button" disabled={Boolean(busy)} onClick={() => void activateBundle()}>{busy === "activation" ? "CHECKING…" : "CHECK TRANSACTION →"}</button> : <Link className="button verify-primary" href={`/marketplace/creators/${encodeURIComponent(effectiveWallet ?? "")}`}>VIEW PROFILE →</Link>}
               {activationTxUrl ? <div className="chain-proof-details"><div><span>TRANSACTION</span><a href={activationTxUrl} rel="noreferrer" target="_blank">{shorten(activationTxHash, 10, 8)} ↗</a></div></div> : null}
@@ -735,7 +731,7 @@ function errorMessage(body: ApiErrorBody, status: number, fallback: string): str
     GENLAYER_FINALITY_PENDING: "Still finalizing.",
     GENLAYER_TRANSACTION_TERMINATED: "Transaction failed. Start again.",
     GENLAYER_EXECUTION_FAILED: "Transaction failed. Start again.",
-    GENLAYER_TRANSACTION_MISMATCH: "Transaction mismatch.",
+    GENLAYER_TRANSACTION_MISMATCH: "Transaction mismatch. Start again.",
     VERIFICATION_TRANSACTION_PENDING: "Finish the transaction first.",
   };
   if (code && messages[code]) return messages[code];

@@ -10,25 +10,24 @@ export default function Home() {
 
       <section className="proof-section" id="proof">
         <div className="proof-intro">
-          <p className="eyebrow"><span /> PUBLIC EVIDENCE / PRIVATE KEYS STAY PRIVATE</p>
+          <p className="eyebrow"><span /> HOW IT WORKS</p>
           <h2>WORK.<br /><em>RESOLVED.</em></h2>
           <p>
-            A public X post or Farcaster cast, campaign terms, and deadlines form a resolution request.
-            GenLayer evaluates the public evidence and atomically credits the creator or refunds the brand.
+            Submit an X post or Farcaster cast. GenLayer settles the payment or refund.
           </p>
           <Link className="button" href="/verify">VERIFY X + FARCASTER →</Link>
         </div>
 
         <div className="proof-board">
           <div className="proof-board-head">
-            <span>CAMPAIGN RESOLUTION PIPELINE</span>
-            <span>NO RESULT IMPLIED</span>
+            <span>CAMPAIGN FLOW</span>
+            <span>4 STEPS</span>
           </div>
           {[
-            ["01", "CAMPAIGN TERMS", "HASHED BRIEF + DELIVERABLES", "REQUIRED"],
-            ["02", "CREATOR SUBMISSION", "X POST OR FARCASTER CAST", "REQUIRED"],
-            ["03", "GENLAYER RESOLUTION", "VALIDATOR CONSENSUS", "PENDING"],
-            ["04", "GENLAYER SETTLEMENT", "CREDIT OR REFUND", "AFTER FINALITY"],
+            ["01", "BRIEF", "TERMS + DELIVERABLES", "REQUIRED"],
+            ["02", "SUBMISSION", "X POST OR FARCASTER CAST", "REQUIRED"],
+            ["03", "REVIEW", "GENLAYER", "PENDING"],
+            ["04", "SETTLEMENT", "PAY OR REFUND", "AFTER FINALITY"],
           ].map(([number, title, detail, status]) => (
             <div className="proof-step" key={number}>
               <strong>{number}</strong>
@@ -37,9 +36,9 @@ export default function Home() {
             </div>
           ))}
           <div className="proof-result proof-result-neutral">
-            <span>SETTLEMENT RULE</span>
-            <strong>FINAL EVIDENCE ONLY</strong>
-            <span>NATIVE TEST GEN</span>
+            <span>OUTCOME</span>
+            <strong>PAY OR REFUND</strong>
+            <span>AFTER FINALITY</span>
           </div>
         </div>
       </section>
@@ -47,28 +46,28 @@ export default function Home() {
       <section className="creator-section" id="creators">
         <div className="section-heading creator-heading">
           <div>
-            <p className="eyebrow"><span /> VERIFIED SIGNALS / NO DEMO METRICS</p>
+            <p className="eyebrow"><span /> IDENTITY</p>
             <h2>CREATOR BOARD</h2>
           </div>
-          <p>Creator figures appear only after account ownership and metric evidence are recorded.</p>
+          <p>Verified profiles only.</p>
         </div>
         <div className="creator-data-notice">
           <div>
-            <span>ACCOUNT OWNERSHIP</span>
+            <span>IDENTITY</span>
             <strong>PROVEN WITH X + FARCASTER · 1 TRANSACTION</strong>
           </div>
           <div>
-            <span>PAY ESTIMATE INPUTS</span>
-            <strong>ACCOUNT AGE · FOLLOWERS · MEDIAN ENGAGEMENT</strong>
+            <span>RATE</span>
+            <strong>SET BY CREATOR</strong>
           </div>
           <div>
-            <span>MARKET RULE</span>
-            <strong>CREATORS ALWAYS SET THEIR OWN APPLICATION RATE</strong>
+            <span>DATA</span>
+            <strong>VERIFIED ONLY</strong>
           </div>
         </div>
         <div className="method-note">
-          <span>REAL DATA ONLY</span>
-          <p>No follower counts, engagement rates, or pay ranges are displayed until the metrics API supplies evidence-backed values.</p>
+          <span>GET VERIFIED</span>
+          <p>Create your profile.</p>
           <Link href="/verify">VERIFY A PROFILE →</Link>
         </div>
       </section>

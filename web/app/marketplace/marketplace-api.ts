@@ -48,19 +48,19 @@ async function readJson(response: Response): Promise<unknown> {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new MarketplaceApiError(response.status, "The marketplace returned an invalid response.");
+    throw new MarketplaceApiError(response.status, "Invalid marketplace response.");
   }
 }
 
 export function marketplaceErrorMessage(error: unknown): string {
   if (error instanceof MarketplaceApiError) {
     if (error.status === 401) {
-      return "Verify and authorize this wallet first, then retry the marketplace action.";
+      return "Sign in with your wallet.";
     }
     if (error.status === 409 && error.code === "SESSION_WALLET_MISMATCH") {
-      return `${error.message} Sign out, then reconnect the wallet you want to use.`;
+      return "Wallet changed. Sign out and reconnect.";
     }
     return error.message;
   }
-  return error instanceof Error ? error.message : "The marketplace action could not be completed.";
+  return error instanceof Error ? error.message : "Marketplace action failed.";
 }

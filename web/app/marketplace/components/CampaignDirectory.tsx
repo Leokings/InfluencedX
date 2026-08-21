@@ -78,11 +78,10 @@ export function CampaignDirectory() {
     <>
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow"><span /> CREATOR MARKETPLACE / PROOF-SETTLED</p>
+          <p className="eyebrow"><span /> CREATOR MARKETPLACE</p>
           <h1>DEALS.<br /><em>PROVED.</em><br />PAID.</h1>
           <p className="hero-description">
-            Brands publish a funded brief. Verified creators apply with their rate.
-            Campaign funding, public-work resolution, payouts, and refunds all run on GenLayer.
+            Fund campaigns. Verify posts. Settle in GEN.
           </p>
           <div className="hero-actions">
             <a className="button" href="#campaigns">EXPLORE CAMPAIGNS →</a>
@@ -92,23 +91,21 @@ export function CampaignDirectory() {
           <div className="hero-stats" aria-label="Live InfluencedX marketplace statistics">
             <div><strong>{summary ? summary.openCampaigns : "—"}</strong><span>OPEN CAMPAIGNS</span></div>
             <div><strong>{summary ? genAtomsToDisplay(summaryLockedAtoms(summary)) : "—"}</strong><span>LOCKED TEST GEN</span></div>
-            <div><strong>61999</strong><span>STUDIONET CHAIN</span></div>
-            <div className="live-stat"><strong>GEN</strong><span>NATIVE CAMPAIGN ASSET</span></div>
+            <div><strong>61999</strong><span>NETWORK</span></div>
+            <div className="live-stat"><strong>GEN</strong><span>ASSET</span></div>
           </div>
         </div>
 
         <CampaignSpotlight campaign={featured} phase={loadState.phase} loadedAt={loadState.phase === "ready" ? loadState.loadedAt : 0} />
       </section>
 
-      <MarketActivity loading={loadState.phase === "loading"} />
-
       <section className="campaign-section" id="campaigns">
         <div className="section-heading">
           <div>
-            <p className="eyebrow"><span /> LIVE API / GENLAYER STUDIONET</p>
+            <p className="eyebrow"><span /> MARKET</p>
             <h2>ACTIVE CAMPAIGNS</h2>
           </div>
-          <p>Browse public briefs. Apply with a wallet that has an active InfluencedX identity for the campaign&apos;s source.</p>
+          <p>X or Farcaster identity required.</p>
         </div>
 
         <div className="filter-bar" role="group" aria-label="Filter campaigns">
@@ -127,7 +124,7 @@ export function CampaignDirectory() {
         </div>
 
         {loadState.phase === "loading" ? (
-          <MarketplaceState kind="loading" title="LOADING THE MARKET" message="Reading current campaign records from InfluencedX." />
+          <MarketplaceState kind="loading" title="LOADING THE MARKET" message="Please wait." />
         ) : null}
         {loadState.phase === "error" ? (
           <MarketplaceState
@@ -143,10 +140,10 @@ export function CampaignDirectory() {
         {loadState.phase === "ready" && visibleCampaigns.length === 0 ? (
           <MarketplaceState
             kind="empty"
-            title={supportedCampaigns.length === 0 ? "NO TEXT-POST CAMPAIGNS YET" : "NO MATCHING CAMPAIGNS"}
+            title={supportedCampaigns.length === 0 ? "NO CAMPAIGNS YET" : "NO MATCHES"}
             message={supportedCampaigns.length === 0
-              ? "Be the first brand to publish a testnet campaign. It will appear here after the API accepts it."
-              : "Choose another filter to see the campaigns currently available."}
+              ? "Create the first campaign."
+              : "Try another filter."}
             action={supportedCampaigns.length === 0 ? { href: "/marketplace/create", label: "CREATE CAMPAIGN" } : undefined}
           />
         ) : null}
@@ -164,18 +161,16 @@ function CampaignSpotlight({ campaign, phase, loadedAt }: { campaign: Marketplac
   if (phase === "loading") {
     return (
       <aside className="spotlight spotlight-state" aria-label="Loading featured campaign">
-        <span>READING LIVE CAMPAIGNS</span>
-        <h2>THE NEXT<br />BRIEF</h2>
-        <p>No campaign details are shown until the API responds.</p>
+        <span>LOADING</span>
+        <h2>CAMPAIGNS</h2>
       </aside>
     );
   }
   if (!campaign) {
     return (
       <aside className="spotlight spotlight-state" aria-label="No featured campaign">
-        <span>OPEN MARKET</span>
-        <h2>YOUR BRIEF<br />GOES HERE</h2>
-        <p>Create the first live campaign. Drafts stay marked unfunded until StudioNet finalizes the matching GEN deposit.</p>
+        <span>NO OPEN CAMPAIGNS</span>
+        <h2>CREATE ONE</h2>
         <Link className="button campaign-cta" href="/marketplace/create">CREATE CAMPAIGN →</Link>
       </aside>
     );
@@ -206,16 +201,6 @@ function CampaignSpotlight({ campaign, phase, loadedAt }: { campaign: Marketplac
         VIEW BRIEF →
       </Link>
     </aside>
-  );
-}
-
-function MarketActivity({ loading }: { loading: boolean }) {
-  return (
-    <div className="market-ticker" id="activity" aria-label="Marketplace activity">
-      <span className="ticker-title"><i /> MARKET DATA</span>
-      {loading ? <span>LOADING CURRENT ACTIVITY</span> : null}
-      {!loading ? <span>ACTIVITY FEED WILL APPEAR WHEN THE API RECORDS AN ONCHAIN EVENT</span> : null}
-    </div>
   );
 }
 

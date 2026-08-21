@@ -41,7 +41,7 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
 
   async function confirm(preparedId: string, txHash: string) {
     setPhase("recording");
-    setMessage("Reconciling the finalized StudioNet campaign with InfluencedX…");
+    setMessage("Recording finalized funding…");
     await marketplaceRequest<CampaignMutationResponse>(
       `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding`,
       { method: "POST", body: JSON.stringify({ preparedId, txHash }) },
@@ -55,7 +55,7 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
 
   async function fund() {
     setPhase("preparing");
-    setMessage("Preparing the exact payable GenLayer campaign call…");
+    setMessage("Preparing funding…");
     try {
       const brand = await wallet.authenticate();
       if (brand !== campaign.brandWallet.toLowerCase()) {
@@ -81,7 +81,7 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
         onStage: (stage) => setFundingStage(stage, setPhase, setMessage),
       });
       setPhase("recording");
-      setMessage("Reconciling the finalized StudioNet campaign with InfluencedX…");
+      setMessage("Recording finalized funding…");
       await marketplaceRequest<CampaignMutationResponse>(
         `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/funding`,
         { method: "POST", body: JSON.stringify({ preparedId: prepared.preparedId, txHash }) },
@@ -101,9 +101,9 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
   if (campaign.fundingStatus === "funded") {
     return (
       <div className="funding-panel confirmed">
-        <span>GENLAYER CAMPAIGN BALANCE</span>
-        <strong>FUNDED + FINALIZED</strong>
-        <p>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} test GEN is locked in campaign {campaign.genlayerCampaignId ?? "—"}.</p>
+        <span>CAMPAIGN BALANCE</span>
+        <strong>{genAtomsToDisplay(campaignBudgetAtoms(campaign))} TEST GEN</strong>
+        <p>FUNDED + FINALIZED · CAMPAIGN {campaign.genlayerCampaignId ?? "—"}</p>
         {fundingTxUrl ? <a href={fundingTxUrl} target="_blank" rel="noreferrer">VIEW STUDIONET TRANSACTION →</a> : null}
       </div>
     );
@@ -116,10 +116,9 @@ export function CampaignFunding({ campaign, onFunded }: { campaign: MarketplaceC
       <span>GENLAYER FUNDING / {campaign.fundingStatus.toUpperCase()}</span>
       <strong>LOCK THE CAMPAIGN BUDGET.</strong>
       <p>
-        Deposit {genAtomsToDisplay(campaignBudgetAtoms(campaign))} native test GEN from {shortenAddress(campaign.brandWallet)}.
-        The campaign opens only after validator finality and exact contract-state reconciliation.
+        Lock {genAtomsToDisplay(campaignBudgetAtoms(campaign))} test GEN from {shortenAddress(campaign.brandWallet)}. The campaign opens after finality.
       </p>
-      <p>Need test GEN? Use the built-in 💧 faucet in GenLayer Studio&apos;s account selector, then confirm the funded address matches this brand wallet. <a href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">OFFICIAL INSTRUCTIONS ↗</a></p>
+      <p>Need test GEN? Use the built-in 💧 faucet for this wallet. <a href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">OFFICIAL INSTRUCTIONS ↗</a></p>
       {message ? <p className={phase === "error" ? "form-message error" : "form-message"} role={phase === "error" ? "alert" : "status"}>{message}</p> : null}
       {submittedTxUrl ? <a href={submittedTxUrl} target="_blank" rel="noreferrer">VIEW SUBMITTED TRANSACTION →</a> : null}
       <button className="button" type="button" disabled={busy} onClick={() => void fund()}>
@@ -136,12 +135,12 @@ function setFundingStage(
 ): void {
   if (stage === "wallet") {
     setPhase("wallet");
-    setMessage("Confirm the exact GEN deposit in your wallet…");
+    setMessage("Confirm the GEN deposit in your wallet…");
   } else if (stage === "submitted") {
     setPhase("submitted");
-    setMessage("Transaction submitted. Its hash is saved for safe recovery.");
+    setMessage("Submitted. Transaction saved for recovery.");
   } else if (stage === "finality") {
     setPhase("finality");
-    setMessage("Waiting for GenLayer validator finality. You may safely keep this page open.");
+    setMessage("Waiting for GenLayer finality…");
   }
 }

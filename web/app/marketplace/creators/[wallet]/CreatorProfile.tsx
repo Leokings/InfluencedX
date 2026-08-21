@@ -64,7 +64,7 @@ export function CreatorProfile({ wallet }: { wallet: string }) {
         <MarketplaceState
           kind="loading"
           title="LOADING CREATOR"
-          message="Reading the source-keyed creator identities directly from GenLayer StudioNet."
+          message="Loading creator…"
         />
       </section>
     );
@@ -94,19 +94,19 @@ export function CreatorProfile({ wallet }: { wallet: string }) {
         <div className="creator-identity-hero">
           <div className="creator-avatar-tile" aria-hidden="true">{identityInitial(identityLabel)}</div>
           <div className="creator-hero-copy">
-            <p>GENLAYER PROFILE {shortenAddress(creator.ownerWallet)}</p>
+            <p>CREATOR / {shortenAddress(creator.ownerWallet)}</p>
             <h1>{identityLabel}</h1>
             <strong>{primaryIdentity ? `@${primaryIdentity.handle.replace(/^@/, "")}` : "NO ACTIVE IDENTITY"}</strong>
             {creator.bio ? <span>{creator.bio}</span> : null}
-            <div className="tag-row">
-              {creator.activeSources.map((source) => <span key={source}>{source}</span>)}
-              {creator.categories.map((category) => <span key={category}>{category.toUpperCase()}</span>)}
-            </div>
+            {creator.categories.length ? (
+              <div className="tag-row">
+                {creator.categories.map((category) => <span key={category}>{category.toUpperCase()}</span>)}
+              </div>
+            ) : null}
           </div>
           <div className="creator-verification-badge">
             <i />
             <span>GENLAYER VERIFIED</span>
-            <small>{creator.activeSources.length} ACTIVE SOURCE{creator.activeSources.length === 1 ? "" : "S"}</small>
           </div>
         </div>
 
@@ -152,7 +152,7 @@ export function CreatorProfile({ wallet }: { wallet: string }) {
         </section>
 
         <aside className="campaign-detail-panel creator-proof-history">
-          <div className="detail-panel-head"><span>PROOF HISTORY</span><strong>PUBLIC GENLAYER STATE</strong></div>
+          <div className="detail-panel-head"><span>PROOF HISTORY</span><strong>{identities.length} PROOF{identities.length === 1 ? "" : "S"}</strong></div>
           <dl>
             {identities.map((identity) => (
               <div key={identity.source}>
@@ -161,9 +161,6 @@ export function CreatorProfile({ wallet }: { wallet: string }) {
               </div>
             ))}
           </dl>
-          <p className="panel-empty">
-            Audience, engagement, risk, and pay estimates remain hidden until a source-verifiable metrics pipeline is available.
-          </p>
         </aside>
       </div>
     </section>

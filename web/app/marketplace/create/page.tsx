@@ -15,16 +15,7 @@ export default function CreateCampaignPage() {
         <div className="marketplace-page-intro">
           <p className="eyebrow"><span /> BRAND WORKSPACE / GENLAYER</p>
           <h1>CREATE A<br /><em>CAMPAIGN.</em></h1>
-          <p>
-            Publish exact deliverables, a deadline, and a native GEN budget.
-            The API creates a draft first; it opens only after StudioNet finalizes the matching deposit.
-          </p>
-          <ol className="marketplace-sequence">
-            <li><strong>01</strong><span>WRITE THE PUBLIC BRIEF</span></li>
-            <li><strong>02</strong><span>CREATE THE TESTNET DRAFT</span></li>
-            <li><strong>03</strong><span>LOCK TEST GEN ON STUDIONET</span></li>
-            <li><strong>04</strong><span>OPEN APPLICATIONS</span></li>
-          </ol>
+          <p>Set the brief, budget, and deadline.</p>
         </div>
         <CreateCampaignForm />
       </section>

@@ -67,13 +67,13 @@ export function useMarketplaceWallet() {
       const provider = requireProvider();
       const accounts = await provider.request({ method: "eth_requestAccounts" });
       const selected = firstAddress(accounts);
-      if (!selected) throw new Error("The wallet did not return an account.");
+      if (!selected) throw new Error("No wallet selected.");
       setAddress(selected);
       const currentChainId = await provider.request({ method: "eth_chainId" });
       if (typeof currentChainId === "string") setChainId(currentChainId.toLowerCase());
       return selected;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The wallet connection was declined.";
+      const message = error instanceof Error ? error.message : "Wallet connection failed.";
       setWalletError(message);
       throw error;
     } finally {
@@ -90,7 +90,7 @@ export function useMarketplaceWallet() {
       if (!wallet) {
         const accounts = await provider.request({ method: "eth_requestAccounts" });
         wallet = firstAddress(accounts);
-        if (!wallet) throw new Error("The wallet did not return an account.");
+        if (!wallet) throw new Error("No wallet selected.");
         setAddress(wallet);
       }
       const challenge = await marketplaceRequest<WalletChallengeResponse>("/api/auth/wallet/challenge", {
@@ -102,24 +102,24 @@ export function useMarketplaceWallet() {
         setAuthenticated(true);
         return wallet;
       }
-      if (!challenge.message) throw new Error("The wallet sign-in challenge was empty.");
+      if (!challenge.message) throw new Error("Could not start wallet sign-in.");
       const signature = await provider.request({
         method: "personal_sign",
         params: [messageToHex(challenge.message), wallet],
       });
-      if (typeof signature !== "string") throw new Error("The wallet did not return a signature.");
+      if (typeof signature !== "string") throw new Error("No signature returned.");
       const session = await marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/authorize", {
         method: "POST",
         body: JSON.stringify({ wallet, signature }),
       });
       if (!session.authenticated || session.wallet !== wallet) {
-        throw new Error("The wallet session could not be authenticated.");
+        throw new Error("Wallet sign-in failed.");
       }
       setSessionWallet(session.wallet);
       setAuthenticated(true);
       return wallet;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Wallet authorization failed.";
+      const message = error instanceof Error ? error.message : "Wallet sign-in failed.";
       setWalletError(message);
       setAuthenticated(false);
       throw error;
@@ -160,7 +160,7 @@ export function useMarketplaceWallet() {
       setAddress(null);
       setChainId(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Wallet sign-out failed.";
+      const message = error instanceof Error ? error.message : "Sign-out failed.";
       setWalletError(message);
       throw error;
     }
@@ -198,7 +198,7 @@ type WalletChallengeResponse = {
 
 function requireProvider(): EthereumProvider {
   if (!window.ethereum) {
-    throw new Error("No browser wallet found. Install a wallet that supports GenLayer StudioNet and try again.");
+    throw new Error("Open in a wallet browser or install a StudioNet wallet.");
   }
   return window.ethereum;
 }

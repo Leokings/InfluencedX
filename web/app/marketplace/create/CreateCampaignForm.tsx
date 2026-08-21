@@ -27,7 +27,7 @@ export function CreateCampaignForm() {
   async function submitCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
-    setSubmission({ phase: "submitting", message: "Creating the campaign draft…" });
+    setSubmission({ phase: "submitting", message: "Creating draft…" });
     try {
       const brandWallet = await wallet.authenticate();
       const deliverables = String(values.get("deliverables") ?? "")
@@ -95,7 +95,7 @@ export function CreateCampaignForm() {
       </div>
       {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
       <p className="marketplace-auth-note">
-        The brand signs a one-time, gasless wallet challenge to create an HttpOnly session. Creators need an active identity for the campaign&apos;s selected source. <Link href="/verify">Verify a creator wallet →</Link>
+        Creators need an active identity for the selected source. <Link href="/verify">VERIFY A CREATOR →</Link>
       </p>
 
       <div className="marketplace-form-fields">
@@ -125,7 +125,7 @@ export function CreateCampaignForm() {
         <label>
           <span>CONTENT FORMAT</span>
           <input name="format" value="Post" readOnly aria-describedby="format-note" />
-          <small id="format-note">The current MVP verifies one original public text post.</small>
+          <small id="format-note">One original public text post.</small>
         </label>
         <label>
           <span>CONTENT SOURCE</span>
@@ -138,7 +138,7 @@ export function CreateCampaignForm() {
             <option value="X">X</option>
             <option value="FARCASTER">Farcaster</option>
           </select>
-          <small>Applicants must verify an identity on this exact source.</small>
+          <small>Requires a verified identity on this source.</small>
         </label>
         <label>
           <span>BUDGET / TEST GEN</span>
@@ -160,7 +160,7 @@ export function CreateCampaignForm() {
         </label>
         <div className="field-wide resolution-criteria-head">
           <span>GENLAYER RESOLUTION CRITERIA</span>
-          <p>These exact criteria become part of the campaign terms hash used during resolution.</p>
+          <p>Used to resolve submitted work.</p>
         </div>
         <label>
           <span>REQUIRED PHRASES / ONE PER LINE</span>
@@ -171,7 +171,7 @@ export function CreateCampaignForm() {
           <textarea name="forbiddenPhrases" maxLength={3_220} rows={4} placeholder="Competitor claims" />
         </label>
         <label className="field-wide">
-          <span>SEMANTIC BRIEF / WHAT MUST THE POST COMMUNICATE?</span>
+          <span>SEMANTIC BRIEF</span>
           <textarea name="semanticBrief" maxLength={2_000} rows={4} placeholder="Leave blank to use the public brief above." />
         </label>
         <label className="field-wide resolution-checkbox">
@@ -182,12 +182,12 @@ export function CreateCampaignForm() {
 
       <div className="marketplace-disclosure">
         <strong>TESTNET SAFETY</strong>
-        <p>This creates a draft. Funding is a separate payable StudioNet transaction that locks native test GEN in the InfluencedX contract. Need GEN? Use GenLayer Studio&apos;s built-in 💧 faucet and confirm it funded the same wallet address. <a href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">OFFICIAL INSTRUCTIONS ↗</a></p>
+        <p>Funding is a separate StudioNet transaction that locks test GEN. Use the Studio faucet for this wallet if needed. <a href={STUDIONET_FUNDING_GUIDE_URL} target="_blank" rel="noreferrer">OFFICIAL INSTRUCTIONS ↗</a></p>
       </div>
       {submission.phase === "error" ? <p className="form-message error" role="alert">{submission.message}</p> : null}
       {submission.phase === "submitting" ? <p className="form-message" role="status">{submission.message}</p> : null}
       <button className="button marketplace-submit" type="submit" disabled={submission.phase === "submitting"}>
-        {submission.phase === "submitting" ? "CREATING DRAFT…" : "CREATE CAMPAIGN DRAFT →"}
+        {submission.phase === "submitting" ? "CREATING DRAFT…" : "CREATE DRAFT →"}
       </button>
     </form>
   );
