@@ -4,12 +4,12 @@ import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { abi } from "genlayer-js";
 
-import { hydrateArgs } from "../app/marketplace/marketplace-transaction.ts";
-import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
 import {
-  applicationResumeRecordExists,
-  nextGenLayerResolutionProgression,
-} from "../lib/marketplace-genlayer-actions.ts";
+  hydrateArgs,
+  isExplicitEip1193UserRejection,
+} from "../app/marketplace/marketplace-transaction.ts";
+import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
+import { nextGenLayerResolutionProgression } from "../lib/marketplace-genlayer-actions.ts";
 import {
   assertFinalizedOwnershipTiming,
   projectIdentityActiveAt,
@@ -43,6 +43,7 @@ import {
   type GenLayerCampaignState,
 } from "../lib/marketplace-genlayer-core.ts";
 import {
+  existingPreparedMarketplaceTransactionDisposition,
   MAX_GENLAYER_RECONCILIATION_ATTEMPTS,
   type GenLayerTransactionRow,
   type GenLayerAssignmentProjection,
@@ -1870,61 +1871,91 @@ test("every reusable submitted marketplace journal returns confirm-only recovery
   assert.match(funding, /transaction: prepared\.call[\s\S]*recovery: null/);
 });
 
-test("a null-hash prepared application resumes only while authoritative chain state is empty", async () => {
-  assert.equal(applicationResumeRecordExists({}), false);
-  assert.equal(applicationResumeRecordExists({ status: "APPLIED" }), true);
-  assert.throws(
-    () => applicationResumeRecordExists(null),
-    /authoritative application response is invalid/,
-  );
-  assert.throws(
-    () => applicationResumeRecordExists([]),
-    /authoritative application response is invalid/,
+test("prepared intent is atomically single-broadcast and null-hash conflicts fail closed", async () => {
+  const [repository, schema, migration, actions] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/postgres-schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle-postgres/0014_marketplace_transaction_intent_fence.sql", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+  ]);
+  const prepareStart = repository.indexOf("export async function prepareGenLayerMarketplaceTransaction");
+  const prepareEnd = repository.indexOf("function assertReservedPreparedTransaction", prepareStart);
+  assert.ok(prepareStart >= 0 && prepareEnd > prepareStart);
+  const prepare = repository.slice(prepareStart, prepareEnd);
+  assert.match(prepare, /marketplaceTransactionIntentBaseKey\(/);
+  assert.match(prepare, /findGenLayerTransactionRetryPredecessor\(/);
+  assert.match(prepare, /marketplaceTransactionAttemptKey\(/);
+  assert.match(prepare, /intentKey,/);
+  assert.match(prepare, /\.onConflictDoNothing\(\)/);
+  const conflict = prepare.indexOf("if (!created)");
+  const ready = prepare.lastIndexOf("return preparedDto(created)");
+  assert.ok(conflict >= 0 && ready > conflict, "only the successful inserter may receive a broadcastable call");
+  assert.match(prepare.slice(conflict, ready), /findGenLayerPreparedTransactionByIntentKey\(intentKey\)/);
+  assert.match(prepare.slice(conflict, ready), /recoverOrRejectExistingPreparedTransaction\(conflict\)/);
+
+  const dispositionStart = repository.indexOf("function recoverOrRejectExistingPreparedTransaction");
+  const dispositionEnd = repository.indexOf("async function findGenLayerPreparedTransactionByIntentKey", dispositionStart);
+  const disposition = repository.slice(dispositionStart, dispositionEnd);
+  assert.match(disposition, /existingPreparedMarketplaceTransactionDisposition\(row\)/);
+  assert.match(disposition, /MARKETPLACE_TRANSACTION_RETRY_REQUIRED/);
+  assert.match(disposition, /MARKETPLACE_TRANSACTION_STATE_UNKNOWN/);
+  assert.ok(
+    disposition.indexOf('disposition === "RETRY"')
+      < disposition.indexOf('disposition === "RECOVERY"'),
   );
 
-  const [repository, actions, route] = await Promise.all([
-    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
-    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+  const reusableStart = repository.indexOf("async function findReusablePreparedTransaction");
+  const reusableEnd = repository.indexOf("async function findGenLayerTransactionRetryPredecessor", reusableStart);
+  const reusable = repository.slice(reusableStart, reusableEnd);
+  assert.match(reusable, /marketplaceGenLayerTransactions\.network/);
+  assert.match(reusable, /marketplaceGenLayerTransactions\.chainId/);
+  assert.match(reusable, /marketplaceGenLayerTransactions\.functionName/);
+  assert.match(reusable, /marketplaceGenLayerTransactions\.onchainEntityId/);
+  assert.doesNotMatch(reusable, /EXECUTION_FAILED|NETWORK_TERMINATED/);
+
+  const predecessorStart = reusableEnd;
+  const predecessorEnd = repository.indexOf("function marketplaceTransactionIntentBaseKey", predecessorStart);
+  const predecessor = repository.slice(predecessorStart, predecessorEnd);
+  assert.match(predecessor, /includeFinalized/);
+  assert.match(predecessor, /\["EXECUTION_FAILED", "NETWORK_TERMINATED", "FINALIZED"\]/);
+  assert.match(predecessor, /desc\(marketplaceGenLayerTransactions\.createdAt\)/);
+  const attemptStart = repository.indexOf("function marketplaceTransactionAttemptKey", predecessorEnd);
+  const attemptEnd = repository.indexOf("function preparedDto", attemptStart);
+  const attempt = repository.slice(attemptStart, attemptEnd);
+  assert.match(attempt, /predecessor\?\.preparedId/);
+  assert.match(attempt, /predecessor\?\.status/);
+
+  assert.match(schema, /intentKey: text\("intent_key"\)/);
+  assert.match(schema, /uniqueIndex\("marketplace_genlayer_transactions_intent_idx"\)/);
+  const schemaIntentIndex = schema.slice(
+    schema.indexOf('uniqueIndex("marketplace_genlayer_transactions_intent_idx")'),
+    schema.indexOf('index("marketplace_genlayer_transactions_reconcile_idx")'),
+  );
+  assert.match(schemaIntentIndex, /PREPARED.*SUBMITTED.*ACCEPTED.*FINALIZED.*RECONCILIATION_REQUIRED/);
+  assert.doesNotMatch(schemaIntentIndex, /EXECUTION_FAILED|NETWORK_TERMINATED/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "marketplace_genlayer_transactions_intent_idx"/);
+  assert.match(migration, /"status" IN \([\s\S]*'FINALIZED'[\s\S]*'RECONCILIATION_REQUIRED'/);
+  assert.doesNotMatch(migration, /EXECUTION_FAILED|NETWORK_TERMINATED/);
+  assert.doesNotMatch(actions, /resumePreparedGenLayerApplication|findPreparedGenLayerApplicationResumeJournal|applicationResumeRecordExists/);
+  await assert.rejects(
     readFile(
       new URL("../app/api/marketplace/campaigns/[campaignId]/applications/[applicationId]/apply/resume/route.ts", import.meta.url),
       "utf8",
     ),
-  ]);
-  const finderStart = repository.indexOf(
-    "export async function findPreparedGenLayerApplicationResumeJournal",
+    { code: "ENOENT" },
   );
-  const finderEnd = repository.indexOf("/**", finderStart);
-  assert.ok(finderStart >= 0 && finderEnd > finderStart);
-  const finder = repository.slice(finderStart, finderEnd);
-  assert.match(finder, /localCampaignId/);
-  assert.match(finder, /localApplicationId/);
-  assert.match(finder, /normalizeAddress\(input\.actorWallet\)/);
-  assert.match(finder, /operation, "APPLY"/);
-  assert.match(finder, /functionName, "apply_to_campaign"/);
-  assert.match(finder, /valueAtto, "0"/);
-  assert.match(finder, /status, "PREPARED"/);
-  assert.match(finder, /isNull\(marketplaceGenLayerTransactions\.transactionHash\)/);
+});
 
-  const resumeStart = actions.indexOf(
-    "export async function resumePreparedGenLayerApplication",
-  );
-  const resumeEnd = actions.indexOf("export async function confirmGenLayerApplication", resumeStart);
-  assert.ok(resumeStart >= 0 && resumeEnd > resumeStart);
-  const resume = actions.slice(resumeStart, resumeEnd);
-  assert.match(resume, /assertCreator\(context\.application, input\.session\.wallet\)/);
-  assert.match(resume, /context\.application\.status !== "PENDING_ONCHAIN"/);
-  assert.match(resume, /requireActiveIdentityBundle\(/);
-  assert.match(resume, /exactGenLayerJournalCall\(journal\)/);
-  assert.match(resume, /journal\.onchainEntityId !== applicationId/);
-  assert.match(resume, /canonicalHash\(call\.args\) !== canonicalHash\(expectedCall\.args\)/);
-  const authoritativeRead = resume.indexOf('readMarketplaceState("get_application"');
-  const alreadyOnchain = resume.indexOf("applicationResumeRecordExists(authoritative)");
-  const recoveryRequired = resume.indexOf("APPLICATION_TRANSACTION_RECOVERY_REQUIRED");
-  const resumeResponse = resume.indexOf("return mutationResponse(");
-  assert.ok(authoritativeRead >= 0 && alreadyOnchain > authoritativeRead);
-  assert.ok(recoveryRequired > alreadyOnchain && resumeResponse > recoveryRequired);
-  assert.match(route, /resumePreparedGenLayerApplication/);
-  assert.match(route, /applicationActionRoute\([\s\S]*"marketplace-apply"/);
+test("same-tab prepared-call retry is retained only for exact numeric EIP-1193 rejection", () => {
+  assert.equal(isExplicitEip1193UserRejection({ code: 4_001 }), true);
+  assert.equal(isExplicitEip1193UserRejection({ code: "4001" }), false);
+  assert.equal(isExplicitEip1193UserRejection({ code: 4_101 }), false);
+  assert.equal(isExplicitEip1193UserRejection(new Error("User rejected")), false);
+  assert.equal(isExplicitEip1193UserRejection(null), false);
+  assert.equal(existingPreparedMarketplaceTransactionDisposition({ status: "SUBMITTED", transactionHash: txHash }), "RECOVERY");
+  assert.equal(existingPreparedMarketplaceTransactionDisposition({ status: "PREPARED", transactionHash: null }), "UNKNOWN");
+  assert.equal(existingPreparedMarketplaceTransactionDisposition({ status: "EXECUTION_FAILED", transactionHash: txHash }), "RETRY");
+  assert.equal(existingPreparedMarketplaceTransactionDisposition({ status: "NETWORK_TERMINATED", transactionHash: txHash }), "RETRY");
 });
 
 test("database verifier requires the complete native projection and activation schema", async () => {
@@ -1946,6 +1977,8 @@ test("database verifier requires the complete native projection and activation s
     "activation_confirmed_at",
     "farcaster_cast_hash",
     "marketplace_genlayer_assignments_entity_contract_idx",
+    "intent_key",
+    "marketplace_genlayer_transactions_intent_idx",
   ]) assert.match(verifier, new RegExp(required));
   assert.match(verifier, /genLayerNativeReady: true/);
   assert.doesNotMatch(verifier, /column_count !== 68|base_relay_column_count|marketplace_relay_column_count/);
@@ -2017,6 +2050,7 @@ function journalClaim(): GenLayerTransactionRow & { fenceToken: string } {
     args: [campaignId, `0x${"62".repeat(32)}`, "1", `0x${"63".repeat(32)}`],
     argTypes: ["string", "string", "uint256", "string"],
     argsHash: `0x${"64".repeat(32)}`,
+    intentKey: null,
     valueAtto: "0",
     actorWallet: creator,
     localCampaignId: "22222222-2222-4222-8222-222222222222",

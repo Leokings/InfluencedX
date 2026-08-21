@@ -658,6 +658,13 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
       nowMs,
     }),
   });
+  if (prepared.recovery) {
+    throw problem(
+      409,
+      "ACTIVATION_TRANSACTION_RECOVERY_REQUIRED",
+      "Recover the submitted activation transaction.",
+    );
+  }
   return Object.freeze({
     request: await requireProjection(input.session.subject, row.id, nowMs),
     preparedId: prepared.preparedId,

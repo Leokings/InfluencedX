@@ -46,6 +46,14 @@ export type UserMarketplaceFunctionName = keyof typeof USER_MARKETPLACE_CALLS;
 
 export type GenLayerTransactionStage = "wallet" | "submitted" | "finality" | "finalized";
 
+export function isExplicitEip1193UserRejection(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && typeof error.code === "number"
+    && error.code === 4_001;
+}
+
 export async function broadcastMarketplaceTransaction(
   transaction: MarketplaceTransactionDto,
   actor: string,

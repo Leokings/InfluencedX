@@ -335,11 +335,11 @@ test("shows a pay range only while its sanitized metrics snapshot is current", (
 test("campaign actions preserve prepared intent through wallet finality and server confirmation", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
   assert.match(source, /preparedId/);
-  assert.match(source, /saveRecovery\(input\.key/);
+  assert.match(source, /saveRecovery\(actor, input\.key/);
   assert.match(source, /body: JSON\.stringify\(\{ preparedId: prepared\.preparedId, txHash \}\)/);
   const broadcast = source.indexOf("await broadcastMarketplaceTransaction");
   const confirmation = source.indexOf("await marketplaceRequest(confirmPath", broadcast);
-  const clear = source.indexOf("clearRecovery(input.key)", confirmation);
+  const clear = source.indexOf("clearRecovery(actor, input.key)", confirmation);
   const productReload = source.indexOf("await loadDetail()", confirmation);
   assert.ok(broadcast >= 0 && confirmation > broadcast, "server confirmation must follow wallet finality");
   assert.ok(clear > confirmation && productReload > confirmation, "a failed server confirmation must retain recovery and not update product state");
@@ -355,7 +355,7 @@ test("marketplace submissions durably bind hashes and preserve pending applicati
   assert.match(detail, /onSubmitted: async \(hash\)/);
   assert.match(funding, /onSubmitted: async \(hash\)/);
   const actionSubmit = detail.indexOf("onSubmitted: async (hash)");
-  const actionRecovery = detail.indexOf("saveRecovery(input.key", actionSubmit);
+  const actionRecovery = detail.indexOf("saveRecovery(actor, input.key", actionSubmit);
   const actionBinding = detail.indexOf("await recordSubmittedMarketplaceTransaction", actionSubmit);
   assert.ok(actionRecovery > actionSubmit && actionBinding > actionRecovery);
   const existingRecovery = detail.indexOf("if (existing)");
@@ -369,16 +369,16 @@ test("marketplace submissions durably bind hashes and preserve pending applicati
   );
   assert.ok(existingBinding > existingRecovery && existingConfirmation > existingBinding);
   const fundingSubmit = funding.indexOf("onSubmitted: async (hash)");
-  const fundingRecovery = funding.indexOf("sessionStorage.setItem", fundingSubmit);
+  const fundingRecovery = funding.indexOf("localStorage.setItem", fundingSubmit);
   const fundingBinding = funding.indexOf("await recordSubmittedMarketplaceTransaction", fundingSubmit);
   assert.ok(fundingRecovery > fundingSubmit && fundingBinding > fundingRecovery);
   assert.match(detail, /application\.status === "pending_onchain"/);
   assert.match(detail, /FINISH APPLICATION/);
-  assert.match(detail, /RESUME APPLICATION/);
-  assert.match(detail, /apply\/resume/);
+  assert.match(detail, /ORIGINAL TRANSACTION REQUIRED/);
+  assert.doesNotMatch(detail, /RESUME APPLICATION|apply\/resume/);
   assert.match(detail, /hasPendingRecovery=\{Boolean\(recoveries\.apply\)\}/);
-  assert.match(detail, /detail\.viewerRecovery \?\? null/);
-  assert.match(detail, /recoveryStorageKey\(campaignId, "apply"\)/);
+  assert.match(detail, /viewerApplication \? detail\.viewerRecovery \?\? null : null/);
+  assert.match(detail, /recoveryStorageKey\(campaignId, activeActor, "apply"\)/);
   assert.match(detail, /setRecoveries\(\(current\) => \(\{ \.\.\.current, apply: recovery \}\)\)/);
   assert.match(detail, /disabled=\{walletSwitchLocked\}/);
   assert.match(detail, /walletSwitchLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
@@ -406,9 +406,52 @@ test("marketplace submissions durably bind hashes and preserve pending applicati
 test("campaign funding persists both prepared ID and submitted hash without auto-rebroadcast", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8");
   assert.match(source, /const recovery = \{ preparedId: prepared\.preparedId, txHash: hash \}/);
-  assert.match(source, /sessionStorage\.setItem\(recoveryKey, JSON\.stringify\(recovery\)\)/);
+  assert.match(source, /localStorage\.setItem\(recoveryKey, JSON\.stringify\(recovery\)\)/);
   assert.match(source, /if \(submitted\)[\s\S]*confirm\(submitted\.preparedId, submitted\.txHash\)[\s\S]*return/);
   assert.match(source, /RECONCILE SUBMITTED TRANSACTION/);
+});
+
+test("campaign recovery and private views are scoped to the exact authenticated wallet", async () => {
+  const [detail, funding] = await Promise.all([
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignFunding.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(detail, /wallet\.authenticated[\s\S]*wallet\.sessionWallet === wallet\.address[\s\S]*wallet\.address\.toLowerCase\(\)/);
+  assert.match(detail, /responseViewerApplication\?\.creatorWallet\.toLowerCase\(\) === activeActor/);
+  assert.match(detail, /state\.detail\.viewerApplication\?\.creatorWallet\.toLowerCase\(\) === activeActor/);
+  assert.match(detail, /activeActor === detail\.campaign\.brandWallet\.toLowerCase\(\)/);
+  assert.match(detail, /const sessionKey = \[[\s\S]*wallet\.authenticated[\s\S]*wallet\.address[\s\S]*wallet\.sessionWallet/);
+  assert.match(detail, /<CampaignDetailSession[\s\S]*key=\{sessionKey\}/);
+  assert.match(detail, /useState<DetailState>\(\{ phase: "loading", detail: null, error: null \}\)/);
+  assert.match(detail, /influencedx:studionet-action:v2:\$\{campaignId\}:\$\{actor\}:\$\{actionKey\}/);
+  assert.match(detail, /influencedx:studionet-settlement:v2:\$\{campaignId\}:\$\{actor\}:\$\{kind\}/);
+  assert.match(detail, /response\.settlement\.actorWallet\.toLowerCase\(\) !== actor/);
+  assert.match(detail, /key=\{`funding:\$\{activeActor\}`\}/);
+  assert.match(detail, /key=\{`settlement:\$\{activeActor\}`\}/);
+  assert.match(funding, /influencedx:studionet-funding:v2:\$\{campaign\.id\}:\$\{actor\}/);
+  assert.match(funding, /brand !== actor \|\| brand !== campaign\.brandWallet\.toLowerCase\(\)/);
+  assert.doesNotMatch(detail, /sessionStorage\.setItem\([^\n]*JSON\.stringify\((?:recovery|submitted)\)/);
+  assert.doesNotMatch(funding, /sessionStorage/);
+});
+
+test("campaign actions require an already authenticated actor before busy state can remount", async () => {
+  const detail = await readFile(
+    new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url),
+    "utf8",
+  );
+  const executeStart = detail.indexOf("async function executePrepared");
+  const executeEnd = detail.indexOf("async function apply", executeStart);
+  const execute = detail.slice(executeStart, executeEnd);
+  const actorGuard = execute.indexOf("if (!activeActor)");
+  const busyStart = execute.indexOf('setAction({ key: input.key, notice: "Preparing transaction…"');
+  assert.ok(actorGuard >= 0 && busyStart > actorGuard);
+  assert.match(execute, /const actor = await wallet\.authenticate\(\)/);
+  assert.match(execute, /if \(actor !== activeActor\)/);
+  assert.match(detail, /const canApply = Boolean\(activeActor\)/);
+  assert.match(detail, /\{!activeActor \? <WalletIntro wallet=\{wallet\} \/> : null\}/);
+  assert.match(detail, /\{activeActor && canApply \? <ApplicationForm/);
+  assert.match(detail, /walletSwitchLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
+  assert.match(detail, /disabled=\{walletSwitchLocked\}/);
 });
 
 test("marketplace handlers snapshot FormData before asynchronous wallet work", async () => {
@@ -466,7 +509,7 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.doesNotMatch(source, /name="farcasterFid"|parseFarcasterFid|farcasterFid:\s*parseFarcasterFid/);
   assert.match(source, /farcasterFid: result\.farcasterChallenge\.fid/);
   assert.match(source, /\/api\/verification\/activation/);
-  assert.match(source, /requestId: request\.id, verificationPostUrl: postUrl\.trim\(\), farcasterCastUrl: normalizedFarcasterCastUrl/);
+  assert.match(source, /requestId: request\.id, verificationPostUrl: normalizedVerificationPostUrl, farcasterCastUrl: normalizedFarcasterCastUrl/);
   assert.match(source, /FARCASTER CAST URL/);
   const castUrlField = source.match(/<label[^>]*>\s*<span>FARCASTER CAST URL<\/span>[\s\S]*?<\/label>/)?.[0];
   assert.ok(castUrlField);
@@ -494,6 +537,18 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   const recoveryBranch = activation.indexOf("if (recovery)");
   const castUrlRead = activation.indexOf("farcasterCastUrl.trim()");
   assert.ok(recoveryBranch >= 0 && castUrlRead > recoveryBranch);
+  assert.match(activation, /activationReadyRetryRef\.current/);
+  assert.match(activation, /ready\.requestId === request\.id/);
+  assert.match(activation, /ready\.wallet === normalizedWallet/);
+  assert.match(activation, /ready\.verificationPostUrl === normalizedVerificationPostUrl/);
+  assert.match(activation, /ready\.farcasterCastUrl === normalizedFarcasterCastUrl/);
+  const reuseReady = activation.indexOf("reusableReady?.prepared ?? await api<PreparedActivation>");
+  const readyStored = activation.indexOf("activationReadyRetryRef.current = {", reuseReady);
+  const activationBroadcast = activation.indexOf("await broadcastMarketplaceTransaction", readyStored);
+  assert.ok(reuseReady >= 0 && readyStored > reuseReady && activationBroadcast > readyStored);
+  const submitted = activation.indexOf("onSubmitted: async (hash)", activationBroadcast);
+  assert.ok(activation.indexOf("activationReadyRetryRef.current = null", submitted) > submitted);
+  assert.match(activation, /readyMayBeRetried && isExplicitEip1193UserRejection\(activationError\)/);
   assert.doesNotMatch(source, /\/api\/verification\/(?:x-challenge|farcaster-challenge)/);
   assert.doesNotMatch(source, /expectedFunctionName: "activate_(?:creator|farcaster_creator)"/);
   assert.doesNotMatch(source, /\/api\/verification\/(intent|submit)/);

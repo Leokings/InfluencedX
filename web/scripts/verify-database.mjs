@@ -61,6 +61,7 @@ const [state] = await sql.query(`
         ('marketplace_genlayer_assignments', 'content_source'),
         ('marketplace_genlayer_assignments', 'resolution_checks'),
         ('marketplace_genlayer_transactions', 'arg_types'),
+        ('marketplace_genlayer_transactions', 'intent_key'),
         ('marketplace_genlayer_transactions', 'value_atto'),
         ('marketplace_genlayer_withdrawals', 'withdrawal_id'),
         ('marketplace_genlayer_withdrawals', 'recapitalized_atto'),
@@ -103,7 +104,7 @@ const [state] = await sql.query(`
         and c.convalidated
     ) as native_constraints_ready,
     (
-      select count(*)::int = 9
+      select count(*)::int = 10
       from pg_indexes
       where schemaname = 'public'
         and indexname in (
@@ -113,6 +114,7 @@ const [state] = await sql.query(`
           'marketplace_genlayer_campaigns_entity_contract_idx',
           'marketplace_genlayer_assignments_entity_contract_idx',
           'marketplace_genlayer_transactions_hash_idx',
+          'marketplace_genlayer_transactions_intent_idx',
           'marketplace_genlayer_withdrawals_entity_contract_idx',
           'marketplace_genlayer_claimable_balances_pk',
           'marketplace_genlayer_maintenance_generations_pk'

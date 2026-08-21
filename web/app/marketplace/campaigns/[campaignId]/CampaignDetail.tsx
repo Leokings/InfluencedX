@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { MarketplaceState } from "../../components/MarketplaceState";
 import {
   marketplaceErrorMessage,
@@ -11,6 +11,7 @@ import {
 } from "../../marketplace-api";
 import {
   broadcastMarketplaceTransaction,
+  isExplicitEip1193UserRejection,
   type GenLayerTransactionStage,
   type UserMarketplaceFunctionName,
 } from "../../marketplace-transaction";
@@ -49,15 +50,50 @@ type PreparedMutation = {
 };
 
 type Recovery = { preparedId: string; txHash: string; confirmPath: string };
+type ReadyRetry = { actor: string; prepared: PreparedMutation; confirmPath: string };
 type SettlementActionKind = "claim" | "execute-claim" | "refund-unallocated";
+type MarketplaceWallet = ReturnType<typeof useMarketplaceWallet>;
 
 export function CampaignDetail({ campaignId }: { campaignId: string }) {
   const wallet = useMarketplaceWallet();
+  const activeActor = wallet.authenticated
+    && wallet.address
+    && wallet.sessionWallet === wallet.address
+    ? wallet.address.toLowerCase()
+    : null;
+  const sessionKey = [
+    campaignId,
+    wallet.authenticated ? "authenticated" : "anonymous",
+    wallet.address ?? "disconnected",
+    wallet.sessionWallet ?? "no-session",
+  ].join(":");
+  return (
+    <CampaignDetailSession
+      key={sessionKey}
+      activeActor={activeActor}
+      campaignId={campaignId}
+      wallet={wallet}
+    />
+  );
+}
+
+function CampaignDetailSession({
+  activeActor,
+  campaignId,
+  wallet,
+}: {
+  activeActor: string | null;
+  campaignId: string;
+  wallet: MarketplaceWallet;
+}) {
   const [state, setState] = useState<DetailState>({ phase: "loading", detail: null, error: null });
   const [action, setAction] = useState<{ key: string | null; notice: string | null; error: string | null }>({ key: null, notice: null, error: null });
-  const [recoveries, setRecoveries] = useState<Record<string, Recovery>>(() => loadRecoveries(campaignId));
+  const [recoveries, setRecoveries] = useState<Record<string, Recovery>>(
+    () => activeActor ? loadRecoveries(campaignId, activeActor) : {},
+  );
   const [fundingBusy, setFundingBusy] = useState(false);
   const [settlementBusy, setSettlementBusy] = useState(false);
+  const readyRetries = useRef<Record<string, ReadyRetry>>({});
 
   const loadDetail = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -65,16 +101,24 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}`,
         { signal },
       );
-      const viewerApplication = detail.viewerApplication ?? null;
-      const viewerRecovery = detail.viewerRecovery ?? null;
-      if (viewerApplication?.status === "pending_onchain" && viewerRecovery) {
+      const responseViewerApplication = detail.viewerApplication ?? null;
+      const viewerApplication = activeActor
+        && responseViewerApplication?.creatorWallet.toLowerCase() === activeActor
+        ? responseViewerApplication
+        : null;
+      const viewerRecovery = viewerApplication ? detail.viewerRecovery ?? null : null;
+      const applications = activeActor === detail.campaign.brandWallet.toLowerCase()
+        && Array.isArray(detail.applications)
+        ? detail.applications
+        : [];
+      if (activeActor && viewerApplication?.status === "pending_onchain" && viewerRecovery) {
         const recovery: Recovery = {
           preparedId: viewerRecovery.preparedId,
           txHash: viewerRecovery.txHash,
           confirmPath: `${applicationPath(campaignId, viewerApplication.id)}/apply/confirm`,
         };
-        window.sessionStorage.setItem(
-          recoveryStorageKey(campaignId, "apply"),
+        window.localStorage.setItem(
+          recoveryStorageKey(campaignId, activeActor, "apply"),
           JSON.stringify(recovery),
         );
         setRecoveries((current) => ({ ...current, apply: recovery }));
@@ -83,7 +127,7 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         phase: "ready",
         detail: {
           ...detail,
-          applications: Array.isArray(detail.applications) ? detail.applications : [],
+          applications,
           viewerApplication,
           viewerRecovery,
         },
@@ -94,16 +138,17 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setState({ phase: "error", detail: null, error: marketplaceErrorMessage(error) });
     }
-  }, [campaignId]);
+  }, [activeActor, campaignId]);
 
   useEffect(() => {
+    purgeLegacyRecoveryStorage(campaignId);
     const controller = new AbortController();
     const timer = window.setTimeout(() => void loadDetail(controller.signal), 0);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [loadDetail]);
+  }, [campaignId, loadDetail]);
 
   useEffect(() => {
     if (state.phase !== "ready" || !["funding", "open"].includes(state.detail.campaign.status)) return;
@@ -117,12 +162,20 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     preparePath: string;
     confirmPath?: string | ((prepared: PreparedMutation) => string);
     body?: Record<string, unknown>;
+    recoveryOnly?: boolean;
   }) {
+    if (!activeActor) {
+      setAction({ key: null, notice: null, error: "Connect and sign your wallet first." });
+      return;
+    }
     setAction({ key: input.key, notice: "Preparing transaction…", error: null });
     try {
       const actor = await wallet.authenticate();
+      if (actor !== activeActor) {
+        throw new Error("The authenticated wallet changed.");
+      }
       if (!wallet.isStudioNet) await wallet.switchToStudioNet();
-      const existing = recoveries[input.key];
+      const existing = activeActor === actor ? recoveries[input.key] : undefined;
       if (existing) {
         setAction({ key: input.key, notice: "Recovering submitted transaction…", error: null });
         await recordSubmittedMarketplaceTransaction(existing.preparedId, existing.txHash);
@@ -130,27 +183,34 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
           method: "POST",
           body: JSON.stringify({ preparedId: existing.preparedId, txHash: existing.txHash }),
         });
-        clearRecovery(input.key);
+        clearRecovery(actor, input.key);
         await loadDetail();
         setAction({ key: null, notice: "Transaction recovered.", error: null });
         return;
       }
-      const prepared = await marketplaceRequest<PreparedMutation>(input.preparePath, {
+      if (input.recoveryOnly) {
+        throw new Error("The original submitted transaction hash is required.");
+      }
+      const readyRetry = readyRetries.current[input.key];
+      const reusableReady = readyRetry?.actor === actor ? readyRetry : null;
+      const prepared = reusableReady?.prepared ?? await marketplaceRequest<PreparedMutation>(input.preparePath, {
         method: "POST",
         body: JSON.stringify(input.body ?? {}),
       });
-      const confirmPath = typeof input.confirmPath === "function"
-        ? input.confirmPath(prepared)
-        : input.confirmPath ?? `${input.preparePath}/confirm`;
+      const confirmPath = reusableReady?.confirmPath ?? (
+        typeof input.confirmPath === "function"
+          ? input.confirmPath(prepared)
+          : input.confirmPath ?? `${input.preparePath}/confirm`
+      );
       const submitted = preparedMarketplaceRecovery(prepared);
       if (submitted) {
-        saveRecovery(input.key, { ...submitted, confirmPath });
+        saveRecovery(actor, input.key, { ...submitted, confirmPath });
         await recordSubmittedMarketplaceTransaction(submitted.preparedId, submitted.txHash);
         await marketplaceRequest(confirmPath, {
           method: "POST",
           body: JSON.stringify(submitted),
         });
-        clearRecovery(input.key);
+        clearRecovery(actor, input.key);
         await loadDetail();
         setAction({ key: null, notice: "Transaction recovered.", error: null });
         return;
@@ -158,11 +218,13 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
       if (!prepared.transaction) {
         throw new Error("The prepared marketplace transaction is unavailable.");
       }
+      readyRetries.current[input.key] = { actor, prepared, confirmPath };
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
         expectedFunctionName: input.expectedFunctionName,
         expectedValue: "0",
         onSubmitted: async (hash) => {
-          saveRecovery(input.key, {
+          delete readyRetries.current[input.key];
+          saveRecovery(actor, input.key, {
             preparedId: prepared.preparedId,
             txHash: hash,
             confirmPath,
@@ -176,26 +238,40 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
         method: "POST",
         body: JSON.stringify({ preparedId: prepared.preparedId, txHash }),
       });
-      clearRecovery(input.key);
+      clearRecovery(actor, input.key);
       await loadDetail();
       setAction({ key: null, notice: "Transaction finalized.", error: null });
     } catch (error) {
+      if (!isExplicitEip1193UserRejection(error)) {
+        delete readyRetries.current[input.key];
+      }
       setAction({ key: null, notice: null, error: marketplaceErrorMessage(error) });
     }
   }
 
-  function saveRecovery(key: string, recovery: Recovery) {
-    setRecoveries((current) => ({ ...current, [key]: recovery }));
-    window.sessionStorage.setItem(recoveryStorageKey(campaignId, key), JSON.stringify(recovery));
+  function saveRecovery(actor: string, key: string, recovery: Recovery) {
+    const normalizedActor = actor.toLowerCase();
+    window.localStorage.setItem(
+      recoveryStorageKey(campaignId, normalizedActor, key),
+      JSON.stringify(recovery),
+    );
+    if (activeActor === normalizedActor) {
+      setRecoveries((current) => ({ ...current, [key]: recovery }));
+    }
   }
 
-  function clearRecovery(key: string) {
-    setRecoveries((current) => {
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-    window.sessionStorage.removeItem(recoveryStorageKey(campaignId, key));
+  function clearRecovery(actor: string, key: string) {
+    const normalizedActor = actor.toLowerCase();
+    window.localStorage.removeItem(
+      recoveryStorageKey(campaignId, normalizedActor, key),
+    );
+    if (activeActor === normalizedActor) {
+      setRecoveries((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
   }
 
   async function apply(event: FormEvent<HTMLFormElement>) {
@@ -221,8 +297,9 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     await executePrepared({
       key: "apply",
       expectedFunctionName: "apply_to_campaign",
-      preparePath: `${applicationPath(campaignId, application.id)}/apply/resume`,
+      preparePath: `${applicationPath(campaignId, application.id)}/apply/confirm`,
       confirmPath: `${applicationPath(campaignId, application.id)}/apply/confirm`,
+      recoveryOnly: true,
     });
   }
 
@@ -289,10 +366,21 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
     );
   }
 
-  const { campaign, applications, viewerApplication } = state.detail;
+  const { campaign } = state.detail;
+  const viewerApplication = activeActor
+    && state.detail.viewerApplication?.creatorWallet.toLowerCase() === activeActor
+    ? state.detail.viewerApplication
+    : null;
+  const applications = activeActor === campaign.brandWallet.toLowerCase()
+    ? state.detail.applications
+    : [];
   const contentSource = campaignContentSource(campaign);
-  const isBrand = Boolean(wallet.address && wallet.address === campaign.brandWallet.toLowerCase());
-  const canApply = campaign.status === "open" && campaign.fundingStatus === "funded" && !isBrand && !viewerApplication;
+  const isBrand = Boolean(activeActor && activeActor === campaign.brandWallet.toLowerCase());
+  const canApply = Boolean(activeActor)
+    && campaign.status === "open"
+    && campaign.fundingStatus === "funded"
+    && !isBrand
+    && !viewerApplication;
   const canCancel = isBrand && ["funding", "open"].includes(campaign.status);
   const walletSwitchLocked = action.key !== null || fundingBusy || settlementBusy;
 
@@ -333,10 +421,10 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
 
         <aside className="campaign-action-panel">
           <div className="detail-panel-head"><span>YOUR ACTION</span><strong>{wallet.address ? shortenAddress(wallet.address) : "WALLET REQUIRED"}</strong></div>
-          {!wallet.address ? <WalletIntro wallet={wallet} /> : null}
-          {isBrand && campaign.fundingStatus !== "funded" ? <CampaignFunding campaign={campaign} onFunded={loadDetail} onBusyChange={setFundingBusy} /> : null}
+          {!activeActor ? <WalletIntro wallet={wallet} /> : null}
+          {isBrand && activeActor && campaign.fundingStatus !== "funded" ? <CampaignFunding key={`funding:${activeActor}`} actor={activeActor} campaign={campaign} onFunded={loadDetail} onBusyChange={setFundingBusy} /> : null}
           {isBrand && campaign.fundingStatus === "funded" ? <div className="action-intro"><p className="card-index">BRAND VIEW</p><h2>APPLICATIONS</h2></div> : null}
-          {wallet.address && viewerApplication ? (
+          {activeActor && viewerApplication ? (
             <CreatorApplication
               application={viewerApplication as MarketplaceApplication}
               campaign={campaign}
@@ -352,9 +440,9 @@ export function CampaignDetail({ campaignId }: { campaignId: string }) {
               onRecoverPending={recoverPendingApplication}
             />
           ) : null}
-          {wallet.address && canApply ? <ApplicationForm busy={action.key === "apply"} contentSource={contentSource} onSubmit={apply} /> : null}
-          {wallet.address && !isBrand && !viewerApplication && !canApply ? <div className="action-intro"><h2>APPLICATIONS CLOSED</h2><p>This campaign is not accepting applications.</p></div> : null}
-          {wallet.authenticated && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? <SettlementControls campaign={campaign} wallet={wallet} onUpdated={loadDetail} onBusyChange={setSettlementBusy} /> : null}
+          {activeActor && canApply ? <ApplicationForm busy={action.key === "apply"} contentSource={contentSource} onSubmit={apply} /> : null}
+          {activeActor && !isBrand && !viewerApplication && !canApply ? <div className="action-intro"><h2>APPLICATIONS CLOSED</h2><p>This campaign is not accepting applications.</p></div> : null}
+          {activeActor && campaign.fundingStatus === "funded" && (isBrand || viewerApplication) ? <SettlementControls key={`settlement:${activeActor}`} actor={activeActor} campaign={campaign} wallet={wallet} onUpdated={loadDetail} onBusyChange={setSettlementBusy} /> : null}
           {canCancel ? <button className="recovery-retry" type="button" disabled={action.key === "cancel"} onClick={() => void cancelCampaign()}>{action.key === "cancel" ? "CANCELLING…" : "CANCEL + REFUND CAMPAIGN"}</button> : null}
           {action.notice ? <p className="form-message" role="status">{action.notice}</p> : null}
           {action.error ? <p className="form-message error" role="alert">{action.error}</p> : null}
@@ -428,7 +516,7 @@ function CreatorApplication({ application, campaign, actionKey, loadedAt, onAcce
       <p>{application.pitch}</p>
       <Link className="profile-link" href={`/marketplace/creators/${application.creatorWallet}`}>VIEW PUBLIC PROFILE →</Link>
       {pending && hasPendingRecovery ? <button className="button" type="button" disabled={actionKey === "apply"} onClick={() => void onRecoverPending(application)}>{actionKey === "apply" ? "CONFIRMING…" : "FINISH APPLICATION →"}</button> : null}
-      {pending && !hasPendingRecovery ? <button className="button" type="button" disabled={actionKey === "apply"} onClick={() => void onRecoverPending(application)}>{actionKey === "apply" ? "CHECKING…" : "RESUME APPLICATION →"}</button> : null}
+      {pending && !hasPendingRecovery ? <p className="form-message">ORIGINAL TRANSACTION REQUIRED.</p> : null}
       {application.status === "applied" ? <button className="recovery-retry" type="button" disabled={actionKey === `withdraw:${application.id}`} onClick={() => void onWithdraw(application)}>WITHDRAW APPLICATION</button> : null}
       {selected ? <><button className="button" type="button" disabled={actionKey === `accept:${application.id}`} onClick={() => void onAccept(application)}>ACCEPT CAMPAIGN →</button><button className="recovery-retry" type="button" disabled={actionKey === `decline:${application.id}`} onClick={() => void onDecline(application)}>DECLINE ASSIGNMENT</button></> : null}
       {accepted && !submitted && campaign.status === "open" ? <EvidenceSubmissionForm application={application} campaign={campaign} busy={actionKey === `submit:${application.id}`} onSubmit={onSubmit} /> : null}
@@ -459,22 +547,26 @@ function BrandApplications({ applications, actionKey, onSelect, onResolve }: {
   );
 }
 
-function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { campaign: MarketplaceCampaign; wallet: ReturnType<typeof useMarketplaceWallet>; onUpdated: (signal?: AbortSignal) => Promise<void>; onBusyChange: (busy: boolean) => void }) {
+function SettlementControls({ actor, campaign, wallet, onUpdated, onBusyChange }: { actor: string; campaign: MarketplaceCampaign; wallet: ReturnType<typeof useMarketplaceWallet>; onUpdated: (signal?: AbortSignal) => Promise<void>; onBusyChange: (busy: boolean) => void }) {
   const [settlement, setSettlement] = useState<MarketplaceSettlementStateDto | null>(null);
   const [phase, setPhase] = useState<"loading" | "idle" | "claiming" | "executing" | "refunding">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const basePath = `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/settlement`;
+  const readyRetries = useRef<Partial<Record<SettlementActionKind, PreparedMutation>>>({});
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const response = await marketplaceRequest<{ settlement: MarketplaceSettlementStateDto }>(basePath, { signal });
+      if (response.settlement.actorWallet.toLowerCase() !== actor) {
+        throw new Error("The settlement wallet changed.");
+      }
       setSettlement(response.settlement); setError(null); setPhase("idle");
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === "AbortError") return;
       setError(marketplaceErrorMessage(loadError)); setPhase("idle");
     }
-  }, [basePath]);
+  }, [actor, basePath]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -488,14 +580,17 @@ function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { cam
     onBusyChange(true);
     setPhase(kind === "claim" ? "claiming" : kind === "execute-claim" ? "executing" : "refunding"); setMessage(null); setError(null);
     try {
-      const actor = await wallet.authenticate();
+      const authenticatedActor = await wallet.authenticate();
+      if (authenticatedActor !== actor) {
+        throw new Error("The authenticated wallet changed.");
+      }
       if (!wallet.isStudioNet) await wallet.switchToStudioNet();
       const preparePath = kind === "claim"
         ? `${basePath}/claim`
         : kind === "execute-claim"
           ? `${basePath}/claim/execute`
           : `/api/marketplace/campaigns/${encodeURIComponent(campaign.id)}/refund-unallocated`;
-      const recoveryKey = settlementRecoveryStorageKey(campaign.id, kind);
+      const recoveryKey = settlementRecoveryStorageKey(campaign.id, actor, kind);
       const recovery = readRecovery(recoveryKey);
       if (recovery) {
         setMessage("Recovering finalized transaction…");
@@ -504,21 +599,21 @@ function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { cam
           method: "POST",
           body: JSON.stringify({ preparedId: recovery.preparedId, txHash: recovery.txHash }),
         });
-        window.sessionStorage.removeItem(recoveryKey);
+        window.localStorage.removeItem(recoveryKey);
         setMessage(settlementSuccessMessage(kind));
         await load(); await onUpdated();
         return;
       }
-      const prepared = await marketplaceRequest<PreparedMutation>(preparePath, { method: "POST", body: "{}" });
+      const prepared = readyRetries.current[kind] ?? await marketplaceRequest<PreparedMutation>(preparePath, { method: "POST", body: "{}" });
       const submitted = preparedMarketplaceRecovery(prepared);
       if (submitted) {
-        window.sessionStorage.setItem(recoveryKey, JSON.stringify(submitted));
+        window.localStorage.setItem(recoveryKey, JSON.stringify(submitted));
         await recordSubmittedMarketplaceTransaction(submitted.preparedId, submitted.txHash);
         await marketplaceRequest(`${preparePath}/confirm`, {
           method: "POST",
           body: JSON.stringify(submitted),
         });
-        window.sessionStorage.removeItem(recoveryKey);
+        window.localStorage.removeItem(recoveryKey);
         setMessage(settlementSuccessMessage(kind));
         await load(); await onUpdated();
         return;
@@ -526,7 +621,8 @@ function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { cam
       if (!prepared.transaction) {
         throw new Error("The prepared marketplace transaction is unavailable.");
       }
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, actor, {
+      readyRetries.current[kind] = prepared;
+      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, authenticatedActor, {
         expectedFunctionName: kind === "claim"
           ? "request_withdrawal"
           : kind === "execute-claim"
@@ -534,7 +630,8 @@ function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { cam
             : "refund_unallocated",
         expectedValue: "0",
         onSubmitted: async (hash) => {
-          window.sessionStorage.setItem(
+          delete readyRetries.current[kind];
+          window.localStorage.setItem(
             recoveryKey,
             JSON.stringify({ preparedId: prepared.preparedId, txHash: hash }),
           );
@@ -543,10 +640,15 @@ function SettlementControls({ campaign, wallet, onUpdated, onBusyChange }: { cam
         onStage: (stage) => setMessage(transactionNotice(stage)),
       });
       await marketplaceRequest(`${preparePath}/confirm`, { method: "POST", body: JSON.stringify({ preparedId: prepared.preparedId, txHash }) });
-      window.sessionStorage.removeItem(recoveryKey);
+      window.localStorage.removeItem(recoveryKey);
       setMessage(settlementSuccessMessage(kind));
       await load(); await onUpdated();
-    } catch (settlementError) { setError(marketplaceErrorMessage(settlementError)); }
+    } catch (settlementError) {
+      if (!isExplicitEip1193UserRejection(settlementError)) {
+        delete readyRetries.current[kind];
+      }
+      setError(marketplaceErrorMessage(settlementError));
+    }
     finally { setPhase("idle"); onBusyChange(false); }
   }
 
@@ -634,22 +736,22 @@ function applicationPath(campaignId: string, applicationId: string): string {
   return `/api/marketplace/campaigns/${encodeURIComponent(campaignId)}/applications/${encodeURIComponent(applicationId)}`;
 }
 
-function recoveryStorageKey(campaignId: string, actionKey: string): string {
-  return `influencedx:studionet-action:${campaignId}:${actionKey}`;
+function recoveryStorageKey(campaignId: string, actor: string, actionKey: string): string {
+  return `influencedx:studionet-action:v2:${campaignId}:${actor}:${actionKey}`;
 }
 
-function settlementRecoveryStorageKey(campaignId: string, kind: string): string {
-  return `influencedx:studionet-settlement:${campaignId}:${kind}`;
+function settlementRecoveryStorageKey(campaignId: string, actor: string, kind: string): string {
+  return `influencedx:studionet-settlement:v2:${campaignId}:${actor}:${kind}`;
 }
 
 function readRecovery(storageKey: string): Pick<Recovery, "preparedId" | "txHash"> | null {
   try {
-    const value = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
+    const value = JSON.parse(window.localStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
     if (value && typeof value.preparedId === "string" && typeof value.txHash === "string" && /^0x[\da-f]{64}$/i.test(value.txHash)) {
       return { preparedId: value.preparedId, txHash: value.txHash };
     }
   } catch {
-    window.sessionStorage.removeItem(storageKey);
+    window.localStorage.removeItem(storageKey);
   }
   return null;
 }
@@ -660,23 +762,40 @@ function settlementSuccessMessage(kind: SettlementActionKind): string {
   return "Unused GEN added to the brand balance.";
 }
 
-function loadRecoveries(campaignId: string): Record<string, Recovery> {
+function loadRecoveries(campaignId: string, actor: string): Record<string, Recovery> {
   if (typeof window === "undefined") return {};
-  const prefix = `influencedx:studionet-action:${campaignId}:`;
+  const prefix = `influencedx:studionet-action:v2:${campaignId}:${actor}:`;
   const recovered: Record<string, Recovery> = {};
-  for (let index = 0; index < window.sessionStorage.length; index += 1) {
-    const storageKey = window.sessionStorage.key(index);
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const storageKey = window.localStorage.key(index);
     if (!storageKey?.startsWith(prefix)) continue;
     try {
-      const value = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
+      const value = JSON.parse(window.localStorage.getItem(storageKey) ?? "null") as Partial<Recovery> | null;
       if (value && typeof value.preparedId === "string" && typeof value.txHash === "string" && /^0x[\da-f]{64}$/i.test(value.txHash) && typeof value.confirmPath === "string") {
         recovered[storageKey.slice(prefix.length)] = value as Recovery;
       }
     } catch {
-      window.sessionStorage.removeItem(storageKey);
+      window.localStorage.removeItem(storageKey);
     }
   }
   return recovered;
+}
+
+function purgeLegacyRecoveryStorage(campaignId: string): void {
+  if (typeof window === "undefined") return;
+  const legacyPrefixes = [
+    `influencedx:studionet-action:${campaignId}:`,
+    `influencedx:studionet-settlement:${campaignId}:`,
+  ];
+  const legacyExact = `influencedx:studionet-funding:${campaignId}`;
+  for (const storage of [window.sessionStorage, window.localStorage]) {
+    for (let index = storage.length - 1; index >= 0; index -= 1) {
+      const key = storage.key(index);
+      if (key === legacyExact || legacyPrefixes.some((prefix) => key?.startsWith(prefix))) {
+        storage.removeItem(key!);
+      }
+    }
+  }
 }
 
 function transactionNotice(stage: GenLayerTransactionStage): string {

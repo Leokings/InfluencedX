@@ -22,14 +22,12 @@ import {
 } from "./marketplace-genlayer-core.ts";
 import {
   bindGenLayerTransactionHash,
-  exactGenLayerJournalCall,
   findGenLayerAssignmentProjectionByAssignmentId,
   findGenLayerAssignmentProjectionByApplicationId,
   findGenLayerCampaignProjectionByOnchainId,
   findGenLayerCampaignDraft,
   findGenLayerCampaignProjectionByLocalId,
   findGenLayerPreparedTransaction,
-  findPreparedGenLayerApplicationResumeJournal,
   findGenLayerWithdrawalProjectionById,
   findLatestGenLayerWithdrawalProjection,
   findGenLayerPrivateApplication,
@@ -204,81 +202,6 @@ export async function prepareGenLayerApplication(input: {
     onchainEntityId: applicationId,
   });
   return mutationResponse(context.draft, context.projection, application, null, prepared);
-}
-
-export async function resumePreparedGenLayerApplication(input: ActionInput) {
-  assertExactJsonKeys(input.body, []);
-  const context = await applicationContext(input);
-  assertCreator(context.application, input.session.wallet);
-  if (context.application.status !== "PENDING_ONCHAIN") invalidState();
-  const creator = context.application.creatorWallet;
-  const { profile } = await requireActiveIdentityBundle(
-    creator,
-    context.draft.contentSource,
-  );
-  if (profile.projectionId !== context.application.creatorProfileProjectionId) {
-    identityBundleMismatch();
-  }
-  const journal = await findPreparedGenLayerApplicationResumeJournal({
-    localCampaignId: context.draft.id,
-    localApplicationId: context.application.id,
-    actorWallet: creator,
-  });
-  if (!journal) {
-    throw problem(
-      409,
-      "APPLICATION_RESUME_UNAVAILABLE",
-      "The prepared application cannot be resumed.",
-    );
-  }
-  const applicationId = deriveApplicationId(context.campaign.campaignId, creator);
-  const expectedCall = callPlan("apply_to_campaign", [
-    context.campaign.campaignId,
-    applicationId,
-    BigInt(context.application.requestedRateAtto),
-    context.application.pitchCommitment,
-  ], ["string", "string", "uint256", "string"]);
-  const call = exactGenLayerJournalCall(journal);
-  if (
-    journal.onchainEntityId !== applicationId
-    || call.functionName !== expectedCall.functionName
-    || call.contractAddress !== expectedCall.contractAddress
-    || call.value !== expectedCall.value
-    || canonicalHash(call.args) !== canonicalHash(expectedCall.args)
-    || JSON.stringify(call.argTypes) !== JSON.stringify(expectedCall.argTypes)
-  ) {
-    preparedMismatch();
-  }
-  const authoritative = await readMarketplaceState("get_application", [
-    context.campaign.campaignId,
-    marketplaceCalldataAddress(creator),
-  ]);
-  if (applicationResumeRecordExists(authoritative)) {
-    const state = parseApplicationState(authoritative);
-    assertApplicationBinding(
-      state,
-      context.application,
-      context.campaign.campaignId,
-      applicationId,
-    );
-    throw problem(
-      409,
-      "APPLICATION_TRANSACTION_RECOVERY_REQUIRED",
-      "Application is already on-chain. Recover the original transaction.",
-    );
-  }
-  return mutationResponse(
-    context.draft,
-    context.campaign,
-    context.application,
-    null,
-    {
-      preparedId: journal.preparedId,
-      operation: journal.operation,
-      call,
-      recovery: null,
-    },
-  );
 }
 
 export async function confirmGenLayerApplication(input: ActionInput) {
@@ -1199,13 +1122,6 @@ async function projectWithdrawal(
     snapshotHash: canonicalHash(state),
     nowMs: finalizedAt,
   });
-}
-
-export function applicationResumeRecordExists(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("The authoritative application response is invalid.");
-  }
-  return Object.keys(value).length > 0;
 }
 
 function assertApplicationBinding(state: GenLayerApplicationState, local: GenLayerPrivateApplication, campaignId: string, applicationId: string) {

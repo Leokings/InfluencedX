@@ -99,6 +99,13 @@
       "when": 1787328000000,
       "tag": "0013_verification_session_detach_fence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787331600000,
+      "tag": "0014_marketplace_transaction_intent_fence",
+      "breakpoints": true
     }
   ]
 }

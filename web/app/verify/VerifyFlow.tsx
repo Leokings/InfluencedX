@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { broadcastMarketplaceTransaction, type GenLayerTransactionStage } from "../marketplace/marketplace-transaction";
+import {
+  broadcastMarketplaceTransaction,
+  isExplicitEip1193UserRejection,
+  type GenLayerTransactionStage,
+} from "../marketplace/marketplace-transaction";
 import {
   STUDIONET_CHAIN_ID_HEX,
   STUDIONET_EXPLORER_URL,
@@ -104,6 +108,13 @@ type ActivationConfirmation = {
 };
 type LegacyActivationConfirmation = { request: VerificationRequest; profile: GenLayerProfile };
 type ActivationRecovery = BoundIdentityBundleRecovery;
+type ReadyActivationRetry = {
+  requestId: string;
+  wallet: string;
+  verificationPostUrl: string;
+  farcasterCastUrl: string;
+  prepared: PreparedActivation;
+};
 type ApiErrorBody = { error?: string | { code?: string; message?: string }; code?: string; message?: string };
 
 const ACTIVE_STEPS = [
@@ -131,6 +142,7 @@ export default function VerifyFlow() {
   const [activationDetachReady, setActivationDetachReady] = useState(false);
   const switchingWalletRef = useRef(false);
   const flowGenerationRef = useRef(0);
+  const activationReadyRetryRef = useRef<ReadyActivationRetry | null>(null);
 
   const effectiveWallet = selectVerificationWallet(request?.wallet, wallet);
   const bundleReady = hasBothChallenges(request);
@@ -209,6 +221,7 @@ export default function VerifyFlow() {
     if (!window.ethereum?.on) return;
     const accountsChanged = (...args: unknown[]) => {
       const nextWallet = firstAddress(Array.isArray(args[0]) ? args[0] : []);
+      activationReadyRetryRef.current = null;
       setWallet(nextWallet);
       if (switchingWalletRef.current) {
         setError(null);
@@ -244,6 +257,7 @@ export default function VerifyFlow() {
       setRequest(result.request);
       setWalletChallenge(result.walletChallenge);
       if (result.request.id !== request?.id) {
+        activationReadyRetryRef.current = null;
         setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastUrl("");
         setActivationDetachReady(false);
       }
@@ -279,6 +293,7 @@ export default function VerifyFlow() {
     event.preventDefault();
     if (!request || !consent) return;
     setBusy("identity-challenge"); setError(null); setNotice(null);
+    activationReadyRetryRef.current = null;
     try {
       const result = await api<IdentityChallengeResponse>(
         "/api/verification/identity-challenge",
@@ -315,12 +330,14 @@ export default function VerifyFlow() {
     event?.preventDefault();
     if (!request || !effectiveWallet) return;
     const generation = flowGenerationRef.current;
+    let readyMayBeRetried = false;
     setBusy("activation"); setError(null); setNotice(null);
     try {
       const provider = getProvider();
       await ensureStudioNet(provider);
       requireSelectedAccount(await provider.request({ method: "eth_accounts" }), effectiveWallet);
       if (recovery) {
+        activationReadyRetryRef.current = null;
         if (!recoveryMatchesActiveBundle(recovery, request)) {
           clearRecovery(); setRecovery(null);
           throw new Error("Saved transaction cleared. Retry.");
@@ -329,18 +346,39 @@ export default function VerifyFlow() {
         return;
       }
       setActivationDetachReady(false);
+      const normalizedVerificationPostUrl = postUrl.trim();
       const normalizedFarcasterCastUrl = farcasterCastUrl.trim();
-      if (!postUrl.trim()) throw new Error("Add the X URL.");
+      if (!normalizedVerificationPostUrl) throw new Error("Add the X URL.");
       if (!normalizedFarcasterCastUrl) throw new Error("Add the Farcaster URL.");
-      const prepared = await api<PreparedActivation>(
+      const normalizedWallet = effectiveWallet.toLowerCase();
+      const ready = activationReadyRetryRef.current;
+      const reusableReady = ready
+        && ready.requestId === request.id
+        && ready.wallet === normalizedWallet
+        && ready.verificationPostUrl === normalizedVerificationPostUrl
+        && ready.farcasterCastUrl === normalizedFarcasterCastUrl
+        ? ready
+        : null;
+      if (ready && !reusableReady) activationReadyRetryRef.current = null;
+      const prepared = reusableReady?.prepared ?? await api<PreparedActivation>(
         "/api/verification/activation",
-        requestBody({ requestId: request.id, verificationPostUrl: postUrl.trim(), farcasterCastUrl: normalizedFarcasterCastUrl }),
+        requestBody({ requestId: request.id, verificationPostUrl: normalizedVerificationPostUrl, farcasterCastUrl: normalizedFarcasterCastUrl }),
       );
+      activationReadyRetryRef.current = {
+        requestId: request.id,
+        wallet: normalizedWallet,
+        verificationPostUrl: normalizedVerificationPostUrl,
+        farcasterCastUrl: normalizedFarcasterCastUrl,
+        prepared,
+      };
+      readyMayBeRetried = true;
       if (prepared.request) setRequest(prepared.request);
       const txHash = await broadcastMarketplaceTransaction(prepared.transaction, effectiveWallet, {
         expectedFunctionName: "activate_identity_bundle",
         expectedValue: "0",
         onSubmitted: async (hash) => {
+          readyMayBeRetried = false;
+          activationReadyRetryRef.current = null;
           const value = { preparedId: prepared.preparedId, txHash: hash, requestId: request.id };
           saveRecovery(value); setRecovery(value);
           await api<{ accepted: true; preparedId: string; txHash: string }>(
@@ -357,12 +395,17 @@ export default function VerifyFlow() {
           }
         },
       });
+      readyMayBeRetried = false;
+      activationReadyRetryRef.current = null;
       if (generation !== flowGenerationRef.current) return;
       await confirmActivation(
         { preparedId: prepared.preparedId, txHash, requestId: request.id },
         generation,
       );
     } catch (activationError) {
+      if (!(readyMayBeRetried && isExplicitEip1193UserRejection(activationError))) {
+        activationReadyRetryRef.current = null;
+      }
       if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
         setError(walletPromptRejected(activationError)
           ? "Transaction cancelled. Retry verification."
@@ -436,6 +479,7 @@ export default function VerifyFlow() {
         );
       }
       flowGenerationRef.current += 1;
+      activationReadyRetryRef.current = null;
       clearRecovery();
       setRecovery(null);
       setRequest(null);

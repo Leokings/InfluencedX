@@ -397,6 +397,10 @@ test("identity journal reservation closes the idle-end race without changing gen
   assert.match(identityPrepare, /eq\(verificationRequests\.revision, row\.revision\)/);
   assert.match(identityPrepare, /isNull\(verificationRequests\.sessionDetachedAt\)/);
   assert.match(identityPrepare, /activationPreparedId: preparedId/);
+  const recoveryGuard = identityPrepare.indexOf("if (prepared.recovery)");
+  const exposedCall = identityPrepare.indexOf("transaction: prepared.call");
+  assert.ok(recoveryGuard >= 0 && exposedCall > recoveryGuard);
+  assert.match(identityPrepare, /ACTIVATION_TRANSACTION_RECOVERY_REQUIRED/);
 
   const genericPrepare = between(
     repository,

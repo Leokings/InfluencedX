@@ -42,6 +42,7 @@ import {
   type GenLayerContentSource,
 } from "./marketplace-genlayer-core.ts";
 import { enqueueMarketplaceMaintenanceHeartbeat } from "./marketplace-genlayer-maintenance-queue.ts";
+import { ApiProblem } from "./verification-api.ts";
 
 export type GenLayerCampaignProjection = InferSelectModel<
   typeof marketplaceGenLayerCampaigns
@@ -370,6 +371,18 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
   const nowMs = input.nowMs ?? Date.now();
   const args = jsonSafeArgs(input.call.args);
   const argsHash = canonicalHash(args);
+  const intentBinding = {
+    operation: input.operation,
+    functionName: input.call.functionName,
+    contractAddress: input.call.contractAddress,
+    actorWallet,
+    argsHash,
+    valueAtto: input.call.value,
+    localCampaignId: input.localCampaignId ?? null,
+    localApplicationId: input.localApplicationId ?? null,
+    onchainEntityId: input.onchainEntityId ?? null,
+  };
+  const intentBaseKey = marketplaceTransactionIntentBaseKey(intentBinding);
   if (input.preparedId !== undefined && !uuidPattern.test(input.preparedId)) {
     throw new Error("The reserved GenLayer prepared ID is invalid.");
   }
@@ -381,22 +394,24 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
         actorWallet,
         argsHash,
       });
-      return preparedDto(reserved);
+      return recoverOrRejectExistingPreparedTransaction(reserved);
     }
   } else {
     const existing = await findReusablePreparedTransaction({
-      operation: input.operation,
-      contractAddress: input.call.contractAddress,
-      actorWallet,
-      argsHash,
-      valueAtto: input.call.value,
-      localCampaignId: input.localCampaignId ?? null,
-      localApplicationId: input.localApplicationId ?? null,
+      ...intentBinding,
       reuseFinalized: input.reuseFinalized ?? true,
     });
-    if (existing) return preparedDto(existing);
+    if (existing) return recoverOrRejectExistingPreparedTransaction(existing);
   }
 
+  const retryPredecessor = await findGenLayerTransactionRetryPredecessor({
+    ...intentBinding,
+    includeFinalized: input.reuseFinalized === false,
+  });
+  const intentKey = marketplaceTransactionAttemptKey(
+    intentBaseKey,
+    retryPredecessor,
+  );
   const preparedId = input.preparedId ?? randomUUID();
   const [created] = await getDb()
     .insert(marketplaceGenLayerTransactions)
@@ -410,6 +425,7 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
       args,
       argTypes: [...input.call.argTypes],
       argsHash,
+      intentKey,
       valueAtto: input.call.value,
       actorWallet,
       localCampaignId: input.localCampaignId ?? null,
@@ -421,8 +437,25 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
       createdAt: nowMs,
       updatedAt: nowMs,
     })
+    .onConflictDoNothing()
     .returning();
-  if (!created) throw new Error("Prepared transaction insertion returned no row.");
+  if (!created) {
+    const conflict = (
+      input.preparedId
+        ? await findGenLayerPreparedTransaction(input.preparedId)
+        : null
+    ) ?? await findGenLayerPreparedTransactionByIntentKey(intentKey);
+    if (!conflict) {
+      throw new Error("Prepared transaction intent conflict returned no row.");
+    }
+    assertReservedPreparedTransaction(conflict, {
+      ...input,
+      actorWallet,
+      argsHash,
+      intentKey,
+    });
+    return recoverOrRejectExistingPreparedTransaction(conflict);
+  }
   return preparedDto(created);
 }
 
@@ -433,6 +466,7 @@ function assertReservedPreparedTransaction(
     call: MarketplaceGenLayerCall;
     actorWallet: string;
     argsHash: string;
+    intentKey?: string;
     localCampaignId?: string | null;
     localApplicationId?: string | null;
     onchainEntityId?: string | null;
@@ -445,6 +479,9 @@ function assertReservedPreparedTransaction(
     || row.operation !== input.operation
     || row.functionName !== input.call.functionName
     || row.argsHash !== input.argsHash
+    || (input.intentKey !== undefined
+      && row.intentKey !== null
+      && row.intentKey !== input.intentKey)
     || row.valueAtto !== input.call.value
     || row.actorWallet !== input.actorWallet
     || row.localCampaignId !== (input.localCampaignId ?? null)
@@ -454,6 +491,56 @@ function assertReservedPreparedTransaction(
   ) {
     throw new Error("The reserved GenLayer transaction binding changed.");
   }
+}
+
+function recoverOrRejectExistingPreparedTransaction(
+  row: GenLayerTransactionRow,
+): PreparedMarketplaceTransaction {
+  const disposition = existingPreparedMarketplaceTransactionDisposition(row);
+  if (disposition === "RETRY") {
+    throw new ApiProblem(
+      409,
+      "MARKETPLACE_TRANSACTION_RETRY_REQUIRED",
+      "The prior transaction failed. Prepare a new attempt.",
+    );
+  }
+  if (disposition === "RECOVERY") return preparedDto(row);
+  throw new ApiProblem(
+    409,
+    "MARKETPLACE_TRANSACTION_STATE_UNKNOWN",
+    "A prior wallet request may still be pending. Recover its submitted transaction.",
+  );
+}
+
+export function existingPreparedMarketplaceTransactionDisposition(
+  row: Pick<GenLayerTransactionRow, "status" | "transactionHash">,
+): "RECOVERY" | "RETRY" | "UNKNOWN" {
+  if (
+    row.status === "EXECUTION_FAILED"
+    || row.status === "NETWORK_TERMINATED"
+  ) return "RETRY";
+  return row.transactionHash ? "RECOVERY" : "UNKNOWN";
+}
+
+async function findGenLayerPreparedTransactionByIntentKey(
+  intentKey: string,
+): Promise<GenLayerTransactionRow | null> {
+  const [row] = await getDb()
+    .select()
+    .from(marketplaceGenLayerTransactions)
+    .where(
+      and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(
+          marketplaceGenLayerTransactions.contractAddress,
+          marketplaceContractAddress(),
+        ),
+        eq(marketplaceGenLayerTransactions.intentKey, intentKey),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
 }
 
 export async function findGenLayerPreparedTransaction(
@@ -512,46 +599,6 @@ export async function findBoundGenLayerApplicationRecovery(input: {
     preparedId: row.preparedId,
     transactionHash: row.transactionHash,
   };
-}
-
-export async function findPreparedGenLayerApplicationResumeJournal(input: {
-  localCampaignId: string;
-  localApplicationId: string;
-  actorWallet: string;
-}): Promise<GenLayerTransactionRow | null> {
-  const [row] = await getDb()
-    .select()
-    .from(marketplaceGenLayerTransactions)
-    .where(
-      and(
-        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
-        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
-        eq(
-          marketplaceGenLayerTransactions.contractAddress,
-          marketplaceContractAddress().toLowerCase(),
-        ),
-        eq(marketplaceGenLayerTransactions.operation, "APPLY"),
-        eq(marketplaceGenLayerTransactions.functionName, "apply_to_campaign"),
-        eq(
-          marketplaceGenLayerTransactions.localCampaignId,
-          input.localCampaignId,
-        ),
-        eq(
-          marketplaceGenLayerTransactions.localApplicationId,
-          input.localApplicationId,
-        ),
-        eq(
-          marketplaceGenLayerTransactions.actorWallet,
-          normalizeAddress(input.actorWallet),
-        ),
-        eq(marketplaceGenLayerTransactions.valueAtto, "0"),
-        eq(marketplaceGenLayerTransactions.status, "PREPARED"),
-        isNull(marketplaceGenLayerTransactions.transactionHash),
-      ),
-    )
-    .orderBy(desc(marketplaceGenLayerTransactions.createdAt))
-    .limit(1);
-  return row ?? null;
 }
 
 /**
@@ -1525,22 +1572,30 @@ export async function getGenLayerDashboardRows(wallet: string): Promise<{
   };
 }
 
-async function findReusablePreparedTransaction(input: {
+type MarketplaceTransactionIntentBinding = {
   operation: MarketplaceGenLayerOperation;
+  functionName: string;
   contractAddress: string;
   actorWallet: string;
   argsHash: string;
   valueAtto: string;
   localCampaignId: string | null;
   localApplicationId: string | null;
-  reuseFinalized: boolean;
-}): Promise<GenLayerTransactionRow | null> {
+  onchainEntityId: string | null;
+};
+
+async function findReusablePreparedTransaction(
+  input: MarketplaceTransactionIntentBinding & { reuseFinalized: boolean },
+): Promise<GenLayerTransactionRow | null> {
   const [row] = await getDb()
     .select()
     .from(marketplaceGenLayerTransactions)
     .where(
       and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
         eq(marketplaceGenLayerTransactions.operation, input.operation),
+        eq(marketplaceGenLayerTransactions.functionName, input.functionName),
         eq(
           marketplaceGenLayerTransactions.contractAddress,
           input.contractAddress.toLowerCase(),
@@ -1559,6 +1614,12 @@ async function findReusablePreparedTransaction(input: {
           : eq(
               marketplaceGenLayerTransactions.localApplicationId,
               input.localApplicationId,
+            ),
+        input.onchainEntityId === null
+          ? sql`${marketplaceGenLayerTransactions.onchainEntityId} is null`
+          : eq(
+              marketplaceGenLayerTransactions.onchainEntityId,
+              input.onchainEntityId,
             ),
         inArray(
           marketplaceGenLayerTransactions.status,
@@ -1582,6 +1643,88 @@ async function findReusablePreparedTransaction(input: {
     .orderBy(desc(marketplaceGenLayerTransactions.createdAt))
     .limit(1);
   return row ?? null;
+}
+
+async function findGenLayerTransactionRetryPredecessor(
+  input: MarketplaceTransactionIntentBinding & { includeFinalized: boolean },
+): Promise<GenLayerTransactionRow | null> {
+  const retryableStatuses: MarketplaceGenLayerTransactionStatus[] = input.includeFinalized
+    ? ["EXECUTION_FAILED", "NETWORK_TERMINATED", "FINALIZED"]
+    : ["EXECUTION_FAILED", "NETWORK_TERMINATED"];
+  const [row] = await getDb()
+    .select()
+    .from(marketplaceGenLayerTransactions)
+    .where(
+      and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(marketplaceGenLayerTransactions.operation, input.operation),
+        eq(marketplaceGenLayerTransactions.functionName, input.functionName),
+        eq(
+          marketplaceGenLayerTransactions.contractAddress,
+          input.contractAddress.toLowerCase(),
+        ),
+        eq(marketplaceGenLayerTransactions.actorWallet, input.actorWallet),
+        eq(marketplaceGenLayerTransactions.argsHash, input.argsHash),
+        eq(marketplaceGenLayerTransactions.valueAtto, input.valueAtto),
+        input.localCampaignId === null
+          ? sql`${marketplaceGenLayerTransactions.localCampaignId} is null`
+          : eq(
+              marketplaceGenLayerTransactions.localCampaignId,
+              input.localCampaignId,
+            ),
+        input.localApplicationId === null
+          ? sql`${marketplaceGenLayerTransactions.localApplicationId} is null`
+          : eq(
+              marketplaceGenLayerTransactions.localApplicationId,
+              input.localApplicationId,
+            ),
+        input.onchainEntityId === null
+          ? sql`${marketplaceGenLayerTransactions.onchainEntityId} is null`
+          : eq(
+              marketplaceGenLayerTransactions.onchainEntityId,
+              input.onchainEntityId,
+            ),
+        inArray(marketplaceGenLayerTransactions.status, retryableStatuses),
+      ),
+    )
+    .orderBy(
+      desc(marketplaceGenLayerTransactions.createdAt),
+      desc(marketplaceGenLayerTransactions.preparedId),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+function marketplaceTransactionIntentBaseKey(
+  input: MarketplaceTransactionIntentBinding,
+): string {
+  return canonicalHash({
+    protocol: "influencedx-marketplace-transaction-intent-v1",
+    network: MARKETPLACE_GENLAYER_NETWORK,
+    chain_id: MARKETPLACE_GENLAYER_CHAIN_ID,
+    contract_address: marketplaceContractAddress(),
+    operation: input.operation,
+    function_name: input.functionName,
+    actor_wallet: input.actorWallet,
+    args_hash: input.argsHash,
+    value_atto: input.valueAtto,
+    local_campaign_id: input.localCampaignId,
+    local_application_id: input.localApplicationId,
+    onchain_entity_id: input.onchainEntityId,
+  });
+}
+
+function marketplaceTransactionAttemptKey(
+  intentBaseKey: string,
+  predecessor: GenLayerTransactionRow | null,
+): string {
+  return canonicalHash({
+    protocol: "influencedx-marketplace-transaction-attempt-v1",
+    intent_base_key: intentBaseKey,
+    retry_predecessor_prepared_id: predecessor?.preparedId ?? null,
+    retry_predecessor_status: predecessor?.status ?? null,
+  });
 }
 
 function preparedDto(row: GenLayerTransactionRow): PreparedMarketplaceTransaction {
@@ -1749,6 +1892,7 @@ function snakeTransactionRow(row: Record<string, unknown>): GenLayerTransactionR
     args: row.args as unknown[],
     argTypes: row.arg_types as GenLayerTransactionRow["argTypes"],
     argsHash: String(row.args_hash),
+    intentKey: nullableString(row.intent_key),
     valueAtto: String(row.value_atto),
     actorWallet: String(row.actor_wallet),
     localCampaignId: nullableString(row.local_campaign_id),

@@ -1449,6 +1449,7 @@ export const marketplaceGenLayerTransactions = pgTable(
       .$type<Array<"string" | "bool" | "uint256" | "address">>()
       .notNull(),
     argsHash: text("args_hash").notNull(),
+    intentKey: text("intent_key"),
     valueAtto: numeric("value_atto", { precision: 78, scale: 0 })
       .notNull()
       .default("0"),
@@ -1487,6 +1488,11 @@ export const marketplaceGenLayerTransactions = pgTable(
     uniqueIndex("marketplace_genlayer_transactions_hash_idx")
       .on(table.network, table.chainId, table.transactionHash)
       .where(sql`${table.transactionHash} is not null`),
+    uniqueIndex("marketplace_genlayer_transactions_intent_idx")
+      .on(table.network, table.chainId, table.contractAddress, table.intentKey)
+      .where(
+        sql`${table.intentKey} is not null and ${table.status} in ('PREPARED', 'SUBMITTED', 'ACCEPTED', 'FINALIZED', 'RECONCILIATION_REQUIRED')`,
+      ),
     index("marketplace_genlayer_transactions_reconcile_idx")
       .on(table.nextReconcileAt, table.updatedAt)
       .where(
