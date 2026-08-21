@@ -2137,6 +2137,73 @@ footer > div > a:hover { color: var(--red); }
   line-height: 1.6;
 }
 
+.campaign-timing-preview {
+  border: 1px solid var(--line);
+  background: #0c0d0f;
+}
+
+.campaign-timing-panel {
+  margin-bottom: 28px;
+}
+
+.campaign-timing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line-soft);
+}
+
+.campaign-timing-preview .campaign-timing-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.campaign-timing-grid > div {
+  display: flex;
+  min-width: 0;
+  min-height: 92px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  background: #111216;
+}
+
+.campaign-timing-grid span,
+.campaign-timing-grid strong,
+.campaign-cancel-rule {
+  font-family: var(--mono);
+  letter-spacing: 0.09em;
+}
+
+.campaign-timing-grid span {
+  color: var(--red);
+  font-size: 10px;
+}
+
+.campaign-timing-grid strong {
+  overflow-wrap: anywhere;
+  color: #c6cad2;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.campaign-cancel-rule {
+  margin: 0;
+  padding: 13px 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.transaction-lock {
+  width: 100%;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .form-message {
   margin: 0;
   padding: 15px 24px;
@@ -3626,6 +3693,10 @@ footer > div > a:hover { color: var(--red); }
     max-width: 700px;
   }
 
+  .campaign-timing-panel .campaign-timing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .creator-profile-head,
   .creator-profile-grid {
     grid-template-columns: 1fr;
@@ -3703,6 +3774,12 @@ footer > div > a:hover { color: var(--red); }
   }
 
   .campaign-terms-card {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-timing-grid,
+  .campaign-timing-preview .campaign-timing-grid,
+  .campaign-timing-panel .campaign-timing-grid {
     grid-template-columns: 1fr;
   }
 

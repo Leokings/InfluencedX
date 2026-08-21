@@ -14,6 +14,35 @@ export const BASE_SEPOLIA_ESCROW_ADDRESS =
   "0x7e9b6b757d1ef12509889826b2f2a42906661927";
 export const USDC_DECIMALS = 6;
 
+export const DEFAULT_SELECTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
+export const DEFAULT_SUBMISSION_WINDOW_MS = 14 * 24 * 60 * 60 * 1_000;
+export const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
+export const DEFAULT_MAX_UNDETERMINED_RETRIES = 2;
+export const DEFAULT_MAX_CAMPAIGN_DURATION_MS = 90 * 24 * 60 * 60 * 1_000;
+export const MIN_APPLICATION_WINDOW_MS = 60 * 60 * 1_000;
+
+export function deriveDefaultCampaignSchedule(applicationCloseMs: number): Readonly<{
+  selectionDeadlineMs: number;
+  submissionDeadlineMs: number;
+  retentionSeconds: number;
+  maxUndeterminedRetries: number;
+}> {
+  if (!Number.isSafeInteger(applicationCloseMs) || applicationCloseMs < 0) {
+    throw new RangeError("The application deadline clock is invalid.");
+  }
+  const selectionDeadlineMs = applicationCloseMs + DEFAULT_SELECTION_WINDOW_MS;
+  const submissionDeadlineMs = selectionDeadlineMs + DEFAULT_SUBMISSION_WINDOW_MS;
+  if (!Number.isSafeInteger(selectionDeadlineMs) || !Number.isSafeInteger(submissionDeadlineMs)) {
+    throw new RangeError("The default campaign schedule exceeds the supported clock range.");
+  }
+  return Object.freeze({
+    selectionDeadlineMs,
+    submissionDeadlineMs,
+    retentionSeconds: DEFAULT_RETENTION_SECONDS,
+    maxUndeterminedRetries: DEFAULT_MAX_UNDETERMINED_RETRIES,
+  });
+}
+
 export type LegacyCampaignStatus = Lowercase<MarketplaceCampaignStatus>;
 export type LegacyFundingStatus = Lowercase<MarketplaceFundingStatus>;
 export type LegacyApplicationStatus = Lowercase<MarketplaceApplicationStatus>;
@@ -141,6 +170,7 @@ export type MarketplaceApplicationDto = Readonly<{
   pitch: string;
   status: ApplicationStatus;
   selectedAt: string | null;
+  acceptanceDeadline: string | null;
   acceptedAt: string | null;
   genlayerAssignmentId: string | null;
   agreementHash: string | null;
@@ -154,6 +184,7 @@ export type MarketplaceApplicationDto = Readonly<{
   resolutionRound: number;
   resolutionAttempts: number;
   resolutionEligibleAt: string | null;
+  undeterminedRefundEligibleAt: string | null;
   resolutionOutcome: "pass" | "fail" | "undetermined" | null;
   resolutionEvidenceHash: string | null;
   resolutionTxHash: string | null;
@@ -173,6 +204,7 @@ export type CampaignDetailResponse = Readonly<{
   applications: MarketplaceApplicationDto[];
   viewerApplication: MarketplaceApplicationDto | null;
   canCancel: boolean;
+  observedAt: string;
   viewerRecovery: Readonly<{
     preparedId: string;
     txHash: string;

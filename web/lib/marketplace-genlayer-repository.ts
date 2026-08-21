@@ -364,6 +364,8 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
   localApplicationId?: string | null;
   onchainEntityId?: string | null;
   reuseFinalized?: boolean;
+  recoveryOnly?: boolean;
+  beforeInsert?: () => Promise<void>;
   nowMs?: number;
 }): Promise<PreparedMarketplaceTransaction> {
   validateCall(input.call);
@@ -386,23 +388,28 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
   if (input.preparedId !== undefined && !uuidPattern.test(input.preparedId)) {
     throw new Error("The reserved GenLayer prepared ID is invalid.");
   }
+  let existing: GenLayerTransactionRow | null;
   if (input.preparedId) {
-    const reserved = await findGenLayerPreparedTransaction(input.preparedId);
-    if (reserved) {
-      assertReservedPreparedTransaction(reserved, {
+    existing = await findGenLayerPreparedTransaction(input.preparedId);
+    if (existing) {
+      assertReservedPreparedTransaction(existing, {
         ...input,
         actorWallet,
         argsHash,
       });
-      return recoverOrRejectExistingPreparedTransaction(reserved);
     }
   } else {
-    const existing = await findReusablePreparedTransaction({
+    existing = await findReusablePreparedTransaction({
       ...intentBinding,
       reuseFinalized: input.reuseFinalized ?? true,
     });
-    if (existing) return recoverOrRejectExistingPreparedTransaction(existing);
   }
+  const recovery = await recoverPreparedMarketplaceTransactionBeforePreflight({
+    row: existing,
+    recoveryOnly: input.recoveryOnly,
+    beforeInsert: input.beforeInsert,
+  });
+  if (recovery) return recovery;
 
   const retryPredecessor = await findGenLayerTransactionRetryPredecessor({
     ...intentBinding,
@@ -457,6 +464,23 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
     return recoverOrRejectExistingPreparedTransaction(conflict);
   }
   return preparedDto(created);
+}
+
+export async function recoverPreparedMarketplaceTransactionBeforePreflight(input: {
+  row: GenLayerTransactionRow | null;
+  recoveryOnly?: boolean;
+  beforeInsert?: () => Promise<void>;
+}): Promise<PreparedMarketplaceTransaction | null> {
+  if (input.row) return recoverOrRejectExistingPreparedTransaction(input.row);
+  if (input.recoveryOnly) {
+    throw new ApiProblem(
+      409,
+      "MARKETPLACE_RECOVERY_NOT_FOUND",
+      "No submitted transaction is pending.",
+    );
+  }
+  await input.beforeInsert?.();
+  return null;
 }
 
 function assertReservedPreparedTransaction(
@@ -599,6 +623,75 @@ export async function findBoundGenLayerApplicationRecovery(input: {
     preparedId: row.preparedId,
     transactionHash: row.transactionHash,
   };
+}
+
+export async function findBoundGenLayerSubmissionTransaction(input: {
+  localCampaignId: string;
+  localApplicationId: string;
+  assignmentId: string;
+  actorWallet: string;
+}): Promise<GenLayerTransactionRow | null> {
+  const rows = await getDb()
+    .select()
+    .from(marketplaceGenLayerTransactions)
+    .where(
+      and(
+        eq(marketplaceGenLayerTransactions.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerTransactions.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(
+          marketplaceGenLayerTransactions.contractAddress,
+          marketplaceContractAddress().toLowerCase(),
+        ),
+        eq(marketplaceGenLayerTransactions.operation, "SUBMIT_EVIDENCE"),
+        eq(marketplaceGenLayerTransactions.functionName, "submit_evidence"),
+        eq(
+          marketplaceGenLayerTransactions.localCampaignId,
+          input.localCampaignId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.localApplicationId,
+          input.localApplicationId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.onchainEntityId,
+          input.assignmentId,
+        ),
+        eq(
+          marketplaceGenLayerTransactions.actorWallet,
+          normalizeAddress(input.actorWallet),
+        ),
+        isNotNull(marketplaceGenLayerTransactions.transactionHash),
+        inArray(marketplaceGenLayerTransactions.status, [
+          "SUBMITTED",
+          "ACCEPTED",
+          "FINALIZED",
+          "RECONCILIATION_REQUIRED",
+        ]),
+      ),
+    )
+    .orderBy(desc(marketplaceGenLayerTransactions.createdAt))
+    .limit(2);
+  if (rows.length > 1) {
+    throw new ApiProblem(
+      409,
+      "MARKETPLACE_TRANSACTION_STATE_UNKNOWN",
+      "Multiple bound submission transactions require reconciliation. Do not resend.",
+    );
+  }
+  const [row] = rows;
+  if (!row) return null;
+  const call = exactGenLayerJournalCall(row);
+  if (
+    call.functionName !== "submit_evidence"
+    || call.value !== "0"
+    || call.args.length !== 4
+    || call.args[0] !== input.assignmentId
+    || JSON.stringify(call.argTypes)
+      !== JSON.stringify(["string", "string", "string", "string"])
+  ) {
+    throw new Error("The bound GenLayer submission recovery is corrupt.");
+  }
+  return row;
 }
 
 /**

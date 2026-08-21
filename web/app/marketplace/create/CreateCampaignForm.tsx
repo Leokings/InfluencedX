@@ -2,7 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
+import {
+  DEFAULT_MAX_CAMPAIGN_DURATION_MS,
+  DEFAULT_MAX_UNDETERMINED_RETRIES,
+  DEFAULT_RETENTION_SECONDS,
+  DEFAULT_SELECTION_WINDOW_MS,
+  DEFAULT_SUBMISSION_WINDOW_MS,
+  MIN_APPLICATION_WINDOW_MS,
+  deriveDefaultCampaignSchedule,
+} from "@/lib/marketplace-types";
 import { marketplaceErrorMessage, marketplaceRequest } from "../marketplace-api";
 import {
   type ContentSource,
@@ -22,14 +31,20 @@ export function CreateCampaignForm() {
   const router = useRouter();
   const wallet = useMarketplaceWallet();
   const [contentSource, setContentSource] = useState<ContentSource>("X");
+  const [applicationDeadline, setApplicationDeadline] = useState("");
+  const [deadlineBounds, setDeadlineBounds] = useState<{ min: string; max: string } | null>(null);
   const [submission, setSubmission] = useState<SubmissionState>({ phase: "idle", message: null });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDeadlineBounds(deadlineInputBounds(Date.now())), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function submitCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
     setSubmission({ phase: "submitting", message: "Creating draft…" });
     try {
-      const brandWallet = await wallet.authenticate();
       const deliverables = String(values.get("deliverables") ?? "")
         .split("\n")
         .map((value) => value.trim())
@@ -39,10 +54,17 @@ export function CreateCampaignForm() {
       const requiredPhrases = phraseList(values.get("requiredPhrases"), "required phrases");
       const forbiddenPhrases = phraseList(values.get("forbiddenPhrases"), "forbidden phrases");
       const semanticBrief = String(values.get("semanticBrief") ?? "").trim() || description;
+      const nowMs = Date.now();
       const deadline = new Date(String(values.get("deadline") ?? ""));
-      if (Number.isNaN(deadline.getTime()) || deadline.getTime() <= Date.now()) {
-        throw new Error("Choose a campaign deadline in the future.");
+      if (Number.isNaN(deadline.getTime()) || deadline.getTime() < nowMs + MIN_APPLICATION_WINDOW_MS) {
+        throw new Error("Applications must stay open for at least one hour.");
       }
+      const schedule = deriveDefaultCampaignSchedule(deadline.getTime());
+      if (schedule.submissionDeadlineMs > nowMs + DEFAULT_MAX_CAMPAIGN_DURATION_MS) {
+        throw new Error("Choose an earlier application deadline. Work must be due within 90 days.");
+      }
+      const budgetGen = genInputToAtoms(String(values.get("budgetGen") ?? ""));
+      const brandWallet = await wallet.authenticate();
 
       const result = await marketplaceRequest<CampaignMutationResponse>("/api/marketplace/campaigns", {
         method: "POST",
@@ -59,8 +81,12 @@ export function CreateCampaignForm() {
           forbiddenPhrases,
           requireAdDisclosure: values.get("requireAdDisclosure") === "on",
           semanticBrief,
-          budgetGen: genInputToAtoms(String(values.get("budgetGen") ?? "")),
+          budgetGen,
           deadline: deadline.toISOString(),
+          selectionDeadline: new Date(schedule.selectionDeadlineMs).toISOString(),
+          submissionDeadline: new Date(schedule.submissionDeadlineMs).toISOString(),
+          retentionSeconds: schedule.retentionSeconds,
+          maxUndeterminedRetries: schedule.maxUndeterminedRetries,
         }),
       });
       router.push(`/marketplace/campaigns/${encodeURIComponent(result.campaign.id)}`);
@@ -145,9 +171,18 @@ export function CreateCampaignForm() {
           <input name="budgetGen" inputMode="decimal" placeholder="1200" pattern="[0-9]+(?:\.[0-9]{1,18})?" required />
         </label>
         <label>
-          <span>APPLICATION DEADLINE</span>
-          <input name="deadline" type="datetime-local" required />
+          <span>APPLICATIONS CLOSE</span>
+          <input
+            name="deadline"
+            type="datetime-local"
+            min={deadlineBounds?.min}
+            max={deadlineBounds?.max}
+            value={applicationDeadline}
+            onChange={(event) => setApplicationDeadline(event.target.value)}
+            required
+          />
         </label>
+        <CampaignTimingPreview applicationDeadline={applicationDeadline} />
         <label className="field-wide">
           <span>DELIVERABLES / ONE PER LINE</span>
           <textarea
@@ -191,6 +226,54 @@ export function CreateCampaignForm() {
       </button>
     </form>
   );
+}
+
+function CampaignTimingPreview({ applicationDeadline }: { applicationDeadline: string }) {
+  const applicationCloseMs = new Date(applicationDeadline).getTime();
+  const schedule = previewSchedule(applicationCloseMs);
+  return (
+    <section className="campaign-timing-preview field-wide" aria-label="Campaign timing preview" aria-live="polite">
+      <div className="campaign-timing-grid">
+        <div><span>APPLICATIONS CLOSE</span><strong>{previewDate(applicationCloseMs)}</strong></div>
+        <div><span>SELECT BY / UNUSED FUNDS AVAILABLE</span><strong>{schedule ? previewDate(schedule.selectionDeadlineMs) : `${durationDays(DEFAULT_SELECTION_WINDOW_MS)}D AFTER APPS CLOSE`}</strong></div>
+        <div><span>WORK DUE</span><strong>{schedule ? previewDate(schedule.submissionDeadlineMs) : `+${durationDays(DEFAULT_SUBMISSION_WINDOW_MS)}D AFTER SELECT`}</strong></div>
+        <div><span>RESOLUTION</span><strong>{DEFAULT_RETENTION_SECONDS / 3_600}H AFTER POST · {DEFAULT_MAX_UNDETERMINED_RETRIES} ATTEMPTS MAX</strong></div>
+      </div>
+      <p className="campaign-cancel-rule">SELECTED CREATORS: UP TO 24H TO ACCEPT · CANCEL BEFORE APPLICATIONS CLOSE · NO RESERVED CREATOR FUNDS</p>
+    </section>
+  );
+}
+
+function previewSchedule(value: number): ReturnType<typeof deriveDefaultCampaignSchedule> | null {
+  if (!Number.isSafeInteger(value) || value < 0) return null;
+  try {
+    return deriveDefaultCampaignSchedule(value);
+  } catch {
+    return null;
+  }
+}
+
+function previewDate(value: number): string {
+  if (!Number.isFinite(value)) return "CHOOSE ABOVE";
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function durationDays(value: number): number {
+  return value / (24 * 60 * 60 * 1_000);
+}
+
+function deadlineInputBounds(nowMs: number): { min: string; max: string } {
+  const minuteMs = 60_000;
+  const minMs = Math.ceil((nowMs + MIN_APPLICATION_WINDOW_MS) / minuteMs) * minuteMs;
+  const maxMs = Math.floor(
+    (nowMs + DEFAULT_MAX_CAMPAIGN_DURATION_MS - DEFAULT_SELECTION_WINDOW_MS - DEFAULT_SUBMISSION_WINDOW_MS) / minuteMs,
+  ) * minuteMs;
+  return { min: datetimeLocalValue(minMs), max: datetimeLocalValue(maxMs) };
+}
+
+function datetimeLocalValue(value: number): string {
+  const date = new Date(value);
+  return new Date(value - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 function phraseList(value: FormDataEntryValue | null, label: string): string[] {

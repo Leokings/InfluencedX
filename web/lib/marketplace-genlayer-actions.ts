@@ -1,5 +1,6 @@
 import type { AuthenticatedWalletSession } from "./wallet-session.ts";
 import { enqueueCampaignProgression } from "./campaign-progression-queue.ts";
+import { marketplaceRecoveryOnly } from "./marketplace-api.ts";
 import { assertOptionalActorWallet, requireText, requireUuid } from "./marketplace-core.ts";
 import {
   campaignSnapshotHash,
@@ -7,8 +8,15 @@ import {
   deriveAssignmentId,
   deriveResolutionRequestId,
   deriveWithdrawalId,
+  genLayerApplicationWithdrawalAvailability,
+  genLayerAssignmentAcceptanceAvailability,
+  genLayerAssignmentSubmissionAvailability,
+  genLayerCampaignApplicationAvailability,
   genLayerCampaignCancellationAvailability,
+  genLayerCampaignSelectionAvailability,
   genLayerResolutionAvailability,
+  genLayerUndeterminedRefundAvailability,
+  genLayerUndeterminedRefundEligibleAtEpoch,
   normalizeContentSource,
   parseApplicationState,
   parseAssignmentState,
@@ -29,6 +37,7 @@ import {
   findGenLayerCampaignProjectionByOnchainId,
   findGenLayerCampaignDraft,
   findGenLayerCampaignProjectionByLocalId,
+  findBoundGenLayerSubmissionTransaction,
   findGenLayerPreparedTransaction,
   findGenLayerWithdrawalProjectionById,
   findLatestGenLayerWithdrawalProjection,
@@ -37,6 +46,7 @@ import {
   findGenLayerProfileByWallet,
   insertGenLayerPrivateApplication,
   prepareGenLayerMarketplaceTransaction,
+  recoverPreparedMarketplaceTransactionBeforePreflight,
   recordGenLayerTransactionStatus,
   setGenLayerCampaignDraftStatus,
   setGenLayerPrivateApplicationStatus,
@@ -149,6 +159,7 @@ export async function prepareGenLayerApplication(input: {
   session: AuthenticatedWalletSession;
   body: Record<string, unknown>;
 }) {
+  const recoveryOnly = marketplaceRecoveryOnly(input.body);
   assertExactJsonKeys(
     input.body,
     ["creatorWallet", "requestedRateGen", "pitch"],
@@ -156,28 +167,43 @@ export async function prepareGenLayerApplication(input: {
   );
   assertOptionalActorWallet(input.body, "creatorWallet", input.session.wallet);
   const context = await campaignContext(input.campaignId);
-  requireOpenCampaign(context);
   const creator = input.session.wallet.toLowerCase();
   const requestedRateAtto = positiveAtto(input.body.requestedRateGen, "requestedRateGen");
   if (BigInt(requestedRateAtto) > BigInt(context.projection.budgetAtto)) {
     throw problem(400, "APPLICATION_RATE_INVALID", "Requested GEN exceeds the campaign budget.");
   }
   const pitch = requireText(input.body.pitch, "pitch", 10, 2_000);
-  const { profile } = await requireActiveIdentityBundle(
-    creator,
-    context.draft.contentSource,
-  );
-  let application = await findGenLayerPrivateApplicationForCreator(
-    context.draft.id,
-    creator,
-  );
   const applicationId = deriveApplicationId(context.projection.campaignId, creator);
   const pitchCommitment = canonicalHash({
     protocol: "influencedx-private-pitch-v1",
     application_id: applicationId,
     pitch,
   });
+  const preflightApplicationCampaign = async () => {
+    const authoritativeCampaign = parseCampaignState(
+      await readMarketplaceState("get_campaign", [context.projection.campaignId]),
+    );
+    assertOperatorCampaignBinding(context.projection, authoritativeCampaign);
+    const applicationAvailability = genLayerCampaignApplicationAvailability(authoritativeCampaign);
+    if (!applicationAvailability.canApply) {
+      throw problem(409, "APPLICATION_CLOSED", "Campaign is not accepting applications.");
+    }
+  };
+  let application = await findGenLayerPrivateApplicationForCreator(
+    context.draft.id,
+    creator,
+  );
+  let applicationWasCreated = false;
   if (!application) {
+    await recoverPreparedMarketplaceTransactionBeforePreflight({
+      row: null,
+      recoveryOnly,
+    });
+    const { profile } = await requireActiveIdentityBundle(
+      creator,
+      context.draft.contentSource,
+    );
+    await preflightApplicationCampaign();
     application = await insertGenLayerPrivateApplication({
       localCampaignId: context.draft.id,
       creatorProfileProjectionId: profile.projectionId,
@@ -186,6 +212,16 @@ export async function prepareGenLayerApplication(input: {
       pitch,
       pitchCommitment,
     });
+    if (application.creatorProfileProjectionId !== profile.projectionId) {
+      identityBundleMismatch();
+    }
+    if (
+      application.requestedRateAtto !== requestedRateAtto ||
+      application.pitchCommitment !== pitchCommitment
+    ) {
+      throw problem(409, "APPLICATION_ALREADY_PREPARED", "A different application is already bound to this campaign.");
+    }
+    applicationWasCreated = true;
   } else if (
     application.requestedRateAtto !== requestedRateAtto ||
     application.pitchCommitment !== pitchCommitment
@@ -205,6 +241,19 @@ export async function prepareGenLayerApplication(input: {
     localCampaignId: context.draft.id,
     localApplicationId: application.id,
     onchainEntityId: applicationId,
+    recoveryOnly,
+    beforeInsert: applicationWasCreated
+      ? undefined
+      : async () => {
+        const { profile } = await requireActiveIdentityBundle(
+          creator,
+          context.draft.contentSource,
+        );
+        if (profile.projectionId !== application.creatorProfileProjectionId) {
+          identityBundleMismatch();
+        }
+        await preflightApplicationCampaign();
+      },
   });
   return mutationResponse(context.draft, context.projection, application, null, prepared);
 }
@@ -246,19 +295,45 @@ export async function prepareGenLayerSelection(input: ActionInput) {
   assertExactJsonKeys(input.body, []);
   const context = await applicationContext(input);
   assertBrand(context.draft, input.session.wallet);
-  if (context.application.status !== "APPLIED") invalidState();
-  const { profile } = await requireActiveIdentityBundle(
+  const applicationId = deriveApplicationId(
+    context.campaign.campaignId,
     context.application.creatorWallet,
-    context.draft.contentSource,
   );
-  if (profile.projectionId !== context.application.creatorProfileProjectionId) {
-    identityBundleMismatch();
-  }
   const agreedRateAtto = context.application.requestedRateAtto;
+  const preflightSelection = async () => {
+    const { profile } = await requireActiveIdentityBundle(
+      context.application.creatorWallet,
+      context.draft.contentSource,
+    );
+    if (profile.projectionId !== context.application.creatorProfileProjectionId) {
+      identityBundleMismatch();
+    }
+    const [authoritativeCampaign, authoritativeApplication] = await Promise.all([
+      readMarketplaceState("get_campaign", [context.campaign.campaignId]).then(parseCampaignState),
+      readMarketplaceState("get_application", [
+        context.campaign.campaignId,
+        marketplaceCalldataAddress(context.application.creatorWallet),
+      ]).then(parseApplicationState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertPreparationApplicationBinding(authoritativeApplication, context, applicationId);
+    const selectionAvailability = genLayerCampaignSelectionAvailability(authoritativeCampaign);
+    if (!selectionAvailability.canSelect) {
+      throw problem(409, "SELECTION_CLOSED", "Campaign selection is closed.");
+    }
+    if (
+      BigInt(agreedRateAtto) <= 0n ||
+      BigInt(agreedRateAtto) > BigInt(authoritativeApplication.requestedRateAtto)
+    ) invalidState();
+    if (BigInt(agreedRateAtto) > BigInt(authoritativeCampaign.availableAtto)) {
+      throw problem(409, "CAMPAIGN_BUDGET", "Campaign has insufficient unallocated budget.");
+    }
+    assertApplicationIdentityBinding(authoritativeApplication, profile);
+  };
   const agreementHash = canonicalHash({
     protocol: "influencedx-assignment-agreement-v2",
     campaign_id: context.campaign.campaignId,
-    application_id: deriveApplicationId(context.campaign.campaignId, context.application.creatorWallet),
+    application_id: applicationId,
     creator: context.application.creatorWallet,
     content_source: context.draft.contentSource,
     agreed_rate_atto: agreedRateAtto,
@@ -277,7 +352,15 @@ export async function prepareGenLayerSelection(input: ActionInput) {
     BigInt(agreedRateAtto),
     agreementHash,
   ], ["string", "string", "address", "uint256", "string"]);
-  const prepared = await prepareAction("SELECT_CREATOR", call, context, input.session.wallet, assignmentId);
+  const prepared = await prepareAction(
+    "SELECT_CREATOR",
+    call,
+    context,
+    input.session.wallet,
+    assignmentId,
+    preflightSelection,
+    marketplaceRecoveryOnly(input.body),
+  );
   return mutationResponse(context.draft, context.campaign, context.application, null, prepared);
 }
 
@@ -323,12 +406,52 @@ export async function confirmGenLayerSelection(input: ActionInput) {
 }
 
 export async function prepareGenLayerAccept(input: ActionInput) {
-  return prepareAssignmentSimple(
-    input,
-    "ACCEPT_ASSIGNMENT",
+  assertExactJsonKeys(input.body, []);
+  const context = await applicationContext(input);
+  if (!context.assignment) invalidState();
+  const projectedAssignment = context.assignment;
+  assertCreator(context.application, input.session.wallet);
+  const preflightAcceptance = async () => {
+    const identity = await requireActiveIdentityBundle(
+      context.application.creatorWallet,
+      context.draft.contentSource,
+    );
+    const [authoritativeAssignment, authoritativeCampaign] = await Promise.all([
+      readMarketplaceState("get_assignment", [projectedAssignment.assignmentId])
+        .then(parseAssignmentState),
+      readMarketplaceState("get_campaign", [context.campaign.campaignId])
+        .then(parseCampaignState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertOperatorAssignmentBinding(projectedAssignment, authoritativeAssignment, authoritativeCampaign);
+    assertPreparationAssignmentBinding(projectedAssignment, authoritativeAssignment);
+    const acceptanceAvailability = genLayerAssignmentAcceptanceAvailability(authoritativeAssignment);
+    if (acceptanceAvailability.reason === "EXPIRED") {
+      throw problem(409, "ACCEPTANCE_EXPIRED", "Assignment acceptance deadline has passed.");
+    }
+    if (!acceptanceAvailability.canAccept) invalidState();
+    assertAssignmentIdentityBinding(identity.authoritativeProfile, authoritativeAssignment);
+  };
+  const call = callPlan(
     "accept_assignment",
-    "creator",
-    true,
+    [projectedAssignment.assignmentId],
+    ["string"],
+  );
+  const prepared = await prepareAction(
+    "ACCEPT_ASSIGNMENT",
+    call,
+    context,
+    input.session.wallet,
+    projectedAssignment.assignmentId,
+    preflightAcceptance,
+    marketplaceRecoveryOnly(input.body),
+  );
+  return mutationResponse(
+    context.draft,
+    context.campaign,
+    context.application,
+    context.assignment,
+    prepared,
   );
 }
 
@@ -348,8 +471,39 @@ export async function prepareGenLayerApplicationWithdrawal(input: ActionInput) {
   assertExactJsonKeys(input.body, []);
   const context = await applicationContext(input);
   assertCreator(context.application, input.session.wallet);
+  const applicationId = deriveApplicationId(
+    context.campaign.campaignId,
+    context.application.creatorWallet,
+  );
+  const preflightWithdrawal = async () => {
+    const [authoritativeCampaign, authoritativeApplication] = await Promise.all([
+      readMarketplaceState("get_campaign", [context.campaign.campaignId]).then(parseCampaignState),
+      readMarketplaceState("get_application", [
+        context.campaign.campaignId,
+        marketplaceCalldataAddress(context.application.creatorWallet),
+      ]).then(parseApplicationState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertPreparationApplicationBinding(authoritativeApplication, context, applicationId);
+    const withdrawalAvailability = genLayerApplicationWithdrawalAvailability(
+      authoritativeApplication,
+      authoritativeCampaign,
+    );
+    if (withdrawalAvailability.reason === "CLOSED") {
+      throw problem(409, "APPLICATION_LOCKED", "Application withdrawal is closed.");
+    }
+    if (!withdrawalAvailability.canWithdraw) invalidState();
+  };
   const call = callPlan("withdraw_application", [context.campaign.campaignId], ["string"]);
-  const prepared = await prepareAction("WITHDRAW_APPLICATION", call, context, input.session.wallet, deriveApplicationId(context.campaign.campaignId, context.application.creatorWallet));
+  const prepared = await prepareAction(
+    "WITHDRAW_APPLICATION",
+    call,
+    context,
+    input.session.wallet,
+    applicationId,
+    preflightWithdrawal,
+    marketplaceRecoveryOnly(input.body),
+  );
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
 
@@ -372,28 +526,121 @@ export async function prepareGenLayerSubmission(input: ActionInput) {
   assertExactJsonKeys(input.body, ["contentSource", "contentId", "expectedHandle"]);
   const context = await applicationContext(input);
   assertCreator(context.application, input.session.wallet);
-  if (!context.assignment || context.assignment.status !== "ACCEPTED") invalidState();
-  const identity = await requireActiveIdentityBundle(
-    context.application.creatorWallet,
-    context.draft.contentSource,
-  );
-  assertAssignmentIdentityBinding(identity.authoritativeProfile, context.assignment);
+  if (!context.assignment) invalidState();
+  const projectedAssignment = context.assignment;
+  const findBoundSubmission = () => findBoundGenLayerSubmissionTransaction({
+    localCampaignId: context.draft.id,
+    localApplicationId: context.application.id,
+    assignmentId: projectedAssignment.assignmentId,
+    actorWallet: input.session.wallet,
+  });
+  const earlyRecovery = await recoverPreparedMarketplaceTransactionBeforePreflight({
+    row: await findBoundSubmission(),
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
+  });
+  if (earlyRecovery) {
+    return mutationResponse(
+      context.draft,
+      context.campaign,
+      context.application,
+      context.assignment,
+      earlyRecovery,
+    );
+  }
   const source = normalizeContentSource(input.body.contentSource);
   if (source !== context.draft.contentSource) throw problem(400, "CONTENT_SOURCE_MISMATCH", "Submission source does not match the campaign.");
   const expectedHandle = canonicalSubmissionHandle(source, input.body.expectedHandle);
-  if (expectedHandle !== context.assignment.creatorHandle) {
+  if (expectedHandle !== projectedAssignment.creatorHandle) {
     throw problem(409, "CREATOR_HANDLE_MISMATCH", "expectedHandle does not match the selected creator identity.");
   }
-  const { call } = await buildGenLayerSubmissionCall({
-    assignmentId: context.assignment.assignmentId,
-    agreementHash: context.assignment.agreementHash,
-    creatorIdentityHash: context.assignment.creatorIdentityHash,
-    contentSource: source,
-    submittedContent: input.body.contentId,
-    expectedUsername: identity.authoritativeProfile.handle,
-    expectedExternalUserId: identity.authoritativeProfile.externalUserId,
-  });
-  const prepared = await prepareAction("SUBMIT_EVIDENCE", call, context, input.session.wallet, context.assignment.assignmentId);
+  let call: MarketplaceGenLayerCall;
+  try {
+    const submissionIdentity = source === "FARCASTER"
+      ? await requireActiveIdentityBundle(
+          context.application.creatorWallet,
+          context.draft.contentSource,
+        )
+      : null;
+    if (submissionIdentity) {
+      assertAssignmentIdentityBinding(
+        submissionIdentity.authoritativeProfile,
+        projectedAssignment,
+      );
+    }
+    call = (await buildGenLayerSubmissionCall({
+      assignmentId: projectedAssignment.assignmentId,
+      agreementHash: projectedAssignment.agreementHash,
+      creatorIdentityHash: projectedAssignment.creatorIdentityHash,
+      contentSource: source,
+      submittedContent: input.body.contentId,
+      expectedUsername: submissionIdentity?.authoritativeProfile.handle
+        ?? projectedAssignment.creatorHandle,
+      expectedExternalUserId: submissionIdentity?.authoritativeProfile.externalUserId
+        ?? projectedAssignment.creatorExternalUserId,
+    })).call;
+  } catch (error) {
+    const racedRecovery = await recoverPreparedMarketplaceTransactionBeforePreflight({
+      row: await findBoundSubmission(),
+    });
+    if (racedRecovery) {
+      return mutationResponse(
+        context.draft,
+        context.campaign,
+        context.application,
+        context.assignment,
+        racedRecovery,
+      );
+    }
+    throw error;
+  }
+  const preflightSubmission = async () => {
+    const currentIdentity = await requireActiveIdentityBundle(
+      context.application.creatorWallet,
+      context.draft.contentSource,
+    );
+    const [authoritativeAssignment, authoritativeCampaign] = await Promise.all([
+      readMarketplaceState("get_assignment", [projectedAssignment.assignmentId])
+        .then(parseAssignmentState),
+      readMarketplaceState("get_campaign", [context.campaign.campaignId])
+        .then(parseCampaignState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertOperatorAssignmentBinding(projectedAssignment, authoritativeAssignment, authoritativeCampaign);
+    assertPreparationAssignmentBinding(projectedAssignment, authoritativeAssignment);
+    const submissionAvailability = genLayerAssignmentSubmissionAvailability(
+      authoritativeAssignment,
+      authoritativeCampaign,
+    );
+    if (submissionAvailability.reason === "EXPIRED") {
+      throw problem(409, "SUBMISSION_EXPIRED", "Submission deadline has passed.");
+    }
+    if (!submissionAvailability.canSubmit) invalidState();
+    assertAssignmentIdentityBinding(
+      currentIdentity.authoritativeProfile,
+      authoritativeAssignment,
+    );
+    if (expectedHandle !== authoritativeAssignment.creatorHandle) {
+      throw problem(409, "CREATOR_HANDLE_MISMATCH", "expectedHandle does not match the selected creator identity.");
+    }
+  };
+  let prepared;
+  try {
+    prepared = await prepareAction(
+      "SUBMIT_EVIDENCE",
+      call,
+      context,
+      input.session.wallet,
+      projectedAssignment.assignmentId,
+      preflightSubmission,
+      marketplaceRecoveryOnly(input.body),
+    );
+  } catch (error) {
+    const racedRecovery = await recoverPreparedMarketplaceTransactionBeforePreflight({
+      row: await findBoundSubmission(),
+    });
+    if (!racedRecovery) throw error;
+    prepared = racedRecovery;
+  }
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
 
@@ -441,23 +688,48 @@ export async function prepareGenLayerResolution(input: ActionInput) {
   assertExactJsonKeys(input.body, []);
   const context = await applicationContext(input);
   if (!context.assignment?.resolutionRequestId) invalidState();
+  const projectedAssignment = context.assignment;
   if (![context.draft.brandWallet, context.application.creatorWallet].includes(input.session.wallet.toLowerCase())) forbidden();
-  const [assignment, campaign] = await Promise.all([
-    readMarketplaceState("get_assignment", [context.assignment.assignmentId]).then(parseAssignmentState),
-    readMarketplaceState("get_campaign", [context.campaign.campaignId]).then(parseCampaignState),
-  ]);
-  assertOperatorAssignmentBinding(context.assignment, assignment, campaign);
-  assertResolutionPreparationBinding(context.assignment, assignment);
-  const availability = genLayerResolutionAvailability(assignment, campaign);
-  if (availability.reason === "EARLY") {
-    throw problem(409, "RETENTION", `Resolution unlocks ${availability.unlocksAt}.`);
-  }
-  if (availability.reason === "RETRIES_EXHAUSTED") {
-    throw problem(409, "RETRIES_EXHAUSTED", "Resolution retries are exhausted. Use refund instead.");
-  }
-  if (!availability.canResolve || !assignment.resolutionRequestId) invalidState();
-  const call = callPlan("resolve_assignment", [assignment.assignmentId, assignment.resolutionRequestId], ["string", "string"]);
-  const prepared = await prepareAction("RESOLVE_ASSIGNMENT", call, context, input.session.wallet, context.assignment.assignmentId);
+  const preflightResolution = async () => {
+    const [authoritativeAssignment, authoritativeCampaign] = await Promise.all([
+      readMarketplaceState("get_assignment", [projectedAssignment.assignmentId])
+        .then(parseAssignmentState),
+      readMarketplaceState("get_campaign", [context.campaign.campaignId])
+        .then(parseCampaignState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertOperatorAssignmentBinding(
+      projectedAssignment,
+      authoritativeAssignment,
+      authoritativeCampaign,
+    );
+    assertResolutionPreparationBinding(projectedAssignment, authoritativeAssignment);
+    const availability = genLayerResolutionAvailability(
+      authoritativeAssignment,
+      authoritativeCampaign,
+    );
+    if (availability.reason === "EARLY") {
+      throw problem(409, "RETENTION", `Resolution unlocks ${availability.unlocksAt}.`);
+    }
+    if (availability.reason === "RETRIES_EXHAUSTED") {
+      throw problem(409, "RETRIES_EXHAUSTED", "Resolution retries are exhausted. Use refund instead.");
+    }
+    if (!availability.canResolve || !authoritativeAssignment.resolutionRequestId) invalidState();
+  };
+  const call = callPlan(
+    "resolve_assignment",
+    [projectedAssignment.assignmentId, projectedAssignment.resolutionRequestId],
+    ["string", "string"],
+  );
+  const prepared = await prepareAction(
+    "RESOLVE_ASSIGNMENT",
+    call,
+    context,
+    input.session.wallet,
+    projectedAssignment.assignmentId,
+    preflightResolution,
+    marketplaceRecoveryOnly(input.body),
+  );
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
 
@@ -656,7 +928,61 @@ export async function reconcileGenLayerOperatorCampaignFinalization(input: {
 }
 
 export async function prepareGenLayerRefundUndetermined(input: ActionInput) {
-  return prepareAssignmentSimple(input, "REFUND_UNDETERMINED", "refund_undetermined", "participant");
+  assertExactJsonKeys(input.body, []);
+  const context = await applicationContext(input);
+  if (!context.assignment) invalidState();
+  const projectedAssignment = context.assignment;
+  if (![context.draft.brandWallet, context.application.creatorWallet].includes(
+    input.session.wallet.toLowerCase(),
+  )) forbidden();
+  const preflightRefundUndetermined = async () => {
+    const [authoritativeAssignment, authoritativeCampaign] = await Promise.all([
+      readMarketplaceState("get_assignment", [projectedAssignment.assignmentId])
+        .then(parseAssignmentState),
+      readMarketplaceState("get_campaign", [context.campaign.campaignId])
+        .then(parseCampaignState),
+    ]);
+    assertOperatorCampaignBinding(context.campaign, authoritativeCampaign);
+    assertOperatorAssignmentBinding(
+      projectedAssignment,
+      authoritativeAssignment,
+      authoritativeCampaign,
+    );
+    assertPreparationAssignmentBinding(projectedAssignment, authoritativeAssignment);
+    assertResolutionPreparationBinding(projectedAssignment, authoritativeAssignment);
+    const refundAvailability = genLayerUndeterminedRefundAvailability(
+      authoritativeAssignment,
+      authoritativeCampaign,
+    );
+    if (refundAvailability.reason === "RETRIES_REMAIN") {
+      throw problem(409, "RETRIES_REMAIN", "Configured resolution retries remain.");
+    }
+    if (refundAvailability.reason === "EARLY") {
+      throw problem(409, "REFUND_DELAY", `Refund unlocks ${refundAvailability.unlocksAt}.`);
+    }
+    if (!refundAvailability.canRefund) invalidState();
+  };
+  const call = callPlan(
+    "refund_undetermined",
+    [projectedAssignment.assignmentId],
+    ["string"],
+  );
+  const prepared = await prepareAction(
+    "REFUND_UNDETERMINED",
+    call,
+    context,
+    input.session.wallet,
+    projectedAssignment.assignmentId,
+    preflightRefundUndetermined,
+    marketplaceRecoveryOnly(input.body),
+  );
+  return mutationResponse(
+    context.draft,
+    context.campaign,
+    context.application,
+    context.assignment,
+    prepared,
+  );
 }
 
 export async function confirmGenLayerRefundUndetermined(input: ActionInput) {
@@ -667,25 +993,33 @@ export async function prepareGenLayerCampaignCancel(input: CampaignActionInput) 
   assertExactJsonKeys(input.body, []);
   const context = await campaignContext(input.campaignId);
   assertBrand(context.draft, input.session.wallet);
-  const state = parseCampaignState(
-    await readMarketplaceState("get_campaign", [context.projection.campaignId]),
+  const preflightCancellation = async () => {
+    const authoritativeCampaign = parseCampaignState(
+      await readMarketplaceState("get_campaign", [context.projection.campaignId]),
+    );
+    assertOperatorCampaignBinding(context.projection, authoritativeCampaign);
+    const availability = genLayerCampaignCancellationAvailability(authoritativeCampaign);
+    if (availability.reason === "LATE") {
+      throw problem(409, "CANCEL_TOO_LATE", "Cancellation closed when applications closed.");
+    }
+    if (availability.reason === "RESERVED") {
+      throw problem(409, "CAMPAIGN_RESERVED", "Active assignments must be settled first.");
+    }
+    if (!availability.canCancel) invalidState();
+  };
+  const call = callPlan(
+    "cancel_campaign",
+    [context.projection.campaignId],
+    ["string"],
   );
-  assertOperatorCampaignBinding(context.projection, state);
-  const availability = genLayerCampaignCancellationAvailability(state);
-  if (availability.reason === "LATE") {
-    throw problem(409, "CANCEL_TOO_LATE", "Cancellation closed when applications closed.");
-  }
-  if (availability.reason === "RESERVED") {
-    throw problem(409, "CAMPAIGN_RESERVED", "Active assignments must be settled first.");
-  }
-  if (!availability.canCancel) invalidState();
-  const call = callPlan("cancel_campaign", [state.campaignId], ["string"]);
   const prepared = await prepareGenLayerMarketplaceTransaction({
     operation: "CANCEL_CAMPAIGN",
     call,
     actorWallet: input.session.wallet,
     localCampaignId: context.draft.id,
-    onchainEntityId: state.campaignId,
+    onchainEntityId: context.projection.campaignId,
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
+    beforeInsert: preflightCancellation,
   });
   return {
     campaign: (await getGenLayerMarketplaceCampaignDetail({
@@ -704,21 +1038,23 @@ export async function prepareGenLayerRefundUnallocated(input: CampaignActionInpu
   assertExactJsonKeys(input.body, []);
   const context = await campaignContext(input.campaignId);
   assertBrand(context.draft, input.session.wallet);
-  const state = parseCampaignState(
-    await readMarketplaceState("get_campaign", [context.projection.campaignId]),
-  );
-  assertOperatorCampaignBinding(context.projection, state);
-  const availability = genLayerUnallocatedRefundAvailability(state);
-  if (availability.reason === "EARLY") {
-    throw problem(
-      409,
-      "REFUND_EARLY",
-      `Unused GEN unlocks ${availability.unlocksAt}.`,
+  const preflightRefundUnallocated = async () => {
+    const authoritativeCampaign = parseCampaignState(
+      await readMarketplaceState("get_campaign", [context.projection.campaignId]),
     );
-  }
-  if (availability.reason === "EMPTY") {
-    throw problem(409, "NO_UNALLOCATED", "No unused GEN remains.");
-  }
+    assertOperatorCampaignBinding(context.projection, authoritativeCampaign);
+    const availability = genLayerUnallocatedRefundAvailability(authoritativeCampaign);
+    if (availability.reason === "EARLY") {
+      throw problem(
+        409,
+        "REFUND_EARLY",
+        `Unused GEN unlocks ${availability.unlocksAt}.`,
+      );
+    }
+    if (availability.reason === "EMPTY") {
+      throw problem(409, "NO_UNALLOCATED", "No unused GEN remains.");
+    }
+  };
   const call = callPlan(
     "refund_unallocated",
     [context.projection.campaignId],
@@ -730,6 +1066,8 @@ export async function prepareGenLayerRefundUnallocated(input: CampaignActionInpu
     actorWallet: input.session.wallet,
     localCampaignId: context.draft.id,
     onchainEntityId: context.projection.campaignId,
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
+    beforeInsert: preflightRefundUnallocated,
   });
   return {
     campaign: (await getGenLayerMarketplaceCampaignDetail({
@@ -829,7 +1167,14 @@ export async function prepareGenLayerWithdrawal(input: CampaignActionInput) {
     amountAtto: claimable.claimableAtto,
   });
   const call = callPlan("request_withdrawal", [withdrawalId, BigInt(claimable.claimableAtto)], ["string", "uint256"]);
-  const prepared = await prepareGenLayerMarketplaceTransaction({ operation: "REQUEST_WITHDRAWAL", call, actorWallet: wallet, localCampaignId: context.draft.id, onchainEntityId: withdrawalId });
+  const prepared = await prepareGenLayerMarketplaceTransaction({
+    operation: "REQUEST_WITHDRAWAL",
+    call,
+    actorWallet: wallet,
+    localCampaignId: context.draft.id,
+    onchainEntityId: withdrawalId,
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
+  });
   return { ...(await getGenLayerSettlement(input)), ...preparedMutationFields(prepared), withdrawalId };
 }
 
@@ -857,7 +1202,14 @@ export async function prepareGenLayerWithdrawalExecution(input: CampaignActionIn
   const withdrawal = parseWithdrawalState(await readMarketplaceState("get_withdrawal", [withdrawalId]));
   if (withdrawal.account !== input.session.wallet.toLowerCase() || withdrawal.status !== "PENDING") invalidState();
   const call = callPlan("execute_withdrawal", [withdrawalId], ["string"]);
-  const prepared = await prepareGenLayerMarketplaceTransaction({ operation: "EXECUTE_WITHDRAWAL", call, actorWallet: withdrawal.account, localCampaignId: context.draft.id, onchainEntityId: withdrawalId });
+  const prepared = await prepareGenLayerMarketplaceTransaction({
+    operation: "EXECUTE_WITHDRAWAL",
+    call,
+    actorWallet: withdrawal.account,
+    localCampaignId: context.draft.id,
+    onchainEntityId: withdrawalId,
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
+  });
   return { ...(await getGenLayerSettlement(input)), ...preparedMutationFields(prepared), withdrawalId };
 }
 
@@ -937,8 +1289,19 @@ async function prepareAction(
   context: ActionContext,
   actor: string,
   entityId: string,
+  beforeInsert?: () => Promise<void>,
+  recoveryOnly = false,
 ) {
-  return prepareGenLayerMarketplaceTransaction({ operation, call, actorWallet: actor, localCampaignId: context.draft.id, localApplicationId: context.application.id, onchainEntityId: entityId });
+  return prepareGenLayerMarketplaceTransaction({
+    operation,
+    call,
+    actorWallet: actor,
+    localCampaignId: context.draft.id,
+    localApplicationId: context.application.id,
+    onchainEntityId: entityId,
+    recoveryOnly,
+    beforeInsert,
+  });
 }
 
 async function prepareAssignmentSimple(
@@ -961,7 +1324,15 @@ async function prepareAssignmentSimple(
     assertAssignmentIdentityBinding(identity.authoritativeProfile, context.assignment);
   }
   const call = callPlan(method, [context.assignment.assignmentId], ["string"]);
-  const prepared = await prepareAction(operation, call, context, input.session.wallet, context.assignment.assignmentId);
+  const prepared = await prepareAction(
+    operation,
+    call,
+    context,
+    input.session.wallet,
+    context.assignment.assignmentId,
+    undefined,
+    marketplaceRecoveryOnly(input.body),
+  );
   return mutationResponse(context.draft, context.campaign, context.application, context.assignment, prepared);
 }
 
@@ -1199,7 +1570,8 @@ function assertResolutionPreparationBinding(
     assignment.resolutionRequestId !== existing.resolutionRequestId ||
     assignment.resolutionRound !== existing.resolutionRound ||
     assignment.resolutionAttempts !== existing.resolutionAttempts ||
-    assignment.resolutionEligibleAtEpoch !== existing.resolutionEligibleAtEpoch
+    assignment.resolutionEligibleAtEpoch !== existing.resolutionEligibleAtEpoch ||
+    assignment.lastResolutionAtEpoch !== existing.lastResolutionAtEpoch
   ) stateMismatch();
 }
 
@@ -1281,8 +1653,54 @@ function assertApplicationBinding(state: GenLayerApplicationState, local: GenLay
   if (state.applicationId !== applicationId || state.campaignId !== campaignId || state.creator !== local.creatorWallet || state.requestedRateAtto !== local.requestedRateAtto || state.pitchCommitment !== local.pitchCommitment || state.status !== "APPLIED") stateMismatch();
 }
 
+function assertPreparationApplicationBinding(
+  state: GenLayerApplicationState,
+  context: ActionContext,
+  applicationId: string,
+): void {
+  if (
+    context.application.status !== "APPLIED" ||
+    state.applicationId !== applicationId ||
+    state.campaignId !== context.campaign.campaignId ||
+    state.creator !== context.application.creatorWallet ||
+    state.contentSource !== context.draft.contentSource ||
+    state.requestedRateAtto !== context.application.requestedRateAtto ||
+    state.pitchCommitment !== context.application.pitchCommitment ||
+    state.status !== "APPLIED"
+  ) stateMismatch();
+}
+
+function assertApplicationIdentityBinding(
+  state: GenLayerApplicationState,
+  profile: Readonly<{ identityHash: string; externalUserId: string }>,
+): void {
+  if (
+    state.creatorIdentityHash !== profile.identityHash ||
+    state.creatorExternalUserId !== profile.externalUserId
+  ) identityBundleMismatch();
+}
+
 function assertAssignmentBinding(state: GenLayerAssignmentState, context: ActionContext, assignmentId: string, agreementHash: string) {
   if (state.assignmentId !== assignmentId || state.campaignId !== context.campaign.campaignId || state.creator !== context.application.creatorWallet || state.contentSource !== context.draft.contentSource || state.applicationId !== deriveApplicationId(context.campaign.campaignId, context.application.creatorWallet) || state.agreementHash !== agreementHash || state.agreedRateAtto !== context.application.requestedRateAtto || state.status !== "SELECTED") stateMismatch();
+}
+
+function assertPreparationAssignmentBinding(
+  existing: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+): void {
+  if (
+    assignment.status !== existing.status ||
+    assignment.selectedAtEpoch !== existing.selectedAtEpoch ||
+    assignment.acceptanceDeadlineEpoch !== existing.acceptanceDeadlineEpoch ||
+    assignment.acceptedAtEpoch !== existing.acceptedAtEpoch ||
+    assignment.postId !== existing.postId ||
+    assignment.submissionHash !== existing.submissionHash ||
+    assignment.resolutionRequestId !== existing.resolutionRequestId ||
+    assignment.resolutionRound !== existing.resolutionRound ||
+    assignment.resolutionAttempts !== existing.resolutionAttempts ||
+    assignment.resolutionEligibleAtEpoch !== existing.resolutionEligibleAtEpoch ||
+    assignment.lastResolutionAtEpoch !== existing.lastResolutionAtEpoch
+  ) stateMismatch();
 }
 
 async function requireActiveIdentityBundle(
@@ -1325,7 +1743,10 @@ async function requireActiveIdentityBundle(
 
 function assertAssignmentIdentityBinding(
   profile: ReturnType<typeof parseProfileState>,
-  assignment: GenLayerAssignmentProjection,
+  assignment: Pick<
+    GenLayerAssignmentProjection,
+    "creatorIdentityHash" | "creatorExternalUserId"
+  >,
 ) {
   if (
     profile.identityHash !== assignment.creatorIdentityHash ||
@@ -1350,7 +1771,7 @@ function identityBundleMismatch(): never {
 }
 
 function mutationResponse(draft: GenLayerCampaignDraft, campaign: GenLayerCampaignProjection, application: GenLayerPrivateApplication, assignment: GenLayerAssignmentProjection | null, prepared?: Awaited<ReturnType<typeof prepareGenLayerMarketplaceTransaction>>) {
-  const dto = applicationDto(application, draft.contentSource, assignment);
+  const dto = applicationDto(application, draft.contentSource, assignment, campaign);
   return {
     campaign: { id: draft.id, status: campaign.status.toLowerCase(), contentSource: draft.contentSource, genlayerCampaignId: campaign.campaignId },
     application: dto,
@@ -1381,7 +1802,12 @@ function applicationDto(
   row: GenLayerPrivateApplication,
   contentSource: "X" | "FARCASTER",
   assignment: GenLayerAssignmentProjection | null,
+  campaign: GenLayerCampaignProjection,
 ) {
+  const undeterminedRefundEligibleAt = assignment?.status === "UNDETERMINED"
+    && assignment.resolutionAttempts >= campaign.maxUndeterminedRetries
+    ? new Date(genLayerUndeterminedRefundEligibleAtEpoch(assignment, campaign) * 1_000).toISOString()
+    : null;
   return {
     id: row.id,
     campaignId: row.localCampaignId,
@@ -1395,6 +1821,9 @@ function applicationDto(
     pitch: row.pitch,
     status: (assignment?.status ?? row.status).toLowerCase(),
     selectedAt: assignment ? new Date(assignment.selectedAtEpoch * 1_000).toISOString() : null,
+    acceptanceDeadline: assignment
+      ? new Date(assignment.acceptanceDeadlineEpoch * 1_000).toISOString()
+      : null,
     acceptedAt: assignment?.acceptedAtEpoch ? new Date(assignment.acceptedAtEpoch * 1_000).toISOString() : null,
     genlayerAssignmentId: assignment?.assignmentId ?? null,
     agreementHash: assignment?.agreementHash ?? null,
@@ -1410,6 +1839,7 @@ function applicationDto(
     resolutionEligibleAt: assignment?.resolutionEligibleAtEpoch
       ? new Date(assignment.resolutionEligibleAtEpoch * 1_000).toISOString()
       : null,
+    undeterminedRefundEligibleAt,
     resolutionOutcome: assignment?.outcome?.toLowerCase() ?? null,
     resolutionEvidenceHash: assignment?.evidenceHash ?? null,
     resolutionTxHash: assignment?.outcome ? assignment.lastTxHash : null,
@@ -1433,10 +1863,6 @@ async function requirePrepared(value: unknown) {
   const row = id ? await findGenLayerPreparedTransaction(id) : null;
   if (!row) preparedMismatch();
   return row;
-}
-
-function requireOpenCampaign(context: { projection: GenLayerCampaignProjection }) {
-  if (context.projection.status !== "OPEN") invalidState();
 }
 
 function assertBrand(draft: GenLayerCampaignDraft, wallet: string) {

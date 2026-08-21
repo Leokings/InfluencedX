@@ -8,7 +8,10 @@ import {
   hydrateArgs,
   isExplicitEip1193UserRejection,
 } from "../app/marketplace/marketplace-transaction.ts";
-import { buildCampaignContractBrief } from "../lib/marketplace-core.ts";
+import {
+  buildCampaignContractBrief,
+  requireFutureDeadline,
+} from "../lib/marketplace-core.ts";
 import {
   buildGenLayerSubmissionCall,
   genLayerCampaignActionPostcondition,
@@ -38,8 +41,15 @@ import {
   deriveIdentityBundleRequestId,
   deriveProjectionId,
   deriveResolutionRequestId,
+  genLayerApplicationWithdrawalAvailability,
+  genLayerAssignmentAcceptanceAvailability,
+  genLayerAssignmentSubmissionAvailability,
+  genLayerCampaignApplicationAvailability,
   genLayerCampaignCancellationAvailability,
+  genLayerCampaignSelectionAvailability,
   genLayerResolutionAvailability,
+  genLayerUndeterminedRefundAvailability,
+  genLayerUndeterminedRefundEligibleAtEpoch,
   normalizeContractText,
   parseCampaignState,
   parseOwnershipResult,
@@ -50,8 +60,19 @@ import {
   type GenLayerCampaignState,
 } from "../lib/marketplace-genlayer-core.ts";
 import {
+  DEFAULT_MAX_CAMPAIGN_DURATION_MS,
+  DEFAULT_MAX_UNDETERMINED_RETRIES,
+  DEFAULT_RETENTION_SECONDS,
+  DEFAULT_SELECTION_WINDOW_MS,
+  DEFAULT_SUBMISSION_WINDOW_MS,
+  MIN_APPLICATION_WINDOW_MS,
+  deriveDefaultCampaignSchedule,
+} from "../lib/marketplace-types.ts";
+import { orderedDeadline } from "../lib/marketplace-genlayer-service.ts";
+import {
   existingPreparedMarketplaceTransactionDisposition,
   MAX_GENLAYER_RECONCILIATION_ATTEMPTS,
+  recoverPreparedMarketplaceTransactionBeforePreflight,
   type GenLayerTransactionRow,
   type GenLayerAssignmentProjection,
   type GenLayerCampaignProjection,
@@ -451,6 +472,33 @@ test("Farcaster campaign evidence resolves the public URL and freezes the full F
   ]);
   assert.deepEqual(result.call.argTypes, ["string", "string", "string", "string"]);
   assert.equal(result.call.value, "0");
+});
+
+test("Farcaster campaign evidence accepts a renamed current handle bound to the same FID", async () => {
+  const exactHash = "0x9625056e23efed813044dffbaf2df94b30ac961e";
+  const result = await buildGenLayerSubmissionCall({
+    assignmentId,
+    agreementHash: `0x${"58".repeat(32)}`,
+    creatorIdentityHash: `0x${"59".repeat(32)}`,
+    contentSource: "FARCASTER",
+    submittedContent: "https://farcaster.xyz/~/conversations/0x9625056e",
+    expectedUsername: "mile-renamed",
+    expectedExternalUserId: "279320",
+  }, {
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      assert.equal(url.searchParams.get("username"), "mile-renamed");
+      return new Response(JSON.stringify({
+        result: {
+          cast: {
+            hash: exactHash,
+            author: { fid: 279320, username: "mile-renamed" },
+          },
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  assert.equal(result.contentId, exactHash);
 });
 
 test("Farcaster campaign evidence fails closed when the URL lookup is missing or belongs to another FID", async () => {
@@ -1569,6 +1617,178 @@ test("unused GEN refund eligibility opens exactly at the authoritative selection
   );
 });
 
+test("shared campaign creation defaults derive the hidden V2 schedule without drift", () => {
+  const applicationCloseMs = 1_800_000_000_000;
+  assert.equal(MIN_APPLICATION_WINDOW_MS, 60 * 60 * 1_000);
+  assert.equal(DEFAULT_SELECTION_WINDOW_MS, 7 * 24 * 60 * 60 * 1_000);
+  assert.equal(DEFAULT_SUBMISSION_WINDOW_MS, 14 * 24 * 60 * 60 * 1_000);
+  assert.equal(DEFAULT_RETENTION_SECONDS, 86_400);
+  assert.equal(DEFAULT_MAX_UNDETERMINED_RETRIES, 2);
+  assert.equal(DEFAULT_MAX_CAMPAIGN_DURATION_MS, 90 * 24 * 60 * 60 * 1_000);
+  assert.deepEqual(
+    deriveDefaultCampaignSchedule(applicationCloseMs),
+    {
+      selectionDeadlineMs: applicationCloseMs + DEFAULT_SELECTION_WINDOW_MS,
+      submissionDeadlineMs:
+        applicationCloseMs + DEFAULT_SELECTION_WINDOW_MS + DEFAULT_SUBMISSION_WINDOW_MS,
+      retentionSeconds: DEFAULT_RETENTION_SECONDS,
+      maxUndeterminedRetries: DEFAULT_MAX_UNDETERMINED_RETRIES,
+    },
+  );
+  assert.throws(() => deriveDefaultCampaignSchedule(Number.NaN), /clock is invalid/);
+});
+
+test("campaign creation validates the same epoch-second order sent to the contract", () => {
+  const precedingMs = 1_800_000_000_100;
+  const sameContractSecond = 1_800_000_000_900;
+  const followingContractSecond = 1_800_000_001_000;
+  assert.throws(
+    () => orderedDeadline(
+      new Date(sameContractSecond).toISOString(),
+      "selectionDeadline",
+      precedingMs,
+      followingContractSecond,
+    ),
+    /must be after the preceding deadline/,
+  );
+  assert.equal(
+    orderedDeadline(
+      new Date(followingContractSecond).toISOString(),
+      "selectionDeadline",
+      precedingMs,
+      followingContractSecond,
+    ),
+    followingContractSecond,
+  );
+
+  const nowMs = 1_800_000_000_123;
+  const exactMinimum = nowMs + MIN_APPLICATION_WINDOW_MS;
+  assert.equal(
+    requireFutureDeadline(new Date(exactMinimum).toISOString(), nowMs),
+    exactMinimum,
+    "the exact one-hour application window remains valid",
+  );
+});
+
+test("user action eligibility mirrors every V2 deadline equality boundary", () => {
+  const deadline = 1_800_000_600;
+  assert.equal(
+    genLayerCampaignApplicationAvailability(
+      { status: "OPEN", applicationDeadlineEpoch: deadline },
+      deadline - 1,
+    ).canApply,
+    true,
+  );
+  assert.equal(
+    genLayerCampaignApplicationAvailability(
+      { status: "OPEN", applicationDeadlineEpoch: deadline },
+      deadline,
+    ).reason,
+    "CLOSED",
+    "applications close at equality",
+  );
+  assert.equal(
+    genLayerCampaignSelectionAvailability(
+      { status: "OPEN", selectionDeadlineEpoch: deadline },
+      deadline,
+    ).reason,
+    "CLOSED",
+    "selection closes at equality",
+  );
+  assert.equal(
+    genLayerApplicationWithdrawalAvailability(
+      { status: "APPLIED" },
+      { selectionDeadlineEpoch: deadline },
+      deadline - 1,
+    ).canWithdraw,
+    true,
+  );
+  assert.equal(
+    genLayerApplicationWithdrawalAvailability(
+      { status: "APPLIED" },
+      { selectionDeadlineEpoch: deadline },
+      deadline,
+    ).reason,
+    "CLOSED",
+    "application withdrawal closes at equality",
+  );
+  assert.equal(
+    genLayerAssignmentAcceptanceAvailability(
+      { status: "SELECTED", acceptanceDeadlineEpoch: deadline },
+      deadline,
+    ).canAccept,
+    true,
+    "assignment acceptance remains open at equality",
+  );
+  assert.equal(
+    genLayerAssignmentAcceptanceAvailability(
+      { status: "SELECTED", acceptanceDeadlineEpoch: deadline },
+      deadline + 1,
+    ).reason,
+    "EXPIRED",
+  );
+  assert.equal(
+    genLayerAssignmentSubmissionAvailability(
+      { status: "ACCEPTED" },
+      { submissionDeadlineEpoch: deadline },
+      deadline,
+    ).canSubmit,
+    true,
+    "evidence submission remains open at equality",
+  );
+  assert.equal(
+    genLayerAssignmentSubmissionAvailability(
+      { status: "ACCEPTED" },
+      { submissionDeadlineEpoch: deadline },
+      deadline + 1,
+    ).reason,
+    "EXPIRED",
+  );
+});
+
+test("exhausted undetermined refund exposes and opens at the exact authoritative unlock", () => {
+  const assignment = {
+    status: "UNDETERMINED" as const,
+    resolutionAttempts: 2,
+    lastResolutionAtEpoch: 1_800_000_900,
+  };
+  const campaign = {
+    maxUndeterminedRetries: 2,
+    submissionDeadlineEpoch: 1_800_000_800,
+  };
+  const unlock = 1_800_000_900 + 86_400;
+  assert.equal(genLayerUndeterminedRefundEligibleAtEpoch(assignment, campaign), unlock);
+  assert.deepEqual(
+    genLayerUndeterminedRefundAvailability(assignment, campaign, unlock - 1),
+    {
+      canRefund: false,
+      reason: "EARLY",
+      unlocksAt: new Date(unlock * 1_000).toISOString(),
+    },
+  );
+  assert.equal(
+    genLayerUndeterminedRefundAvailability(assignment, campaign, unlock).canRefund,
+    true,
+    "refund opens at equality",
+  );
+  assert.equal(
+    genLayerUndeterminedRefundAvailability(
+      { ...assignment, resolutionAttempts: 1 },
+      campaign,
+      unlock,
+    ).reason,
+    "RETRIES_REMAIN",
+  );
+  assert.equal(
+    genLayerUndeterminedRefundEligibleAtEpoch(
+      { ...assignment, lastResolutionAtEpoch: 1_800_000_700 },
+      campaign,
+    ),
+    campaign.submissionDeadlineEpoch + 86_400,
+    "the global submission deadline wins when it is later",
+  );
+});
+
 test("campaign cancellation mirrors the contract guard order and allows a zero available balance", () => {
   const cancellable = {
     status: "OPEN" as const,
@@ -2093,12 +2313,19 @@ test("unused GEN refund preparation and settlement use authoritative deadline st
   const prepareEnd = actions.indexOf("export async function confirmGenLayerRefundUnallocated", prepareStart);
   const prepare = actions.slice(prepareStart, prepareEnd);
   assert.match(prepare, /readMarketplaceState\("get_campaign"/);
-  assert.match(prepare, /assertOperatorCampaignBinding\(context\.projection, state\)/);
-  assert.match(prepare, /genLayerUnallocatedRefundAvailability\(state\)/);
+  assert.match(
+    prepare,
+    /assertOperatorCampaignBinding\(context\.projection, authoritativeCampaign\)/,
+  );
+  assert.match(
+    prepare,
+    /genLayerUnallocatedRefundAvailability\(authoritativeCampaign\)/,
+  );
   assert.match(prepare, /"REFUND_EARLY"/);
   assert.match(prepare, /"NO_UNALLOCATED"/);
+  assert.match(prepare, /beforeInsert: preflightRefundUnallocated/);
   assert.ok(
-    prepare.indexOf("genLayerUnallocatedRefundAvailability(state)")
+    prepare.indexOf("genLayerUnallocatedRefundAvailability(authoritativeCampaign)")
       < prepare.indexOf("prepareGenLayerMarketplaceTransaction"),
   );
 
@@ -2120,28 +2347,37 @@ test("resolution and cancellation are preflighted from authoritative contract st
   const resolution = actions.slice(resolutionStart, resolutionEnd);
   assert.match(resolution, /readMarketplaceState\("get_assignment"/);
   assert.match(resolution, /readMarketplaceState\("get_campaign"/);
-  assert.match(resolution, /assertOperatorAssignmentBinding\(context\.assignment, assignment, campaign\)/);
-  assert.match(resolution, /assertResolutionPreparationBinding\(context\.assignment, assignment\)/);
-  assert.match(resolution, /genLayerResolutionAvailability\(assignment, campaign\)/);
-  assert.match(resolution, /"RETENTION"/);
-  assert.ok(
-    resolution.indexOf("genLayerResolutionAvailability(assignment, campaign)")
-      < resolution.indexOf('prepareAction("RESOLVE_ASSIGNMENT"'),
+  assert.match(resolution, /assertOperatorCampaignBinding\(context\.campaign, authoritativeCampaign\)/);
+  assert.match(
+    resolution,
+    /assertOperatorAssignmentBinding\([\s\S]*projectedAssignment,[\s\S]*authoritativeAssignment,[\s\S]*authoritativeCampaign/,
   );
+  assert.match(
+    resolution,
+    /assertResolutionPreparationBinding\(projectedAssignment, authoritativeAssignment\)/,
+  );
+  assert.match(
+    resolution,
+    /genLayerResolutionAvailability\([\s\S]*authoritativeAssignment,[\s\S]*authoritativeCampaign/,
+  );
+  assert.match(resolution, /"RETENTION"/);
+  assert.match(resolution, /preflightResolution,[\s\S]*\);/);
 
   const cancelStart = actions.indexOf("export async function prepareGenLayerCampaignCancel");
   const cancelEnd = actions.indexOf("export async function confirmGenLayerCampaignCancel", cancelStart);
   const cancel = actions.slice(cancelStart, cancelEnd);
   assert.match(cancel, /readMarketplaceState\("get_campaign"/);
-  assert.match(cancel, /assertOperatorCampaignBinding\(context\.projection, state\)/);
-  assert.match(cancel, /genLayerCampaignCancellationAvailability\(state\)/);
+  assert.match(
+    cancel,
+    /assertOperatorCampaignBinding\(context\.projection, authoritativeCampaign\)/,
+  );
+  assert.match(
+    cancel,
+    /genLayerCampaignCancellationAvailability\(authoritativeCampaign\)/,
+  );
   assert.match(cancel, /"CANCEL_TOO_LATE"/);
   assert.match(cancel, /"CAMPAIGN_RESERVED"/);
-  assert.ok(
-    cancel.indexOf("genLayerCampaignCancellationAvailability(state)")
-      < cancel.indexOf("prepareGenLayerMarketplaceTransaction"),
-    "failed cancellation preflights must not create a journal row",
-  );
+  assert.match(cancel, /beforeInsert: preflightCancellation/);
 
   const detailStart = service.indexOf("export async function getGenLayerMarketplaceCampaignDetail");
   const detailEnd = service.indexOf("function campaignCreationCall", detailStart);
@@ -2150,6 +2386,304 @@ test("resolution and cancellation are preflighted from authoritative contract st
   assert.match(detail, /readMarketplaceState\("get_campaign"/);
   assert.match(detail, /assertCampaignMatchesDraft\(state, draft, projection\.campaignId\)/);
   assert.match(detail, /catch \{[\s\S]*return false;/);
+});
+
+test("every deadline-gated user preparation re-reads and binds authoritative state before journaling", async () => {
+  const actions = await readFile(
+    new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url),
+    "utf8",
+  );
+  const preparation = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const end = actions.indexOf("export async function", start + 1);
+    assert.ok(start >= 0 && end > start, name);
+    return actions.slice(start, end);
+  };
+
+  const apply = preparation("prepareGenLayerApplication");
+  assert.match(apply, /readMarketplaceState\("get_campaign"/);
+  assert.match(apply, /assertOperatorCampaignBinding\(context\.projection, authoritativeCampaign\)/);
+  assert.match(apply, /genLayerCampaignApplicationAvailability\(authoritativeCampaign\)/);
+  assert.match(apply, /"APPLICATION_CLOSED"/);
+  assert.ok(
+    apply.indexOf("genLayerCampaignApplicationAvailability(authoritativeCampaign)")
+      < apply.indexOf("insertGenLayerPrivateApplication"),
+    "a closed application boundary must not insert a pending local application",
+  );
+  assert.ok(
+    apply.indexOf("genLayerCampaignApplicationAvailability(authoritativeCampaign)")
+      < apply.indexOf("prepareGenLayerMarketplaceTransaction"),
+    "a closed application boundary must not create a journal row",
+  );
+
+  for (const [name, availability] of [
+    ["prepareGenLayerSelection", "genLayerCampaignSelectionAvailability"],
+    ["prepareGenLayerApplicationWithdrawal", "genLayerApplicationWithdrawalAvailability"],
+  ] as const) {
+    const source = preparation(name);
+    assert.match(source, /readMarketplaceState\("get_campaign"/);
+    assert.match(source, /readMarketplaceState\("get_application"/);
+    assert.match(source, /assertOperatorCampaignBinding/);
+    assert.match(source, /assertPreparationApplicationBinding/);
+    assert.match(source, new RegExp(`${availability}\\(`));
+    assert.ok(
+      source.indexOf(`${availability}(`) < source.indexOf("prepareAction("),
+      `${name} must reject before journal preparation`,
+    );
+  }
+  const selection = preparation("prepareGenLayerSelection");
+  assert.match(selection, /authoritativeCampaign\.availableAtto/);
+  assert.match(selection, /"CAMPAIGN_BUDGET"/);
+  assert.ok(
+    selection.indexOf('"CAMPAIGN_BUDGET"') < selection.indexOf("prepareAction("),
+    "insufficient authoritative budget must reject before journal preparation",
+  );
+
+  for (const [name, availability] of [
+    ["prepareGenLayerAccept", "genLayerAssignmentAcceptanceAvailability"],
+    ["prepareGenLayerSubmission", "genLayerAssignmentSubmissionAvailability"],
+    ["prepareGenLayerRefundUndetermined", "genLayerUndeterminedRefundAvailability"],
+  ] as const) {
+    const source = preparation(name);
+    assert.match(source, /readMarketplaceState\("get_assignment"/);
+    assert.match(source, /readMarketplaceState\("get_campaign"/);
+    assert.match(source, /assertOperatorCampaignBinding/);
+    assert.match(source, /assertOperatorAssignmentBinding/);
+    assert.match(source, /assertPreparationAssignmentBinding/);
+    assert.match(source, new RegExp(`${availability}\\(`));
+    assert.ok(
+      source.indexOf(`${availability}(`) < source.indexOf("prepareAction("),
+      `${name} must reject before journal preparation`,
+    );
+  }
+
+  const refund = preparation("prepareGenLayerRefundUndetermined");
+  assert.match(refund, /assertResolutionPreparationBinding/);
+  assert.match(refund, /"RETRIES_REMAIN"/);
+  assert.match(refund, /"REFUND_DELAY"/);
+});
+
+test("exact bound recovery is returned before any fallible authoritative preflight", async () => {
+  const [repository, actions, api] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-api.ts", import.meta.url), "utf8"),
+  ]);
+  const repositoryStart = repository.indexOf(
+    "export async function prepareGenLayerMarketplaceTransaction",
+  );
+  const repositoryEnd = repository.indexOf(
+    "function assertReservedPreparedTransaction",
+    repositoryStart,
+  );
+  assert.ok(repositoryStart >= 0 && repositoryEnd > repositoryStart);
+  const preparation = repository.slice(repositoryStart, repositoryEnd);
+  const recoveryGate = preparation.indexOf(
+    "recoverPreparedMarketplaceTransactionBeforePreflight",
+  );
+  const insert = preparation.indexOf(".insert(marketplaceGenLayerTransactions)");
+  assert.ok(recoveryGate >= 0 && insert >= 0);
+  assert.ok(recoveryGate < insert, "recovery/preflight gate must run before journal insert");
+  assert.match(preparation, /recoveryOnly: input\.recoveryOnly/);
+
+  let hookCalls = 0;
+  const recovered = await recoverPreparedMarketplaceTransactionBeforePreflight({
+    row: journalClaim(),
+    beforeInsert: async () => {
+      hookCalls += 1;
+      throw new Error("post-state preflight must be skipped");
+    },
+  });
+  assert.equal(hookCalls, 0);
+  assert.equal(recovered?.recovery?.transactionHash, txHash);
+
+  const submissionArgs = [
+    assignmentId,
+    requestId,
+    `0x${"64".repeat(20)}`,
+    `0x${"65".repeat(32)}`,
+  ];
+  const recoveredFarcasterSubmission = await recoverPreparedMarketplaceTransactionBeforePreflight({
+    row: {
+      ...journalClaim(),
+      operation: "SUBMIT_EVIDENCE",
+      functionName: "submit_evidence",
+      args: submissionArgs,
+      argTypes: ["string", "string", "string", "string"],
+      argsHash: canonicalHash(submissionArgs),
+      onchainEntityId: assignmentId,
+    },
+    beforeInsert: async () => {
+      throw new Error("the current Farcaster identity is unavailable");
+    },
+  });
+  assert.equal(
+    recoveredFarcasterSubmission?.recovery?.transactionHash,
+    txHash,
+    "a bound Farcaster hash must recover without running identity preflight",
+  );
+
+  const noRecovery = await recoverPreparedMarketplaceTransactionBeforePreflight({
+    row: null,
+    beforeInsert: async () => {
+      hookCalls += 1;
+    },
+  });
+  assert.equal(noRecovery, null);
+  assert.equal(hookCalls, 1, "new journal creation must invoke authoritative preflight");
+
+  hookCalls = 0;
+  await assert.rejects(
+    recoverPreparedMarketplaceTransactionBeforePreflight({
+      row: null,
+      recoveryOnly: true,
+      beforeInsert: async () => {
+        hookCalls += 1;
+      },
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "MARKETPLACE_RECOVERY_NOT_FOUND",
+  );
+  assert.equal(
+    hookCalls,
+    0,
+    "a recovery-only miss must not run preflight or create a journal",
+  );
+
+  hookCalls = 0;
+  await assert.rejects(
+    recoverPreparedMarketplaceTransactionBeforePreflight({
+      row: {
+        ...journalClaim(),
+        status: "PREPARED",
+        transactionHash: null,
+      },
+      beforeInsert: async () => {
+        hookCalls += 1;
+      },
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "MARKETPLACE_TRANSACTION_STATE_UNKNOWN",
+  );
+  assert.equal(hookCalls, 0, "an ambiguous null-hash intent must fail closed before preflight");
+
+  const actionPreparation = (name: string) => {
+    const start = actions.indexOf(`export async function ${name}`);
+    const end = actions.indexOf("export async function", start + 1);
+    assert.ok(start >= 0 && end > start, name);
+    return actions.slice(start, end);
+  };
+  const apply = actionPreparation("prepareGenLayerApplication");
+  assert.match(apply, /let applicationWasCreated = false/);
+  assert.ok(
+    apply.indexOf("await preflightApplicationCampaign()")
+      < apply.indexOf("insertGenLayerPrivateApplication"),
+    "a new private application must pass preflight before it is inserted",
+  );
+  assert.match(apply, /applicationWasCreated = true/);
+  assert.match(
+    apply,
+    /beforeInsert: applicationWasCreated\s*\? undefined\s*: async \(\) =>/,
+    "a successfully inserted first application must not run a second fallible preflight",
+  );
+
+  for (const [name, callback] of [
+    ["prepareGenLayerSelection", "preflightSelection"],
+    ["prepareGenLayerAccept", "preflightAcceptance"],
+    ["prepareGenLayerApplicationWithdrawal", "preflightWithdrawal"],
+    ["prepareGenLayerSubmission", "preflightSubmission"],
+    ["prepareGenLayerResolution", "preflightResolution"],
+    ["prepareGenLayerRefundUndetermined", "preflightRefundUndetermined"],
+  ] as const) {
+    assert.match(
+      actionPreparation(name),
+      new RegExp(
+        `prepareAction\\([\\s\\S]*${callback},\\s*marketplaceRecoveryOnly\\(input\\.body\\),\\s*\\);`,
+      ),
+      `${name} must defer fresh state checks until after reusable recovery lookup`,
+    );
+  }
+  assert.match(
+    actionPreparation("prepareGenLayerCampaignCancel"),
+    /beforeInsert: preflightCancellation/,
+  );
+  assert.match(
+    actionPreparation("prepareGenLayerRefundUnallocated"),
+    /beforeInsert: preflightRefundUnallocated/,
+  );
+  for (const name of [
+    "prepareGenLayerCampaignCancel",
+    "prepareGenLayerRefundUnallocated",
+    "prepareGenLayerWithdrawal",
+    "prepareGenLayerWithdrawalExecution",
+  ]) {
+    assert.match(
+      actionPreparation(name),
+      /recoveryOnly: marketplaceRecoveryOnly\(input\.body\)/,
+      `${name} must propagate the server recovery-only marker`,
+    );
+  }
+  assert.match(api, /request\.headers\.get\("x-marketplace-recovery-only"\) === "1"/);
+  assert.match(api, /enumerable: false/);
+  const submission = actionPreparation("prepareGenLayerSubmission");
+  assert.match(submission, /findBoundGenLayerSubmissionTransaction\(\{/);
+  assert.ok(
+    submission.indexOf("row: await findBoundSubmission()")
+      < submission.indexOf('const submissionIdentity = source === "FARCASTER"'),
+    "bound Farcaster recovery must run before current identity lookup",
+  );
+  const boundSubmissionStart = repository.indexOf(
+    "export async function findBoundGenLayerSubmissionTransaction",
+  );
+  const boundSubmissionEnd = repository.indexOf("/**", boundSubmissionStart);
+  const boundSubmission = repository.slice(boundSubmissionStart, boundSubmissionEnd);
+  for (const binding of [
+    "localCampaignId",
+    "localApplicationId",
+    "onchainEntityId",
+    "actorWallet",
+  ]) assert.match(boundSubmission, new RegExp(`marketplaceGenLayerTransactions\\.${binding}`));
+  assert.match(boundSubmission, /"SUBMIT_EVIDENCE"/);
+  assert.match(boundSubmission, /"submit_evidence"/);
+  assert.match(boundSubmission, /isNotNull\(marketplaceGenLayerTransactions\.transactionHash\)/);
+  assert.match(boundSubmission, /exactGenLayerJournalCall\(row\)/);
+});
+
+test("native detail DTO publishes authoritative clocks without trusting the browser", async () => {
+  const [service, actions, types] = await Promise.all([
+    readFile(new URL("../lib/marketplace-genlayer-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-genlayer-actions.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/marketplace-types.ts", import.meta.url), "utf8"),
+  ]);
+  const detailStart = service.indexOf("export async function getGenLayerMarketplaceCampaignDetail");
+  const detailEnd = service.indexOf("function campaignCreationCall", detailStart);
+  const detail = service.slice(detailStart, detailEnd);
+  assert.match(types, /observedAt: string/);
+  assert.match(types, /acceptanceDeadline: string \| null/);
+  assert.match(types, /undeterminedRefundEligibleAt: string \| null/);
+  assert.match(detail, /await authoritativeCampaignCanCancel\(draft, projection\)/);
+  assert.match(detail, /const observedAtMs = Date\.now\(\)/);
+  assert.ok(
+    detail.indexOf("await authoritativeCampaignCanCancel(draft, projection)")
+      < detail.indexOf("const observedAtMs = Date.now()"),
+    "the public observation clock must be captured after the final authoritative read",
+  );
+  const cancellationStart = detail.indexOf("async function authoritativeCampaignCanCancel");
+  const cancellation = detail.slice(cancellationStart);
+  assert.ok(
+    cancellation.indexOf('readMarketplaceState("get_campaign"')
+      < cancellation.indexOf("Math.floor(Date.now() / 1_000)"),
+    "cancellation eligibility must evaluate the server clock after the chain read",
+  );
+  for (const source of [service, actions]) {
+    assert.match(source, /acceptanceDeadline:/);
+    assert.match(source, /undeterminedRefundEligibleAt/);
+    assert.match(source, /genLayerUndeterminedRefundEligibleAtEpoch/);
+  }
 });
 
 test("campaign refund and cancel confirmation require their exact authoritative postconditions", () => {
@@ -2248,7 +2782,12 @@ test("apply, select, accept, and submit preflight the exact active X plus Farcas
   }
   const acceptStart = actions.indexOf("export async function prepareGenLayerAccept");
   const acceptEnd = actions.indexOf("export async function confirmGenLayerAccept", acceptStart);
-  assert.match(actions.slice(acceptStart, acceptEnd), /prepareAssignmentSimple\([\s\S]*true/);
+  const accept = actions.slice(acceptStart, acceptEnd);
+  assert.match(accept, /requireActiveIdentityBundle\(/);
+  assert.match(
+    accept,
+    /assertAssignmentIdentityBinding\(identity\.authoritativeProfile, authoritativeAssignment\)/,
+  );
 });
 
 test("campaign evidence resolution uses the authoritative Farcaster identity only during preparation", async () => {
@@ -2263,11 +2802,36 @@ test("campaign evidence resolution uses the authoritative Farcaster identity onl
   const confirm = actions.slice(confirmStart, resolutionStart);
   assert.match(prepare, /await buildGenLayerSubmissionCall\(\{/);
   assert.match(prepare, /submittedContent: input\.body\.contentId/);
-  assert.match(prepare, /expectedUsername: identity\.authoritativeProfile\.handle/);
-  assert.match(prepare, /expectedExternalUserId: identity\.authoritativeProfile\.externalUserId/);
+  assert.match(
+    prepare,
+    /const submissionIdentity = source === "FARCASTER"[\s\S]*\? await requireActiveIdentityBundle/,
+    "only Farcaster resolution needs identity before the exact call can be derived",
+  );
+  assert.match(
+    prepare,
+    /expectedUsername: submissionIdentity\?\.authoritativeProfile\.handle[\s\S]*\?\? projectedAssignment\.creatorHandle/,
+  );
+  assert.match(
+    prepare,
+    /expectedExternalUserId: submissionIdentity\?\.authoritativeProfile\.externalUserId[\s\S]*\?\? projectedAssignment\.creatorExternalUserId/,
+  );
+  assert.match(
+    prepare,
+    /assertAssignmentIdentityBinding\([\s\S]*submissionIdentity\.authoritativeProfile,[\s\S]*projectedAssignment/,
+  );
+  assert.match(
+    prepare,
+    /assertAssignmentIdentityBinding\([\s\S]*currentIdentity\.authoritativeProfile,[\s\S]*authoritativeAssignment/,
+  );
+  assert.doesNotMatch(
+    prepare,
+    /expectedHandle\s*!==\s*submissionIdentity\.authoritativeProfile\.handle/,
+    "the client handle is not proof of the current authoritative username",
+  );
+  assert.match(prepare, /preflightSubmission,[\s\S]*\);/);
   assert.ok(
     prepare.indexOf("await buildGenLayerSubmissionCall")
-      < prepare.indexOf('prepareAction("SUBMIT_EVIDENCE"'),
+      < prepare.indexOf("prepared = await prepareAction"),
   );
   assert.doesNotMatch(confirm, /resolveFarcasterCastHashFromUrl|buildGenLayerSubmissionCall/);
   assert.match(confirm, /const contentId = contentIdentifier\(source, contentArg\)/);

@@ -183,6 +183,147 @@ export type GenLayerAssignmentState = Readonly<{
   closedAtEpoch: number;
 }>;
 
+export const GENLAYER_UNDETERMINED_REFUND_DELAY_SECONDS = 24 * 60 * 60;
+
+export function genLayerCampaignApplicationAvailability(
+  campaign: Pick<GenLayerCampaignState, "status" | "applicationDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canApply: boolean;
+  reason: "STATE" | "CLOSED" | null;
+}> {
+  assertEligibilityClock(nowEpoch);
+  if (campaign.status !== "OPEN") {
+    return Object.freeze({ canApply: false, reason: "STATE" });
+  }
+  if (nowEpoch >= campaign.applicationDeadlineEpoch) {
+    return Object.freeze({ canApply: false, reason: "CLOSED" });
+  }
+  return Object.freeze({ canApply: true, reason: null });
+}
+
+export function genLayerCampaignSelectionAvailability(
+  campaign: Pick<GenLayerCampaignState, "status" | "selectionDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canSelect: boolean;
+  reason: "STATE" | "CLOSED" | null;
+}> {
+  assertEligibilityClock(nowEpoch);
+  if (campaign.status !== "OPEN") {
+    return Object.freeze({ canSelect: false, reason: "STATE" });
+  }
+  if (nowEpoch >= campaign.selectionDeadlineEpoch) {
+    return Object.freeze({ canSelect: false, reason: "CLOSED" });
+  }
+  return Object.freeze({ canSelect: true, reason: null });
+}
+
+export function genLayerApplicationWithdrawalAvailability(
+  application: Pick<GenLayerApplicationState, "status">,
+  campaign: Pick<GenLayerCampaignState, "selectionDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canWithdraw: boolean;
+  reason: "STATE" | "CLOSED" | null;
+}> {
+  assertEligibilityClock(nowEpoch);
+  if (application.status !== "APPLIED") {
+    return Object.freeze({ canWithdraw: false, reason: "STATE" });
+  }
+  if (nowEpoch >= campaign.selectionDeadlineEpoch) {
+    return Object.freeze({ canWithdraw: false, reason: "CLOSED" });
+  }
+  return Object.freeze({ canWithdraw: true, reason: null });
+}
+
+export function genLayerAssignmentAcceptanceAvailability(
+  assignment: Pick<GenLayerAssignmentState, "status" | "acceptanceDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canAccept: boolean;
+  reason: "STATE" | "EXPIRED" | null;
+}> {
+  assertEligibilityClock(nowEpoch);
+  if (assignment.status !== "SELECTED") {
+    return Object.freeze({ canAccept: false, reason: "STATE" });
+  }
+  if (nowEpoch > assignment.acceptanceDeadlineEpoch) {
+    return Object.freeze({ canAccept: false, reason: "EXPIRED" });
+  }
+  return Object.freeze({ canAccept: true, reason: null });
+}
+
+export function genLayerAssignmentSubmissionAvailability(
+  assignment: Pick<GenLayerAssignmentState, "status">,
+  campaign: Pick<GenLayerCampaignState, "submissionDeadlineEpoch">,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canSubmit: boolean;
+  reason: "STATE" | "EXPIRED" | null;
+}> {
+  assertEligibilityClock(nowEpoch);
+  if (assignment.status !== "ACCEPTED") {
+    return Object.freeze({ canSubmit: false, reason: "STATE" });
+  }
+  if (nowEpoch > campaign.submissionDeadlineEpoch) {
+    return Object.freeze({ canSubmit: false, reason: "EXPIRED" });
+  }
+  return Object.freeze({ canSubmit: true, reason: null });
+}
+
+export function genLayerUndeterminedRefundEligibleAtEpoch(
+  assignment: Pick<GenLayerAssignmentState, "lastResolutionAtEpoch">,
+  campaign: Pick<GenLayerCampaignState, "submissionDeadlineEpoch">,
+): number {
+  const basis = Math.max(
+    campaign.submissionDeadlineEpoch,
+    assignment.lastResolutionAtEpoch,
+  );
+  assertEligibilityClock(basis);
+  const eligibleAtEpoch = basis + GENLAYER_UNDETERMINED_REFUND_DELAY_SECONDS;
+  if (!Number.isSafeInteger(eligibleAtEpoch)) {
+    throw new Error("The undetermined refund clock exceeds the supported range.");
+  }
+  return eligibleAtEpoch;
+}
+
+export function genLayerUndeterminedRefundAvailability(
+  assignment: Pick<
+    GenLayerAssignmentState,
+    "status" | "resolutionAttempts" | "lastResolutionAtEpoch"
+  >,
+  campaign: Pick<
+    GenLayerCampaignState,
+    "maxUndeterminedRetries" | "submissionDeadlineEpoch"
+  >,
+  nowEpoch = Math.floor(Date.now() / 1_000),
+): Readonly<{
+  canRefund: boolean;
+  reason: "STATE" | "RETRIES_REMAIN" | "EARLY" | null;
+  unlocksAt: string;
+}> {
+  assertEligibilityClock(nowEpoch);
+  const eligibleAtEpoch = genLayerUndeterminedRefundEligibleAtEpoch(assignment, campaign);
+  const unlocksAt = new Date(eligibleAtEpoch * 1_000).toISOString();
+  if (assignment.status !== "UNDETERMINED") {
+    return Object.freeze({ canRefund: false, reason: "STATE", unlocksAt });
+  }
+  if (assignment.resolutionAttempts < campaign.maxUndeterminedRetries) {
+    return Object.freeze({ canRefund: false, reason: "RETRIES_REMAIN", unlocksAt });
+  }
+  if (nowEpoch < eligibleAtEpoch) {
+    return Object.freeze({ canRefund: false, reason: "EARLY", unlocksAt });
+  }
+  return Object.freeze({ canRefund: true, reason: null, unlocksAt });
+}
+
+function assertEligibilityClock(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("The marketplace eligibility clock is invalid.");
+  }
+}
+
 export function genLayerResolutionAvailability(
   assignment: Pick<
     GenLayerAssignmentState,

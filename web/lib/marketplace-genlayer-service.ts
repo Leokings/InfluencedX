@@ -1,4 +1,5 @@
 import type { AuthenticatedWalletSession } from "./wallet-session.ts";
+import { marketplaceRecoveryOnly } from "./marketplace-api.ts";
 import {
   assertOptionalActorWallet,
   buildCampaignContractBrief,
@@ -15,6 +16,7 @@ import {
   deriveCampaignId,
   deriveCampaignTermsHash,
   genLayerCampaignCancellationAvailability,
+  genLayerUndeterminedRefundEligibleAtEpoch,
   normalizeContentSource,
   normalizeMarketplaceAddress,
   parseCampaignState,
@@ -39,7 +41,12 @@ import {
   type GenLayerCampaignProjection,
   type GenLayerPrivateApplication,
 } from "./marketplace-genlayer-repository.ts";
-import type { MarketplaceApplicationDto } from "./marketplace-types.ts";
+import {
+  DEFAULT_MAX_CAMPAIGN_DURATION_MS,
+  DEFAULT_SUBMISSION_WINDOW_MS,
+  deriveDefaultCampaignSchedule,
+  type MarketplaceApplicationDto,
+} from "./marketplace-types.ts";
 import {
   MARKETPLACE_GENLAYER_CHAIN_ID,
   MARKETPLACE_GENLAYER_NETWORK,
@@ -58,10 +65,6 @@ import {
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem, assertExactJsonKeys } from "./verification-api.ts";
 
-const CONTRACT_MAX_CAMPAIGN_SECONDS = 90 * 24 * 60 * 60;
-const DEFAULT_SELECTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
-const DEFAULT_SUBMISSION_WINDOW_MS = 14 * 24 * 60 * 60 * 1_000;
-const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
 const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 
 export type GenLayerCampaignDto = ReturnType<typeof campaignDto>;
@@ -118,11 +121,12 @@ export async function createGenLayerMarketplaceCampaign(input: {
   const semanticBrief = buildCampaignContractBrief(semanticBriefInput, deliverables);
   const budgetAtto = positiveAtto(input.body.budgetGen, "budgetGen");
   const applicationDeadlineAt = requireFutureDeadline(input.body.deadline, nowMs);
+  const defaultSchedule = deriveDefaultCampaignSchedule(applicationDeadlineAt);
   const selectionDeadlineAt = orderedDeadline(
     input.body.selectionDeadline,
     "selectionDeadline",
     applicationDeadlineAt,
-    applicationDeadlineAt + DEFAULT_SELECTION_WINDOW_MS,
+    defaultSchedule.selectionDeadlineMs,
   );
   const submissionDeadlineAt = orderedDeadline(
     input.body.submissionDeadline,
@@ -130,17 +134,17 @@ export async function createGenLayerMarketplaceCampaign(input: {
     selectionDeadlineAt,
     selectionDeadlineAt + DEFAULT_SUBMISSION_WINDOW_MS,
   );
-  if (submissionDeadlineAt > nowMs + CONTRACT_MAX_CAMPAIGN_SECONDS * 1_000) {
+  if (submissionDeadlineAt > nowMs + DEFAULT_MAX_CAMPAIGN_DURATION_MS) {
     throw invalid("submissionDeadline", "Campaign duration cannot exceed 90 days.");
   }
   const retentionSeconds = boundedInteger(
-    input.body.retentionSeconds ?? DEFAULT_RETENTION_SECONDS,
+    input.body.retentionSeconds ?? defaultSchedule.retentionSeconds,
     "retentionSeconds",
     60,
     604_800,
   );
   const maxUndeterminedRetries = boundedInteger(
-    input.body.maxUndeterminedRetries ?? 2,
+    input.body.maxUndeterminedRetries ?? defaultSchedule.maxUndeterminedRetries,
     "maxUndeterminedRetries",
     1,
     5,
@@ -231,6 +235,7 @@ export async function prepareGenLayerCampaignFunding(input: {
     actorWallet: draft.brandWallet,
     localCampaignId,
     onchainEntityId: campaignId,
+    recoveryOnly: marketplaceRecoveryOnly(input.body),
   });
   return prepared.recovery
     ? {
@@ -438,6 +443,7 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
   applications: MarketplaceApplicationDto[];
   viewerApplication: MarketplaceApplicationDto | null;
   canCancel: boolean;
+  observedAt: string;
   viewerRecovery: { preparedId: string; txHash: string } | null;
 }> {
   const localCampaignId = requireUuid(input.campaignId, "campaignId");
@@ -456,12 +462,13 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
     ? privateRows
     : privateRows.filter((application) => application.creatorWallet === viewer);
   const viewerPrivateApplication = canViewAll ? null : visible[0] ?? null;
-  const [applications, boundRecovery, canCancel] = await Promise.all([
+  const [applications, boundRecovery] = await Promise.all([
     Promise.all(visible.map(async (application) =>
       applicationDto(
         application,
         draft.contentSource,
         await findGenLayerAssignmentProjectionByApplicationId(application.id),
+        projection,
       ))),
     viewerPrivateApplication?.status === "PENDING_ONCHAIN" && viewer
       ? findBoundGenLayerApplicationRecovery({
@@ -469,15 +476,17 @@ export async function getGenLayerMarketplaceCampaignDetail(input: {
           actorWallet: viewer,
         })
       : Promise.resolve(null),
-    canViewAll && projection
-      ? authoritativeCampaignCanCancel(draft, projection)
-      : Promise.resolve(false),
   ]);
+  const canCancel = canViewAll && projection
+    ? await authoritativeCampaignCanCancel(draft, projection)
+    : false;
+  const observedAtMs = Date.now();
   return {
     campaign: campaignDto(draft, projection, privateRows.length),
     applications: canViewAll ? applications : [],
     viewerApplication: canViewAll ? null : applications[0] ?? null,
     canCancel,
+    observedAt: new Date(observedAtMs).toISOString(),
     viewerRecovery: boundRecovery
       ? {
           preparedId: boundRecovery.preparedId,
@@ -496,7 +505,10 @@ async function authoritativeCampaignCanCancel(
       await readMarketplaceState("get_campaign", [projection.campaignId]),
     );
     assertCampaignMatchesDraft(state, draft, projection.campaignId);
-    return genLayerCampaignCancellationAvailability(state).canCancel;
+    return genLayerCampaignCancellationAvailability(
+      state,
+      Math.floor(Date.now() / 1_000),
+    ).canCancel;
   } catch {
     return false;
   }
@@ -639,7 +651,13 @@ function applicationDto(
   row: GenLayerPrivateApplication,
   contentSource: "X" | "FARCASTER",
   assignment: Awaited<ReturnType<typeof findGenLayerAssignmentProjectionByApplicationId>>,
+  campaign: GenLayerCampaignProjection | null,
 ): MarketplaceApplicationDto {
+  const undeterminedRefundEligibleAt = assignment?.status === "UNDETERMINED"
+    && campaign
+    && assignment.resolutionAttempts >= campaign.maxUndeterminedRetries
+    ? isoTime(genLayerUndeterminedRefundEligibleAtEpoch(assignment, campaign) * 1_000)
+    : null;
   return {
     id: row.id,
     campaignId: row.localCampaignId,
@@ -653,6 +671,7 @@ function applicationDto(
     pitch: row.pitch,
     status: (assignment?.status ?? row.status).toLowerCase() as MarketplaceApplicationDto["status"],
     selectedAt: assignment ? isoTime(assignment.selectedAtEpoch * 1_000) : null,
+    acceptanceDeadline: assignment ? isoTime(assignment.acceptanceDeadlineEpoch * 1_000) : null,
     acceptedAt: assignment?.acceptedAtEpoch ? isoTime(assignment.acceptedAtEpoch * 1_000) : null,
     genlayerAssignmentId: assignment?.assignmentId ?? null,
     agreementHash: assignment?.agreementHash ?? null,
@@ -668,6 +687,7 @@ function applicationDto(
     resolutionEligibleAt: assignment?.resolutionEligibleAtEpoch
       ? isoTime(assignment.resolutionEligibleAtEpoch * 1_000)
       : null,
+    undeterminedRefundEligibleAt,
     resolutionOutcome: assignment?.outcome?.toLowerCase() as MarketplaceApplicationDto["resolutionOutcome"] ?? null,
     resolutionEvidenceHash: assignment?.evidenceHash ?? null,
     resolutionTxHash: assignment?.outcome ? assignment.lastTxHash : null,
@@ -726,11 +746,19 @@ function assertBrand(draft: GenLayerCampaignDraft, wallet: string): void {
   }
 }
 
-function orderedDeadline(value: unknown, field: string, after: number, fallback: number): number {
+export function orderedDeadline(
+  value: unknown,
+  field: string,
+  after: number,
+  fallback: number,
+): number {
   if (value === undefined) return fallback;
   if (typeof value !== "string" || value.length > 64) throw invalid(field, `${field} is invalid.`);
   const parsed = Date.parse(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= after) {
+  if (
+    !Number.isSafeInteger(parsed) ||
+    Math.floor(parsed / 1_000) <= Math.floor(after / 1_000)
+  ) {
     throw invalid(field, `${field} must be after the preceding deadline.`);
   }
   return parsed;

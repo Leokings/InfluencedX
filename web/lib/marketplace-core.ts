@@ -1,4 +1,5 @@
 import { ApiProblem } from "./verification-api.ts";
+import { MIN_APPLICATION_WINDOW_MS } from "./marketplace-types.ts";
 
 const USDC_ATOMS_PATTERN = /^[1-9][0-9]{0,77}$/;
 const MAX_UINT256 = (1n << 256n) - 1n;
@@ -122,7 +123,7 @@ export function requireFutureDeadline(
     throw invalid("deadline", "deadline must be an ISO-8601 timestamp.");
   }
   const deadline = Date.parse(value);
-  const minimum = nowMs + 60 * 60 * 1_000;
+  const minimum = nowMs + MIN_APPLICATION_WINDOW_MS;
   const maximum = nowMs + 365 * 24 * 60 * 60 * 1_000;
   if (!Number.isSafeInteger(deadline) || deadline < minimum || deadline > maximum) {
     throw invalid(

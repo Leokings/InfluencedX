@@ -31,8 +31,17 @@ import {
   MAX_CREATOR_METRICS_CONCURRENCY,
   normalizeCreatorMetricWallets,
 } from "../app/marketplace/use-creator-metrics.ts";
-import type { MarketplaceMetricsDto } from "../lib/marketplace-types.ts";
-import { marketplaceDashboardDto } from "../lib/marketplace-types.ts";
+import {
+  DEFAULT_MAX_CAMPAIGN_DURATION_MS,
+  DEFAULT_MAX_UNDETERMINED_RETRIES,
+  DEFAULT_RETENTION_SECONDS,
+  DEFAULT_SELECTION_WINDOW_MS,
+  DEFAULT_SUBMISSION_WINDOW_MS,
+  MIN_APPLICATION_WINDOW_MS,
+  deriveDefaultCampaignSchedule,
+  marketplaceDashboardDto,
+  type MarketplaceMetricsDto,
+} from "../lib/marketplace-types.ts";
 
 test("formats native GEN only from canonical 18-decimal atomic strings", () => {
   assert.equal(genAtomsToDisplay("0"), "0");
@@ -46,6 +55,17 @@ test("converts creator and campaign amounts to 18-decimal GEN atomics", () => {
   assert.equal(genInputToAtoms("0.000000000000000001"), "1");
   assert.throws(() => genInputToAtoms("1.0000000000000000001"), /no more than 18 decimal places/);
   assert.throws(() => genInputToAtoms("0"), /greater than zero/);
+});
+
+test("derives the exact frozen campaign schedule shown before creation", () => {
+  const applicationCloseMs = Date.parse("2026-08-21T18:00:00.000Z");
+  const schedule = deriveDefaultCampaignSchedule(applicationCloseMs);
+  assert.equal(schedule.selectionDeadlineMs, applicationCloseMs + DEFAULT_SELECTION_WINDOW_MS);
+  assert.equal(schedule.submissionDeadlineMs, applicationCloseMs + DEFAULT_SELECTION_WINDOW_MS + DEFAULT_SUBMISSION_WINDOW_MS);
+  assert.equal(schedule.retentionSeconds, DEFAULT_RETENTION_SECONDS);
+  assert.equal(schedule.maxUndeterminedRetries, DEFAULT_MAX_UNDETERMINED_RETRIES);
+  assert.equal(MIN_APPLICATION_WINDOW_MS, 60 * 60 * 1_000);
+  assert.equal(DEFAULT_MAX_CAMPAIGN_DURATION_MS, 90 * 24 * 60 * 60 * 1_000);
 });
 
 test("never presents absent GenLayer funding as confirmed", () => {
@@ -427,9 +447,9 @@ test("marketplace submissions durably bind hashes and preserve pending applicati
   assert.match(detail, /viewerApplication \? detail\.viewerRecovery \?\? null : null/);
   assert.match(detail, /recoveryStorageKey\(campaignId, activeActor, "apply"\)/);
   assert.match(detail, /setRecoveries\(\(current\) => \(\{ \.\.\.current, apply: recovery \}\)\)/);
-  assert.match(detail, /disabled=\{walletSwitchLocked\}/);
-  assert.match(detail, /walletSwitchLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
-  assert.doesNotMatch(detail, /walletSwitchLocked[\s\S]{0,120}Object\.keys\(recoveries\)/);
+  assert.match(detail, /disabled=\{transactionLocked\}/);
+  assert.match(detail, /transactionLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
+  assert.doesNotMatch(detail, /transactionLocked[\s\S]{0,120}Object\.keys\(recoveries\)/);
   assert.match(detail, /onBusyChange\(true\)/);
   assert.match(detail, /onBusyChange\(false\)/);
   assert.match(funding, /onBusyChange\(true\)/);
@@ -493,15 +513,15 @@ test("campaign actions require an already authenticated actor before busy state 
   const executeEnd = detail.indexOf("async function apply", executeStart);
   const execute = detail.slice(executeStart, executeEnd);
   const actorGuard = execute.indexOf("if (!activeActor)");
-  const busyStart = execute.indexOf('setAction({ key: input.key, notice: "Preparing transaction…"');
+  const busyStart = execute.indexOf("setAction({ key: input.key");
   assert.ok(actorGuard >= 0 && busyStart > actorGuard);
   assert.match(execute, /const actor = await wallet\.authenticate\(\)/);
   assert.match(execute, /if \(actor !== activeActor\)/);
   assert.match(detail, /const canApply = Boolean\(activeActor\)/);
   assert.match(detail, /\{!activeActor \? <WalletIntro wallet=\{wallet\} \/> : null\}/);
   assert.match(detail, /\{activeActor && canApply \? <ApplicationForm/);
-  assert.match(detail, /walletSwitchLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
-  assert.match(detail, /disabled=\{walletSwitchLocked\}/);
+  assert.match(detail, /transactionLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
+  assert.match(detail, /disabled=\{transactionLocked\}/);
 });
 
 test("marketplace handlers snapshot FormData before asynchronous wallet work", async () => {
@@ -516,14 +536,41 @@ test("marketplace handlers snapshot FormData before asynchronous wallet work", a
   assert.ok(detailSource.indexOf("new FormData(event.currentTarget)", submitStart) < detailSource.indexOf("await executePrepared", submitStart));
 });
 
+test("campaign creation previews and submits the same complete timing schedule", async () => {
+  const source = await readFile(new URL("../app/marketplace/create/CreateCampaignForm.tsx", import.meta.url), "utf8");
+  assert.match(source, /deriveDefaultCampaignSchedule\(deadline\.getTime\(\)\)/);
+  assert.match(source, /deadline\.getTime\(\) < nowMs \+ MIN_APPLICATION_WINDOW_MS/);
+  assert.match(source, /schedule\.submissionDeadlineMs > nowMs \+ DEFAULT_MAX_CAMPAIGN_DURATION_MS/);
+  assert.match(source, /selectionDeadline: new Date\(schedule\.selectionDeadlineMs\)\.toISOString\(\)/);
+  assert.match(source, /submissionDeadline: new Date\(schedule\.submissionDeadlineMs\)\.toISOString\(\)/);
+  assert.match(source, /retentionSeconds: schedule\.retentionSeconds/);
+  assert.match(source, /maxUndeterminedRetries: schedule\.maxUndeterminedRetries/);
+  assert.match(source, /APPLICATIONS CLOSE/);
+  assert.match(source, /SELECT BY \/ UNUSED FUNDS AVAILABLE/);
+  assert.match(source, /WORK DUE/);
+  assert.match(source, /H AFTER POST · \{DEFAULT_MAX_UNDETERMINED_RETRIES\} ATTEMPTS MAX/);
+  assert.match(source, /CANCEL BEFORE APPLICATIONS CLOSE · NO RESERVED CREATOR FUNDS/);
+  assert.match(source, /SELECTED CREATORS: UP TO 24H TO ACCEPT/);
+  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /min=\{deadlineBounds\?\.min\}/);
+  assert.match(source, /max=\{deadlineBounds\?\.max\}/);
+  const localValidation = source.indexOf("const budgetGen = genInputToAtoms");
+  const authentication = source.indexOf("const brandWallet = await wallet.authenticate()", localValidation);
+  assert.ok(localValidation >= 0 && authentication > localValidation, "local validation must finish before wallet authentication");
+});
+
 test("GenLayer settlement UI confirms contract state before displaying a claim or refund", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
   assert.match(source, /GENLAYER BALANCES/);
   assert.match(source, /preparedId: prepared\.preparedId, txHash/);
   assert.match(source, /REFUND UNUSED GEN/);
-  assert.match(source, /REFUND UNLOCKS/);
+  assert.match(source, /UNUSED BUDGET REFUND AVAILABLE/);
   assert.match(source, /unallocated !== "0" && view\.canRefundUnallocated/);
-  assert.match(source, /Math\.min\(2_147_000_000, Math\.max\(15_000, deadlineMs - Date\.now\(\) \+ 250\)\)/);
+  const settlement = source.slice(source.indexOf("function SettlementControls"), source.indexOf("function EvidenceSubmissionForm"));
+  assert.match(settlement, /const refundDeadlineReached = contractAtOrAfter\(settlement\?\.selectionDeadline, observedAt\)/);
+  assert.match(settlement, /window\.setTimeout\(\(\) => void recheck\(\), 15_000\)/);
+  assert.match(settlement, /\[load, refundDeadlineReached, settlementCanRefund, settlementRole, settlementUnallocated\]/);
+  assert.doesNotMatch(settlement, /Date\.now|\[.*observedAt.*\]/);
   assert.match(source, /isTerminalMarketplaceTransactionError\(settlementError\)[\s\S]*localStorage\.removeItem\(recoveryKey\)/);
   assert.match(source, /Promise\.allSettled\(\[load\(\), onUpdated\(\)\]\)/);
   assert.match(source, /REQUEST GEN WITHDRAWAL/);
@@ -550,20 +597,113 @@ test("UNDETERMINED exposes bounded retry and refund paths", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
   assert.match(source, /application\.resolutionOutcome === "undetermined"/);
   assert.match(source, /RETRY RESOLUTION/);
-  assert.match(source, /timing\.retriesExhausted \? <button[\s\S]*>REFUND<\/button>/);
+  assert.match(source, /application\.undeterminedRefundEligibleAt/);
+  assert.match(source, /timing\.canRefund \? <button[\s\S]*>REFUND<\/button>/);
+  assert.match(source, /timing\.refundWaiting[\s\S]*REFUND UNLOCKS/);
   assert.match(source, /Retry unlocks/);
   assert.doesNotMatch(source, /No payout or refund was assigned/);
 });
 
 test("resolution and cancellation controls fail closed on authoritative eligibility", async () => {
   const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
-  assert.match(source, /const canCancel = isBrand && state\.detail\.canCancel/);
+  assert.match(source, /const canCancel = isBrand[\s\S]*&& state\.detail\.canCancel[\s\S]*&& contractBefore\(campaign\.deadline, observedAt\)/);
   assert.doesNotMatch(source, /const canCancel = isBrand && \["funding", "open"\]/);
   assert.match(source, /application\.resolutionEligibleAt/);
   assert.match(source, /application\.resolutionAttempts >= campaign\.maxUndeterminedRetries/);
   assert.match(source, /timing\.canResolve \? <button[\s\S]*REQUEST RESOLUTION/);
   assert.doesNotMatch(source, /if \(application\.requestId \|\| application\.genlayerTxHash\)/);
-  assert.match(source, /deadlineMs - Date\.now\(\) \+ 50/);
+  assert.match(source, /contractBefore\(campaign\.deadline, observedAt\)/);
+  assert.match(source, /const remaining = nextActionBoundary - actionClock/);
+  assert.match(source, /const capped = remaining > 2_147_000_000/);
+  assert.match(source, /const advanceTo = capped \? actionClock \+ 2_147_000_000 : nextActionBoundary/);
+  assert.match(source, /\[actionClock, loadDetail, nextActionBoundary\]/);
+});
+
+test("campaign controls mirror the contract's exact-second deadline boundaries", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /function CampaignTimeline/);
+  assert.match(source, /formatDate\(campaign\.selectionDeadline\)/);
+  assert.match(source, /formatDate\(campaign\.submissionDeadline\)/);
+  assert.match(source, /formatDurationSeconds\(campaign\.retentionSeconds\)/);
+  assert.match(source, /ACCEPT BY/);
+  assert.match(source, /function contractBefore[\s\S]*Math\.floor\(nowMs \/ 1_000\) < deadline/);
+  assert.match(source, /function contractAtOrBefore[\s\S]*Math\.floor\(nowMs \/ 1_000\) <= deadline/);
+  assert.match(source, /function contractAtOrAfter[\s\S]*Math\.floor\(nowMs \/ 1_000\) >= deadline/);
+  assert.match(source, /contractBefore\(campaign\.selectionDeadline, observedAt\)/);
+  assert.match(source, /contractAtOrBefore\(application\.acceptanceDeadline, observedAt\)/);
+  assert.match(source, /contractAtOrBefore\(campaign\.submissionDeadline, observedAt\)/);
+  assert.match(source, /contractAtOrAfter\(refundUnlocksAt, observedAt\)/);
+  assert.match(source, /addBoundary\(detail\.campaign\.submissionDeadline, true\)/);
+  assert.match(source, /addBoundary\(application\.acceptanceDeadline, true\)/);
+  assert.doesNotMatch(source, /contract(?:Before|AtOrBefore|AtOrAfter)\([^\n]*Date\.now/);
+});
+
+test("closed campaign actions retain confirm-only recovery without broadcasting a new plan", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  const executeStart = source.indexOf("async function executePrepared");
+  const executeEnd = source.indexOf("async function apply", executeStart);
+  const execute = source.slice(executeStart, executeEnd);
+  const localRecovery = execute.indexOf("if (existing)");
+  const localOnlyGuard = execute.indexOf("if (input.recoveryOnly)");
+  const submittedRecovery = execute.indexOf("const submitted = preparedMarketplaceRecovery(prepared)");
+  const serverOnlyGuard = execute.indexOf("if (input.serverRecoveryOnly)", submittedRecovery);
+  const transactionGuard = execute.indexOf("if (!prepared.transaction)", serverOnlyGuard);
+  const broadcast = execute.indexOf("broadcastMarketplaceTransaction(prepared.transaction", transactionGuard);
+  assert.ok(localRecovery >= 0 && localOnlyGuard > localRecovery, "actor-scoped local recovery must confirm before recovery-only failure");
+  assert.ok(submittedRecovery >= 0 && serverOnlyGuard > submittedRecovery, "server recovery must be accepted before fail-closed recovery mode");
+  assert.ok(transactionGuard > serverOnlyGuard && broadcast > transactionGuard, "confirm-only mode must stop before any transaction can broadcast");
+  assert.match(execute, /const readyRetry = input\.serverRecoveryOnly\s*\? undefined/);
+  assert.match(execute, /input\.serverRecoveryOnly \? \{ headers: \{ "x-marketplace-recovery-only": "1" \} \} : \{\}/);
+  assert.match(execute, /if \(!input\.serverRecoveryOnly && !isExplicitEip1193UserRejection\(error\)\)/);
+
+  assert.match(source, /const canCheckServerSelect = application\.status === "applied"[\s\S]*onSelect\(application, true\)/);
+  assert.match(source, /const canCheckServerWithdraw = application\.status === "applied"[\s\S]*onWithdraw\(application, true\)/);
+  assert.match(source, /const canCheckServerAccept = selected[\s\S]*onAccept\(application, true\)/);
+  assert.match(source, /const canCheckServerSubmit = accepted[\s\S]*recoveryCheck onSubmit=\{onSubmit\}/);
+  assert.match(source, /hasSubmitRecovery \? <button[\s\S]*onRecoverSubmission\(application\)/);
+  assert.match(source, /const canCheckServerCancel = isBrand[\s\S]*&& !canCancel/);
+  assert.match(source, /cancelCampaign\(true\)/);
+
+  const settlementStart = source.indexOf("function SettlementControls");
+  const settlementEnd = source.indexOf("function EvidenceSubmissionForm", settlementStart);
+  const settlement = source.slice(settlementStart, settlementEnd);
+  const settlementRecovery = settlement.indexOf("const submitted = preparedMarketplaceRecovery(prepared)");
+  const settlementServerGuard = settlement.indexOf("if (serverRecoveryOnly)", settlementRecovery);
+  const settlementTransaction = settlement.indexOf("if (!prepared.transaction)", settlementServerGuard);
+  const settlementBroadcast = settlement.indexOf("broadcastMarketplaceTransaction(prepared.transaction", settlementTransaction);
+  assert.ok(settlementRecovery >= 0 && settlementServerGuard > settlementRecovery);
+  assert.ok(settlementTransaction > settlementServerGuard && settlementBroadcast > settlementTransaction);
+  assert.match(settlement, /serverRecoveryOnly \? undefined : readyRetries\.current\[kind\]/);
+  assert.match(settlement, /serverRecoveryOnly \? \{ headers: \{ "x-marketplace-recovery-only": "1" \} \} : \{\}/);
+  assert.match(settlement, /isBrandActor && hasRefundRecovery/);
+  assert.match(settlement, /canCheckServerRefund[\s\S]*execute\("refund-unallocated", true\)/);
+});
+
+test("server-derived action timers re-arm safely and all campaign actions share one lock", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  const clockStart = source.indexOf("const nextActionBoundary");
+  const clockEnd = source.indexOf("async function executePrepared", clockStart);
+  const clock = source.slice(clockStart, clockEnd);
+  assert.match(clock, /const remaining = nextActionBoundary - actionClock/);
+  assert.match(clock, /const delay = capped \? 2_147_000_000 : Math\.max\(0, remaining \+ 250\)/);
+  assert.match(clock, /const advanceTo = capped \? actionClock \+ 2_147_000_000 : nextActionBoundary/);
+  assert.match(clock, /setActionClock\(\(current\) => current === null \? null : Math\.max\(current, advanceTo\)\)/);
+  assert.match(clock, /\[actionClock, loadDetail, nextActionBoundary\]/);
+  assert.doesNotMatch(clock, /Date\.now|Math\.max\(15_000/);
+  assert.match(source, /setActionClock\(null\);\s*void loadDetail\(\)/);
+  assert.match(source, /const transactionLocked = action\.key !== null \|\| fundingBusy \|\| settlementBusy/);
+  assert.ok((source.match(/disabled=\{transactionLocked\}/g) ?? []).length >= 10);
+  assert.match(source, /<fieldset className="transaction-lock" disabled=\{transactionLocked\}>/);
+});
+
+test("campaign refreshes reject older server-clock snapshots without clearing ready plans", async () => {
+  const source = await readFile(new URL("../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx", import.meta.url), "utf8");
+  assert.match(source, /const latestObservedAt = useRef\(-1\)/);
+  assert.match(source, /if \(responseObservedAt < latestObservedAt\.current\) return/);
+  assert.match(source, /setState\(\(current\) => \{[\s\S]*responseObservedAt < currentObservedAt[\s\S]*return current/);
+  const loadStart = source.indexOf("const loadDetail = useCallback");
+  const executeStart = source.indexOf("async function executePrepared", loadStart);
+  assert.doesNotMatch(source.slice(loadStart, executeStart), /delete readyRetries\.current/);
 });
 
 test("exact wallet-rejected cancel and resolution plans survive detail and deadline refresh", async () => {
@@ -572,13 +712,15 @@ test("exact wallet-rejected cancel and resolution plans survive detail and deadl
   const executeStart = source.indexOf("async function executePrepared", loadStart);
   const refreshPath = source.slice(loadStart, executeStart);
   assert.doesNotMatch(refreshPath, /delete readyRetries\.current/);
-  assert.match(refreshPath, /deadlineMs <= Date\.now\(\)[\s\S]*refresh\(\)/);
-  assert.match(refreshPath, /const refresh = \(\) => \{[\s\S]*void loadDetail\(\)/);
+  assert.match(refreshPath, /nextCampaignActionBoundary\(state\.detail, actionClock\)/);
+  assert.match(refreshPath, /window\.setTimeout\([\s\S]*void loadDetail\(\)/);
+  assert.match(refreshPath, /document\.addEventListener\("visibilitychange", refreshVisibleState\)/);
+  assert.match(refreshPath, /window\.addEventListener\("focus", refreshVisibleState\)/);
 
   const executeEnd = source.indexOf("async function apply", executeStart);
   const execute = source.slice(executeStart, executeEnd);
   assert.match(execute, /matchingMarketplaceReadyRetry\(readyRetry, actor, requestBody\)/);
-  assert.match(execute, /if \(!isExplicitEip1193UserRejection\(error\)\)[\s\S]*delete readyRetries\.current\[input\.key\]/);
+  assert.match(execute, /if \(!input\.serverRecoveryOnly && !isExplicitEip1193UserRejection\(error\)\)[\s\S]*delete readyRetries\.current\[input\.key\]/);
   assert.doesNotMatch(execute, /revalidateOnRetry/);
 
   const cancelStart = source.indexOf("async function cancelCampaign");
