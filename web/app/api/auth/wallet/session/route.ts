@@ -1,5 +1,5 @@
-import { applicationOriginForRequest } from "@/lib/verification-config";
-import { ApiProblem, apiError } from "@/lib/verification-api";
+import { authorizeNativeWalletSessionClear } from "@/lib/verification-native-service";
+import { apiError, assertSameOriginRequest } from "@/lib/verification-api";
 import {
   clearWalletSessionCookies,
   isAuthenticatedWalletSession,
@@ -20,23 +20,19 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const origin = request.headers.get("origin");
-    let applicationOrigin: string;
-    try {
-      applicationOrigin = applicationOriginForRequest(request);
-    } catch {
-      throw new ApiProblem(403, "SAME_ORIGIN_REQUIRED", "This InfluencedX application origin is not allowed.");
-    }
-    if (!origin || origin !== applicationOrigin) {
-      throw new ApiProblem(403, "SAME_ORIGIN_REQUIRED", "This action must come from the InfluencedX application.");
-    }
-    const fetchSite = request.headers.get("sec-fetch-site");
-    if (fetchSite && fetchSite !== "same-origin") {
-      throw new ApiProblem(403, "SAME_ORIGIN_REQUIRED", "Cross-site requests are not accepted.");
-    }
+    assertSameOriginRequest(request, "DELETE");
+    const session = readWalletSession(request);
+    const result = session
+      ? await authorizeNativeWalletSessionClear({ ownerUserId: session.subject })
+      : { processing: false };
     return clearWalletSessionCookies(
       Response.json(
-        { authenticated: false, wallet: null, expiresAt: null },
+        {
+          ...result,
+          authenticated: false,
+          wallet: null,
+          expiresAt: null,
+        },
         { headers: { "Cache-Control": "private, no-store" } },
       ),
     );

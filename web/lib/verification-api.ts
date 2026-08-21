@@ -23,34 +23,12 @@ export class ApiProblem extends Error {
   }
 }
 
-export async function readSameOriginJson(
+export function assertSameOriginRequest(
   request: Request,
-  options: {
-    mutationsEnabled?: () => boolean;
-    disabledCode?: string;
-    disabledMessage?: string;
-  } = {},
-): Promise<Record<string, unknown>> {
-  if (request.method !== "POST") {
-    throw new ApiProblem(405, "METHOD_NOT_ALLOWED", "Use POST.");
-  }
-
-  if (!(options.mutationsEnabled ?? verificationMutationsEnabled)()) {
-    throw new ApiProblem(
-      503,
-      options.disabledCode ?? "VERIFICATION_MUTATIONS_DISABLED",
-      options.disabledMessage ??
-        "Wallet and X verification actions are not enabled in this deployment.",
-    );
-  }
-
-  const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
-    throw new ApiProblem(
-      415,
-      "JSON_REQUIRED",
-      "Requests must use the application/json content type.",
-    );
+  expectedMethod: "DELETE" | "POST",
+): void {
+  if (request.method !== expectedMethod) {
+    throw new ApiProblem(405, "METHOD_NOT_ALLOWED", `Use ${expectedMethod}.`);
   }
 
   const origin = request.headers.get("origin");
@@ -78,6 +56,47 @@ export async function readSameOriginJson(
       403,
       "SAME_ORIGIN_REQUIRED",
       "Cross-site requests are not accepted.",
+    );
+  }
+}
+
+export async function readSameOriginJson(
+  request: Request,
+  options: {
+    mutationsEnabled?: () => boolean;
+    disabledCode?: string;
+    disabledMessage?: string;
+  } = {},
+): Promise<Record<string, unknown>> {
+  if (!(options.mutationsEnabled ?? verificationMutationsEnabled)()) {
+    throw new ApiProblem(
+      503,
+      options.disabledCode ?? "VERIFICATION_MUTATIONS_DISABLED",
+      options.disabledMessage ??
+        "Wallet and X verification actions are not enabled in this deployment.",
+    );
+  }
+
+  assertSameOriginRequest(request, "POST");
+  return readBoundedJsonObject(request);
+}
+
+export async function readSameOriginDeleteJson(
+  request: Request,
+): Promise<Record<string, unknown>> {
+  assertSameOriginRequest(request, "DELETE");
+  return readBoundedJsonObject(request);
+}
+
+async function readBoundedJsonObject(
+  request: Request,
+): Promise<Record<string, unknown>> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+    throw new ApiProblem(
+      415,
+      "JSON_REQUIRED",
+      "Requests must use the application/json content type.",
     );
   }
 

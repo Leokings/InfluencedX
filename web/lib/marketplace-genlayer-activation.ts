@@ -1,4 +1,5 @@
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { sha256, stringToHex } from "viem";
 
 import { getDb } from "../db/index.ts";
@@ -92,6 +93,7 @@ export async function issueIdentityBundleChallenge(input: {
   const row = await ownedRow(input.session, input.requestId);
   if (
     !["WALLET_AUTHORIZED", "X_CHALLENGE_ISSUED"].includes(row.status) ||
+    row.sessionDetachedAt !== null ||
     row.requestExpiresAt <= nowMs
   ) {
     stateChanged();
@@ -169,6 +171,7 @@ export async function issueIdentityBundleChallenge(input: {
       eq(verificationRequests.ownerUserId, input.session.subject),
       inArray(verificationRequests.status, ["WALLET_AUTHORIZED", "X_CHALLENGE_ISSUED"]),
       eq(verificationRequests.revision, row.revision),
+      isNull(verificationRequests.sessionDetachedAt),
       gt(verificationRequests.requestExpiresAt, nowMs),
     ))
     .returning();
@@ -474,7 +477,11 @@ export async function issueFarcasterChallenge(input: {
 }) {
   const nowMs = input.nowMs ?? Date.now();
   const row = await ownedRow(input.session, input.requestId);
-  if (row.status !== "WALLET_AUTHORIZED" || row.requestExpiresAt <= nowMs) stateChanged();
+  if (
+    row.status !== "WALLET_AUTHORIZED"
+    || row.sessionDetachedAt !== null
+    || row.requestExpiresAt <= nowMs
+  ) stateChanged();
   const username = normalizeFarcasterUsername(input.username);
   const fid = positiveDecimal(input.fid, "fid");
   const challenge = `APV2-${makeRandomBase64Url(18)}`;
@@ -512,6 +519,7 @@ export async function issueFarcasterChallenge(input: {
       eq(verificationRequests.ownerUserId, input.session.subject),
       eq(verificationRequests.status, "WALLET_AUTHORIZED"),
       eq(verificationRequests.revision, row.revision),
+      isNull(verificationRequests.sessionDetachedAt),
       gt(verificationRequests.requestExpiresAt, nowMs),
     ))
     .returning();
@@ -539,7 +547,11 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
 }) {
   const nowMs = input.nowMs ?? Date.now();
   const row = await ownedRow(input.session, input.requestId);
-  if (row.status !== "X_CHALLENGE_ISSUED" || row.requestExpiresAt <= nowMs) {
+  if (
+    row.status !== "X_CHALLENGE_ISSUED"
+    || row.sessionDetachedAt !== null
+    || row.requestExpiresAt <= nowMs
+  ) {
     stateChanged();
   }
   if (!ownershipOutcomeAllowsRetry(row.genlayerOutcome)) {
@@ -586,45 +598,88 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
     );
   }
   const call = identityBundleActivationCall(row, envelope);
-  const prepared = await prepareGenLayerMarketplaceTransaction({
-    operation: "ACTIVATE_IDENTITY_BUNDLE",
-    call,
-    actorWallet: row.wallet,
-    onchainEntityId: envelope.bundleRequestId,
-    reuseFinalized: row.genlayerOutcome !== "UNDETERMINED",
-    nowMs,
+  const { prepared } = await coordinateIdentityBundlePreparation({
+    currentPreparedId: row.activationPreparedId,
+    currentOutcome: row.genlayerOutcome,
+    createPreparedId: randomUUID,
+    reservePreparedId: async (preparedId) => {
+      // Bind the opaque journal ID and all evidence commitments to the request
+      // before inserting the journal. The revision CAS races safely with an
+      // idle run end: either the end wins and no journal is written, or this
+      // reservation wins and every end path protects the evidence.
+      const [reserved] = await getDb()
+        .update(verificationRequests)
+        .set({
+          identitySource: null,
+          normalizedVerificationPostUrl: envelope.x.normalizedUrl,
+          verificationPostId: envelope.x.contentId,
+          verificationPostCreatedAt: envelope.x.contentCreatedAtMs,
+          farcasterCastHash: envelope.farcaster.contentId,
+          finalizedRequestId: envelope.bundleRequestId,
+          xOwnershipRequestId: envelope.x.requestId,
+          farcasterOwnershipRequestId: envelope.farcaster.requestId,
+          activationPreparedId: preparedId,
+          activationTxHash: null,
+          activationConfirmedAt: null,
+          readyForGenLayerAt: nowMs,
+          genlayerTxHash: null,
+          genlayerOutcome: null,
+          genlayerErrorCode: null,
+          genlayerSubmittedAt: null,
+          genlayerLastPolledAt: null,
+          genlayerFinalizedAt: null,
+          revision: row.revision + 1,
+          updatedAt: nowMs,
+        })
+        .where(and(
+          eq(verificationRequests.id, row.id),
+          eq(verificationRequests.ownerUserId, input.session.subject),
+          eq(verificationRequests.status, "X_CHALLENGE_ISSUED"),
+          eq(verificationRequests.revision, row.revision),
+          isNull(verificationRequests.sessionDetachedAt),
+          gt(verificationRequests.requestExpiresAt, nowMs),
+          row.activationPreparedId
+            ? eq(verificationRequests.activationPreparedId, row.activationPreparedId)
+            : isNull(verificationRequests.activationPreparedId),
+          row.genlayerOutcome === "UNDETERMINED"
+            ? eq(verificationRequests.genlayerOutcome, "UNDETERMINED")
+            : isNull(verificationRequests.genlayerOutcome),
+        ))
+        .returning({ id: verificationRequests.id });
+      if (!reserved) stateChanged();
+    },
+    prepareReservedId: (preparedId) => prepareGenLayerMarketplaceTransaction({
+      preparedId,
+      operation: "ACTIVATE_IDENTITY_BUNDLE",
+      call,
+      actorWallet: row.wallet,
+      onchainEntityId: envelope.bundleRequestId,
+      reuseFinalized: row.genlayerOutcome !== "UNDETERMINED",
+      nowMs,
+    }),
   });
-  const [updated] = await getDb()
-    .update(verificationRequests)
-    .set({
-      identitySource: null,
-      normalizedVerificationPostUrl: envelope.x.normalizedUrl,
-      verificationPostId: envelope.x.contentId,
-      verificationPostCreatedAt: envelope.x.contentCreatedAtMs,
-      farcasterCastHash: envelope.farcaster.contentId,
-      finalizedRequestId: envelope.bundleRequestId,
-      xOwnershipRequestId: envelope.x.requestId,
-      farcasterOwnershipRequestId: envelope.farcaster.requestId,
-      activationPreparedId: prepared.preparedId,
-      readyForGenLayerAt: nowMs,
-      revision: row.revision + 1,
-      updatedAt: nowMs,
-    })
-    .where(and(
-      eq(verificationRequests.id, row.id),
-      eq(verificationRequests.ownerUserId, input.session.subject),
-      eq(verificationRequests.status, "X_CHALLENGE_ISSUED"),
-      eq(verificationRequests.revision, row.revision),
-      gt(verificationRequests.requestExpiresAt, nowMs),
-    ))
-    .returning();
-  if (!updated) stateChanged();
   return Object.freeze({
     request: await requireProjection(input.session.subject, row.id, nowMs),
     preparedId: prepared.preparedId,
     bundleRequestId: envelope.bundleRequestId,
     transaction: prepared.call,
   });
+}
+
+export async function coordinateIdentityBundlePreparation<T>(input: {
+  currentPreparedId: string | null;
+  currentOutcome: string | null;
+  createPreparedId(): string;
+  reservePreparedId(preparedId: string): Promise<void>;
+  prepareReservedId(preparedId: string): Promise<T>;
+}): Promise<Readonly<{ preparedId: string; prepared: T; reserved: boolean }>> {
+  const reserved = !input.currentPreparedId || input.currentOutcome === "UNDETERMINED";
+  const preparedId = reserved
+    ? input.createPreparedId()
+    : input.currentPreparedId!;
+  if (reserved) await input.reservePreparedId(preparedId);
+  const prepared = await input.prepareReservedId(preparedId);
+  return Object.freeze({ preparedId, prepared, reserved });
 }
 
 export async function confirmGenLayerCreatorActivation(input: {

@@ -351,6 +351,7 @@ export async function setGenLayerPrivateApplicationStatus(input: {
 }
 
 export async function prepareGenLayerMarketplaceTransaction(input: {
+  preparedId?: string;
   operation: MarketplaceGenLayerOperation;
   call: MarketplaceGenLayerCall;
   actorWallet: string;
@@ -365,19 +366,34 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
   const nowMs = input.nowMs ?? Date.now();
   const args = jsonSafeArgs(input.call.args);
   const argsHash = canonicalHash(args);
-  const existing = await findReusablePreparedTransaction({
-    operation: input.operation,
-    contractAddress: input.call.contractAddress,
-    actorWallet,
-    argsHash,
-    valueAtto: input.call.value,
-    localCampaignId: input.localCampaignId ?? null,
-    localApplicationId: input.localApplicationId ?? null,
-    reuseFinalized: input.reuseFinalized ?? true,
-  });
-  if (existing) return preparedDto(existing);
+  if (input.preparedId !== undefined && !uuidPattern.test(input.preparedId)) {
+    throw new Error("The reserved GenLayer prepared ID is invalid.");
+  }
+  if (input.preparedId) {
+    const reserved = await findGenLayerPreparedTransaction(input.preparedId);
+    if (reserved) {
+      assertReservedPreparedTransaction(reserved, {
+        ...input,
+        actorWallet,
+        argsHash,
+      });
+      return preparedDto(reserved);
+    }
+  } else {
+    const existing = await findReusablePreparedTransaction({
+      operation: input.operation,
+      contractAddress: input.call.contractAddress,
+      actorWallet,
+      argsHash,
+      valueAtto: input.call.value,
+      localCampaignId: input.localCampaignId ?? null,
+      localApplicationId: input.localApplicationId ?? null,
+      reuseFinalized: input.reuseFinalized ?? true,
+    });
+    if (existing) return preparedDto(existing);
+  }
 
-  const preparedId = randomUUID();
+  const preparedId = input.preparedId ?? randomUUID();
   const [created] = await getDb()
     .insert(marketplaceGenLayerTransactions)
     .values({
@@ -404,6 +420,36 @@ export async function prepareGenLayerMarketplaceTransaction(input: {
     .returning();
   if (!created) throw new Error("Prepared transaction insertion returned no row.");
   return preparedDto(created);
+}
+
+function assertReservedPreparedTransaction(
+  row: GenLayerTransactionRow,
+  input: {
+    operation: MarketplaceGenLayerOperation;
+    call: MarketplaceGenLayerCall;
+    actorWallet: string;
+    argsHash: string;
+    localCampaignId?: string | null;
+    localApplicationId?: string | null;
+    onchainEntityId?: string | null;
+  },
+): void {
+  if (
+    row.network !== MARKETPLACE_GENLAYER_NETWORK
+    || row.chainId !== MARKETPLACE_GENLAYER_CHAIN_ID
+    || row.contractAddress !== input.call.contractAddress.toLowerCase()
+    || row.operation !== input.operation
+    || row.functionName !== input.call.functionName
+    || row.argsHash !== input.argsHash
+    || row.valueAtto !== input.call.value
+    || row.actorWallet !== input.actorWallet
+    || row.localCampaignId !== (input.localCampaignId ?? null)
+    || row.localApplicationId !== (input.localApplicationId ?? null)
+    || row.onchainEntityId !== (input.onchainEntityId ?? null)
+    || JSON.stringify(row.argTypes) !== JSON.stringify(input.call.argTypes)
+  ) {
+    throw new Error("The reserved GenLayer transaction binding changed.");
+  }
 }
 
 export async function findGenLayerPreparedTransaction(

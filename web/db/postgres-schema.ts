@@ -225,6 +225,7 @@ export const postgresVerificationRequests = pgTable(
     statusUpdatedAt: epochMs("status_updated_at").notNull(),
     requestExpiresAt: epochMs("request_expires_at").notNull(),
     revision: epochMs("revision").notNull().default(0),
+    sessionDetachedAt: epochMs("session_detached_at"),
 
     wallet: text("wallet").notNull(),
     walletNonce: text("wallet_nonce"),

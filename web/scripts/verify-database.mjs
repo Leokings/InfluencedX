@@ -34,6 +34,7 @@ const [state] = await sql.query(`
         ('verification_requests', 'activation_prepared_id'),
         ('verification_requests', 'activation_tx_hash'),
         ('verification_requests', 'activation_confirmed_at'),
+        ('verification_requests', 'session_detached_at'),
         ('verification_requests', 'x_ownership_request_id'),
         ('verification_requests', 'farcaster_ownership_request_id'),
         ('marketplace_genlayer_profiles', 'projection_id'),

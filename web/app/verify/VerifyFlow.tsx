@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { broadcastMarketplaceTransaction, type GenLayerTransactionStage } from "../marketplace/marketplace-transaction";
 import {
   STUDIONET_CHAIN_ID_HEX,
@@ -41,6 +41,7 @@ type VerificationStatus =
 type VerificationOutcome = "VERIFIED" | "REJECTED" | "UNDETERMINED";
 type VerificationRequest = {
   id: string;
+  revision: number;
   status: VerificationStatus;
   wallet: string;
   walletChallengeExpiresAt: string;
@@ -60,6 +61,7 @@ type VerificationRequest = {
   farcasterChallengeExpiresAt?: string | null;
   identityBundleReady?: boolean;
   identityBundleRequestId?: string | null;
+  activationPreparedId?: string | null;
   activationRecovery?: unknown;
   genlayerTxHash?: string | null;
   activationTxHash?: string | null;
@@ -126,6 +128,9 @@ export default function VerifyFlow() {
   const [profiles, setProfiles] = useState<ActivationConfirmation["profiles"] | null>(null);
   const [bundle, setBundle] = useState<BundleResult | null>(null);
   const [recovery, setRecovery] = useState<ActivationRecovery | null>(() => loadRecovery());
+  const [activationDetachReady, setActivationDetachReady] = useState(false);
+  const switchingWalletRef = useRef(false);
+  const flowGenerationRef = useRef(0);
 
   const effectiveWallet = selectVerificationWallet(request?.wallet, wallet);
   const bundleReady = hasBothChallenges(request);
@@ -141,16 +146,31 @@ export default function VerifyFlow() {
     ?? request?.genlayerTxHash
     ?? recovery?.txHash
     ?? null;
+  const activeRunRequest = request
+    && request.status !== "EXPIRED"
+    && request.genlayerOutcome !== "VERIFIED"
+    && request.genlayerOutcome !== "REJECTED"
+    ? request
+    : null;
+  const hashBoundHint = activationDetachReady;
+  const switchBusyBlocked = Boolean(
+    busy && !(busy === "activation" && activationDetachReady),
+  );
   const activeStep = statusStep(request, bundleActive, recovery);
 
   useEffect(() => {
     let active = true;
+    const generation = flowGenerationRef.current;
     void Promise.all([
       api<{ request: VerificationRequest | null }>("/api/verification/status"),
       currentWallet(),
     ])
       .then(([result, selectedWallet]) => {
-        if (!active) return;
+        if (
+          !active
+          || switchingWalletRef.current
+          || generation !== flowGenerationRef.current
+        ) return;
         const serverRecovery = parseBoundIdentityBundleRecovery(
           result.request?.activationRecovery,
           result.request?.id,
@@ -165,13 +185,22 @@ export default function VerifyFlow() {
           clearRecovery();
           setRecovery(null);
         }
+        setActivationDetachReady(Boolean(
+          serverRecovery
+          || result.request?.activationTxHash
+          || result.request?.genlayerTxHash,
+        ));
         setRequest(result.request);
         setWallet(selectedWallet);
         hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterCastUrl });
-        if (result.request?.genlayerOutcome === "UNDETERMINED" && result.request.genlayerRetryable) setNotice("Retry with the same two posts.");
       })
       .catch((statusError: unknown) => {
-        if (active && (statusError as Error & { status?: number }).status !== 401) setError(readError(statusError, "Could not load this run."));
+        if (
+          active
+          && !switchingWalletRef.current
+          && generation === flowGenerationRef.current
+          && (statusError as Error & { status?: number }).status !== 401
+        ) setError(readError(statusError, "Could not load this run."));
       });
     return () => { active = false; };
   }, [recovery]);
@@ -181,6 +210,10 @@ export default function VerifyFlow() {
     const accountsChanged = (...args: unknown[]) => {
       const nextWallet = firstAddress(Array.isArray(args[0]) ? args[0] : []);
       setWallet(nextWallet);
+      if (switchingWalletRef.current) {
+        setError(null);
+        return;
+      }
       if (request?.wallet && nextWallet?.toLowerCase() !== request.wallet.toLowerCase()) setError(`Switch back to ${shorten(request.wallet)}.`);
       else setError(null);
     };
@@ -199,7 +232,8 @@ export default function VerifyFlow() {
     try {
       const provider = getProvider();
       const connectedWallet = firstAddress(await provider.request({ method: "eth_requestAccounts" }));
-      if (!connectedWallet) throw new Error("No wallet account was returned.");
+      if (!connectedWallet) throw new Error("No wallet selected.");
+      switchingWalletRef.current = false;
       await ensureStudioNet(provider);
       if (request?.wallet && connectedWallet.toLowerCase() !== request.wallet.toLowerCase()) throw new Error(`Switch to ${shorten(request.wallet)}.`);
       setWallet(connectedWallet);
@@ -211,10 +245,11 @@ export default function VerifyFlow() {
       setWalletChallenge(result.walletChallenge);
       if (result.request.id !== request?.id) {
         setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastUrl("");
+        setActivationDetachReady(false);
       }
-      setNotice(result.walletChallenge ? "Sign the message." : "Wallet ready.");
     } catch (connectError) {
-      setError(readError(connectError, "Could not connect the wallet."));
+      switchingWalletRef.current = false;
+      setError(readError(connectError, "Wallet connection failed."));
     } finally { setBusy(null); }
   }
 
@@ -235,7 +270,6 @@ export default function VerifyFlow() {
       );
       setRequest(result.request);
       setWalletChallenge(null);
-      setNotice("Wallet verified.");
     } catch (signError) {
       setError(readError(signError, "Signature failed."));
     } finally { setBusy(null); }
@@ -272,7 +306,6 @@ export default function VerifyFlow() {
       setFarcasterUsername(result.farcasterChallenge.username);
       setPostUrl("");
       setFarcasterCastUrl("");
-      setNotice("Post both messages.");
     } catch (challengeError) {
       setError(readError(challengeError, "Could not create the challenges."));
     } finally { setBusy(null); }
@@ -281,6 +314,7 @@ export default function VerifyFlow() {
   async function activateBundle(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     if (!request || !effectiveWallet) return;
+    const generation = flowGenerationRef.current;
     setBusy("activation"); setError(null); setNotice(null);
     try {
       const provider = getProvider();
@@ -289,15 +323,15 @@ export default function VerifyFlow() {
       if (recovery) {
         if (!recoveryMatchesActiveBundle(recovery, request)) {
           clearRecovery(); setRecovery(null);
-          throw new Error("Saved transaction cleared. Continue this run.");
+          throw new Error("Saved transaction cleared. Retry.");
         }
-        await confirmActivation(recovery);
+        await confirmActivation(recovery, generation);
         return;
       }
+      setActivationDetachReady(false);
       const normalizedFarcasterCastUrl = farcasterCastUrl.trim();
-      if (!postUrl.trim()) throw new Error("Paste the public X post URL.");
-      if (!normalizedFarcasterCastUrl) throw new Error("Paste the public Farcaster cast URL.");
-      setNotice("Checking both posts…");
+      if (!postUrl.trim()) throw new Error("Add the X URL.");
+      if (!normalizedFarcasterCastUrl) throw new Error("Add the Farcaster URL.");
       const prepared = await api<PreparedActivation>(
         "/api/verification/activation",
         requestBody({ requestId: request.id, verificationPostUrl: postUrl.trim(), farcasterCastUrl: normalizedFarcasterCastUrl }),
@@ -313,25 +347,48 @@ export default function VerifyFlow() {
             "/api/verification/activation/submitted",
             requestBody({ preparedId: prepared.preparedId, txHash: hash }),
           );
+          if (generation === flowGenerationRef.current) {
+            setActivationDetachReady(true);
+          }
         },
-        onStage: (stage) => setNotice(activationNotice(stage)),
+        onStage: (stage) => {
+          if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
+            setNotice(activationNotice(stage));
+          }
+        },
       });
-      await confirmActivation({ preparedId: prepared.preparedId, txHash, requestId: request.id });
+      if (generation !== flowGenerationRef.current) return;
+      await confirmActivation(
+        { preparedId: prepared.preparedId, txHash, requestId: request.id },
+        generation,
+      );
     } catch (activationError) {
-      setError(readError(activationError, "Verification failed. Retry."));
-    } finally { setBusy(null); }
+      if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
+        setError(walletPromptRejected(activationError)
+          ? "Transaction cancelled. Retry verification."
+          : readError(activationError, "Verification failed. Retry."));
+      }
+    } finally {
+      setBusy((current) => current === "activation" ? null : current);
+    }
   }
 
-  async function confirmActivation(value: ActivationRecovery) {
-    setNotice("Checking finality…");
+  async function confirmActivation(
+    value: ActivationRecovery,
+    generation = flowGenerationRef.current,
+  ) {
+    if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
+      setNotice("Checking finality…");
+    }
     const confirmed = await api<ActivationConfirmation | LegacyActivationConfirmation>(
       "/api/verification/activation/confirm",
       requestBody({ preparedId: value.preparedId, txHash: value.txHash }),
     );
+    if (generation !== flowGenerationRef.current || switchingWalletRef.current) return;
     setRequest(confirmed.request);
     setRecovery(null); clearRecovery();
     if (!("bundle" in confirmed)) {
-      setNotice("Previous single-account transaction recovered. Add both accounts to continue.");
+      setNotice("Previous run recovered. Add both accounts.");
       return;
     }
     const result = { ...confirmed.bundle, transactionHash: value.txHash };
@@ -339,15 +396,77 @@ export default function VerifyFlow() {
     setBundle(result);
     if (result.outcome === "UNDETERMINED") {
       if (result.retryable) {
-        setNotice("Undetermined. Retry with the same two posts.");
         return;
       }
-      throw new Error("Undetermined. Create new challenges.");
+      throw new Error("Undetermined. Start again.");
     }
     if (result.outcome !== "VERIFIED" || !confirmed.profiles.x?.active || !confirmed.profiles.farcaster?.active) {
-      throw new Error("One or both proofs were rejected. Start again.");
+      throw new Error("Proof rejected. Start again.");
     }
-    setNotice("X + Farcaster verified.");
+  }
+
+  async function switchWallet() {
+    if (switchBusyBlocked) return;
+    if (
+      activeRunRequest
+      && !window.confirm(
+        hashBoundHint
+          ? "Sign out? Transaction will continue."
+          : "Switch wallet? This run will end.",
+      )
+    ) return;
+    switchingWalletRef.current = true;
+    setBusy("switch-wallet"); setError(null); setNotice(null);
+    try {
+      if (activeRunRequest) {
+        await api<{ ended: boolean; processing: boolean; authenticated: false; wallet: null }>(
+          "/api/verification/session",
+          {
+            method: "DELETE",
+            body: JSON.stringify({
+              requestId: activeRunRequest.id,
+              revision: activeRunRequest.revision,
+            }),
+          },
+        );
+      } else {
+        await api<{ processing: boolean; authenticated: false; wallet: null }>(
+          "/api/auth/wallet/session",
+          { method: "DELETE" },
+        );
+      }
+      flowGenerationRef.current += 1;
+      clearRecovery();
+      setRecovery(null);
+      setRequest(null);
+      setWallet(null);
+      setWalletChallenge(null);
+      setHandle("");
+      setPostUrl("");
+      setFarcasterUsername("");
+      setFarcasterCastUrl("");
+      setConsent(false);
+      setProfiles(null);
+      setBundle(null);
+      setActivationDetachReady(false);
+      const revoked = await revokeWalletPermissions();
+      if (!revoked) {
+        setNotice("App signed out. Choose another account in your wallet.");
+      }
+      setError(null);
+    } catch (switchError) {
+      switchingWalletRef.current = false;
+      const selectedWallet = await currentWallet();
+      setWallet(selectedWallet);
+      setError(
+        request?.wallet
+          && selectedWallet?.toLowerCase() !== request.wallet.toLowerCase()
+          ? `Switch back to ${shorten(request.wallet)}.`
+          : readError(switchError, "Could not switch wallets."),
+      );
+    } finally {
+      setBusy((current) => current === "switch-wallet" ? null : current);
+    }
   }
 
   async function copyChallengeText(source: "X" | "FARCASTER") {
@@ -369,8 +488,6 @@ export default function VerifyFlow() {
   const resultRows = [
     ["X", request?.verificationPostId ? "complete" : "future", request?.verificationPostId ? shorten(request.verificationPostId, 8, 6) : "POST REQUIRED"],
     ["FARCASTER", request?.farcasterCastHash ? "complete" : "future", request?.farcasterCastHash ? shorten(request.farcasterCastHash, 8, 6) : "CAST REQUIRED"],
-    ["TRANSACTION", activationTxHash ? bundleActive ? "complete" : "pending" : "future", activationTxHash ? shorten(activationTxHash, 10, 8) : "NOT SENT"],
-    ["IDENTITIES", bundleActive ? "complete" : "future", bundleActive ? "BOTH ACTIVE" : "WAITING"],
   ] as const;
 
   return (
@@ -390,6 +507,16 @@ export default function VerifyFlow() {
 
         <section className="verify-workspace" aria-labelledby="verify-workspace-title">
           <div className="verify-workspace-head"><div><span>VERIFICATION</span><strong id="verify-workspace-title">STEP {String(activeStep).padStart(2, "0")} / 04</strong></div><span className={expired ? "run-state error" : "run-state"}><i /> {expired ? "EXPIRED" : bundleActive ? "VERIFIED" : "READY"}</span></div>
+          {request || wallet ? (
+            <button
+              className="verify-secondary verify-switch-wallet"
+              disabled={switchBusyBlocked}
+              onClick={() => void switchWallet()}
+              type="button"
+            >
+              {busy === "switch-wallet" ? "SWITCHING…" : "SWITCH WALLET"}
+            </button>
+          ) : null}
           <div className="verify-announcer" aria-live="polite">{notice ? <p className="verify-notice">{notice}</p> : null}{error ? <p className="verify-error" role="alert">{error}</p> : null}</div>
 
           {activeStep === 1 ? (
@@ -477,6 +604,18 @@ async function currentWallet(): Promise<string | null> {
     return firstAddress(await window.ethereum.request({ method: "eth_accounts" }));
   } catch {
     return null;
+  }
+}
+
+async function revokeWalletPermissions(): Promise<boolean> {
+  try {
+    await window.ethereum?.request({
+      method: "wallet_revokePermissions",
+      params: [{ eth_accounts: {} }],
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -586,17 +725,18 @@ function errorMessage(body: ApiErrorBody, status: number, fallback: string): str
     CHALLENGE_EXPIRED: "Challenge expired. Start again.",
     SESSION_WALLET_MISMATCH: "Switch to the wallet used for this run.",
     WALLET_AUTHENTICATION_REQUIRED: "Reconnect and sign the wallet message.",
-    INVALID_STATE: "This run changed. Refresh and try again.",
-    STATE_CHANGED: "This run changed. Refresh and try again.",
+    INVALID_STATE: "Run changed. Refresh.",
+    STATE_CHANGED: "Run changed. Refresh.",
     PREPARED_TRANSACTION_MISMATCH: "Saved transaction does not match this run. Start again.",
     ACTIVATION_OUTCOME_TERMINAL: "Start a new verification.",
     IDENTITY_BUNDLE_INCOMPLETE: "Create both challenges first.",
     ACTIVATION_ALREADY_PREPARED: "Use the same two posts and continue.",
-    GENLAYER_TRANSACTION_UNAVAILABLE: "Still finalizing. Check again soon.",
-    GENLAYER_FINALITY_PENDING: "Still finalizing. Check again soon.",
+    GENLAYER_TRANSACTION_UNAVAILABLE: "Still finalizing.",
+    GENLAYER_FINALITY_PENDING: "Still finalizing.",
     GENLAYER_TRANSACTION_TERMINATED: "Transaction failed. Start again.",
     GENLAYER_EXECUTION_FAILED: "Transaction failed. Start again.",
-    GENLAYER_TRANSACTION_MISMATCH: "Transaction does not match this run.",
+    GENLAYER_TRANSACTION_MISMATCH: "Transaction mismatch.",
+    VERIFICATION_TRANSACTION_PENDING: "Finish the transaction first.",
   };
   if (code && messages[code]) return messages[code];
   const serverMessage = typeof body.error === "string"
@@ -623,6 +763,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 function readError(value: unknown, fallback: string): string {
   return value instanceof Error && value.message ? value.message : fallback;
+}
+
+function walletPromptRejected(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const error = value as { code?: unknown; message?: unknown; cause?: unknown };
+  if (error.code === 4_001) return true;
+  if (error.cause && walletPromptRejected(error.cause)) return true;
+  return typeof error.message === "string"
+    && /user (?:rejected|denied)|cancelled/i.test(error.message);
 }
 
 function requestBody(value: unknown): RequestInit { return { method: "POST", body: JSON.stringify(value) }; }

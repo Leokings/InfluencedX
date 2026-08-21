@@ -350,7 +350,7 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.match(source, /\/api\/verification\/activation\/submitted/);
   assert.match(source, /onSubmitted: async \(hash\)/);
   assert.match(source, /genlayerOutcome === "UNDETERMINED"/);
-  assert.match(source, /Retry with the same two posts/);
+  assert.match(source, /retryableUndetermined \? "RETRY BOTH →"/);
   assert.match(source, /broadcastMarketplaceTransaction/);
   assert.match(source, /preparedId: value\.preparedId, txHash: value\.txHash/);
   const activation = source.slice(
