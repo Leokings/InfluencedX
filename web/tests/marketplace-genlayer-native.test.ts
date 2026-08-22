@@ -15,6 +15,8 @@ import {
 import {
   buildGenLayerSubmissionCall,
   genLayerCampaignActionPostcondition,
+  genLayerResolutionAssignmentPostcondition,
+  genLayerResolutionCampaignPostcondition,
   genLayerUnallocatedRefundAvailability,
   nextGenLayerResolutionProgression,
 } from "../lib/marketplace-genlayer-actions.ts";
@@ -1102,6 +1104,98 @@ test("scheduled repair republishes resolutions and submits only fixed due lifecy
   assert.equal(reconciled.length, 2);
 });
 
+test("finalized expiry and finalization replays reconcile before any latest-state pre-read", async () => {
+  const nowEpoch = 1_800_100_000;
+  const assignmentProjection = progressionAssignmentProjection({
+    status: "SELECTED",
+    acceptanceDeadlineEpoch: nowEpoch - 1,
+  });
+  const campaignProjection = progressionCampaignProjection({
+    submissionDeadlineEpoch: nowEpoch - 90_000,
+    retentionSeconds: 3_600,
+  });
+  const reconciled: string[] = [];
+  const result = await runGenLayerProgressionBatch({
+    nowMs: nowEpoch * 1_000,
+    dependencies: {
+      listResolutions: async () => [],
+      listExpiries: async () => [{
+        assignment: assignmentProjection,
+        campaign: campaignProjection,
+      }] as never,
+      listFinalizations: async () => [campaignProjection] as never,
+      readAssignment: async () => {
+        assert.fail("a finalized expiry replay must not depend on a latest-state pre-read");
+      },
+      readCampaign: async () => {
+        assert.fail("a finalized campaign replay must not depend on a latest-state pre-read");
+      },
+      submit: async (input) => ({
+        replayed: true,
+        operation: progressionOperation(input.action, "FINALIZED"),
+      }),
+      reconcileExpiry: async () => {
+        reconciled.push("expiry");
+        return {} as never;
+      },
+      reconcileFinalization: async () => {
+        reconciled.push("finalization");
+        return {} as never;
+      },
+    },
+  });
+  assert.equal(result.finalized, 2);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(reconciled.toSorted(), ["expiry", "finalization"]);
+});
+
+test("unbroadcast lifecycle precheck failures are stale only after an authoritative re-read", async () => {
+  const nowEpoch = 1_800_100_000;
+  const assignmentProjection = progressionAssignmentProjection({
+    status: "SELECTED",
+    acceptanceDeadlineEpoch: nowEpoch - 1,
+  });
+  const campaignProjection = progressionCampaignProjection({
+    submissionDeadlineEpoch: nowEpoch - 90_000,
+    retentionSeconds: 3_600,
+  });
+  let assignmentReads = 0;
+  let campaignReads = 0;
+  const result = await runGenLayerProgressionBatch({
+    nowMs: nowEpoch * 1_000,
+    dependencies: {
+      listResolutions: async () => [],
+      listExpiries: async () => [{
+        assignment: assignmentProjection,
+        campaign: campaignProjection,
+      }] as never,
+      listFinalizations: async () => [campaignProjection] as never,
+      readAssignment: async () => {
+        assignmentReads += 1;
+        return progressionAssignment({ status: "EXPIRED" });
+      },
+      readCampaign: async () => {
+        campaignReads += 1;
+        return progressionCampaign({
+          status: "CLOSED",
+          availableAtto: "0",
+          reservedAtto: "0",
+          submissionDeadlineEpoch: campaignProjection.submissionDeadlineEpoch,
+          closedAtEpoch: nowEpoch - 1,
+        });
+      },
+      submit: async (input) => ({
+        replayed: true,
+        operation: progressionOperation(input.action, "PRECHECK_FAILED"),
+      }),
+    },
+  });
+  assert.equal(result.stale, 2);
+  assert.equal(result.failed, 0);
+  assert.equal(assignmentReads, 1);
+  assert.equal(campaignReads, 2);
+});
+
 test("operator PRECHECK_FAILED remains retryable with the exact request binding", async () => {
   await assert.rejects(
     reconcileQueuedGenLayerProgression({
@@ -1125,6 +1219,305 @@ test("operator PRECHECK_FAILED remains retryable with the exact request binding"
       },
     }),
     GenLayerProgressionRetryError,
+  );
+});
+
+test("a finalized operator replay repairs projection without a latest-state pre-read", async () => {
+  const submitted: unknown[] = [];
+  const reconciled: unknown[] = [];
+  let authoritativeRead = false;
+  const result = await reconcileQueuedGenLayerProgression({
+    assignmentId,
+    requestId,
+    dependencies: {
+      findAssignment: async () => progressionAssignmentProjection({
+        resolutionRequestId: requestId,
+      }) as never,
+      readAssignment: async () => {
+        authoritativeRead = true;
+        throw new Error("finalized replay must not depend on a latest-state pre-read");
+      },
+      submit: async (input) => {
+        submitted.push(input);
+        return {
+          replayed: true,
+          operation: progressionOperation("resolve_assignment", "FINALIZED"),
+        };
+      },
+      reconcileResolution: async (input) => {
+        reconciled.push(input);
+        return {} as never;
+      },
+    },
+  });
+  assert.deepEqual(submitted, [{
+    schemaVersion: 1,
+    action: "resolve_assignment",
+    assignmentId,
+    requestId,
+  }]);
+  assert.equal(authoritativeRead, false);
+  assert.deepEqual(reconciled, [{
+    assignmentId,
+    requestId,
+    transactionHash: `0x${"54".repeat(32)}`,
+    finalizedAtMs: Date.parse("2026-08-19T12:00:00.000Z"),
+  }]);
+  assert.deepEqual(result, {
+    status: "FINALIZED",
+    operationId: `0x${"51".repeat(32)}`,
+  });
+});
+
+test("a finalized operator replay reaches exact reconciliation after the request projection advanced", async () => {
+  const nextRequestId = `0x${"5c".repeat(32)}`;
+  const reconciled: unknown[] = [];
+  const result = await reconcileQueuedGenLayerProgression({
+    assignmentId,
+    requestId,
+    dependencies: {
+      findAssignment: async () => progressionAssignmentProjection({
+        status: "UNDETERMINED",
+        resolutionRequestId: nextRequestId,
+      }) as never,
+      readAssignment: async () => {
+        assert.fail("a finalized deterministic replay must not read current request state");
+      },
+      submit: async () => ({
+        replayed: true,
+        operation: progressionOperation("resolve_assignment", "FINALIZED"),
+      }),
+      reconcileResolution: async (input) => {
+        reconciled.push(input);
+        return {} as never;
+      },
+    },
+  });
+  assert.equal(result.status, "FINALIZED");
+  assert.deepEqual(reconciled, [{
+    assignmentId,
+    requestId,
+    transactionHash: `0x${"54".repeat(32)}`,
+    finalizedAtMs: Date.parse("2026-08-19T12:00:00.000Z"),
+  }]);
+});
+
+test("a stale operator request without a finalized transaction is acknowledged without projection", async () => {
+  const nextRequestId = `0x${"5b".repeat(32)}`;
+  let reconciled = false;
+  const result = await reconcileQueuedGenLayerProgression({
+    assignmentId,
+    requestId,
+    dependencies: {
+      findAssignment: async () => progressionAssignmentProjection({
+        resolutionRequestId: requestId,
+      }) as never,
+      readAssignment: async () => progressionAssignment({
+        status: "UNDETERMINED",
+        resolutionRequestId: nextRequestId,
+        resolutionRound: 1,
+        resolutionAttempts: 1,
+      }),
+      submit: async () => ({
+        replayed: false,
+        operation: progressionOperation("resolve_assignment", "PRECHECK_FAILED"),
+      }),
+      reconcileResolution: async () => {
+        reconciled = true;
+        return {} as never;
+      },
+    },
+  });
+  assert.deepEqual(result, {
+    status: "STALE",
+    operationId: `0x${"51".repeat(32)}`,
+  });
+  assert.equal(reconciled, false);
+});
+
+test("a stale PRECHECK_FAILED operator request with broadcast evidence remains retryable", async () => {
+  const nextRequestId = `0x${"5b".repeat(32)}`;
+  let reconciled = false;
+  await assert.rejects(
+    reconcileQueuedGenLayerProgression({
+      assignmentId,
+      requestId,
+      dependencies: {
+        findAssignment: async () => progressionAssignmentProjection({
+          resolutionRequestId: requestId,
+        }) as never,
+        readAssignment: async () => progressionAssignment({
+          status: "UNDETERMINED",
+          resolutionRequestId: nextRequestId,
+          resolutionRound: 1,
+          resolutionAttempts: 1,
+        }),
+        submit: async () => ({
+          replayed: false,
+          operation: {
+            ...progressionOperation("resolve_assignment", "PRECHECK_FAILED"),
+            broadcastStartedAt: "2026-08-19T12:00:00.000Z",
+          },
+        }),
+        reconcileResolution: async () => {
+          reconciled = true;
+          return {} as never;
+        },
+      },
+    }),
+    GenLayerProgressionRetryError,
+  );
+  assert.equal(reconciled, false);
+});
+
+test("operator resolution projection accepts only the exact one-step descendant", () => {
+  const submissionHash = `0x${"5c".repeat(32)}`;
+  const postId = "1900000000000000000";
+  const previous = progressionAssignmentProjection({
+    status: "SUBMITTED",
+    agreedRateAtto: "500",
+    postId,
+    submissionHash,
+    submittedAtEpoch: 1_799_900_000,
+    resolutionRequestId: requestId,
+    resolutionRound: 0,
+    resolutionAttempts: 0,
+    resolutionEligibleAtEpoch: 1_800_000_000,
+    lastResolutionAtEpoch: 0,
+    creatorCreditAtto: "0",
+    brandCreditAtto: "0",
+    feeAtto: "0",
+    settledAtEpoch: 0,
+    closedAtEpoch: 0,
+  });
+  const previousCampaign = progressionCampaignProjection({
+    status: "OPEN",
+    availableAtto: "500",
+    reservedAtto: "500",
+    settledAtto: "0",
+    creatorPaidAtto: "0",
+    brandRefundedAtto: "0",
+    feeAtto: "0",
+    feeBps: 250,
+    applicationCount: 2,
+    assignmentCount: 1,
+    closedAtEpoch: 0,
+  });
+  const nextRequestId = deriveResolutionRequestId({
+    assignmentId,
+    agreementHash: previous.agreementHash,
+    submissionHash,
+    contentSource: "X",
+    postId,
+    roundIndex: 1,
+  });
+  const oneStep = progressionAssignment({
+    status: "UNDETERMINED",
+    agreedRateAtto: "500",
+    postId,
+    submissionHash,
+    submittedAtEpoch: 1_799_900_000,
+    resolutionRequestId: nextRequestId,
+    resolutionRound: 1,
+    resolutionAttempts: 1,
+    resolutionEligibleAtEpoch: 1_800_000_300,
+    lastResolutionAtEpoch: 1_800_000_000,
+    outcome: "UNDETERMINED",
+    evidenceHash: `0x${"5e".repeat(32)}`,
+    creatorCreditAtto: "0",
+    brandCreditAtto: "0",
+    feeAtto: "0",
+    settledAtEpoch: 0,
+    closedAtEpoch: 0,
+  });
+  const unchangedCampaign = progressionCampaign({
+    status: "OPEN",
+    availableAtto: "500",
+    reservedAtto: "500",
+    settledAtto: "0",
+    creatorPaidAtto: "0",
+    brandRefundedAtto: "0",
+    feeAtto: "0",
+    feeBps: 250,
+    applicationCount: 2,
+    assignmentCount: 1,
+    closedAtEpoch: 0,
+  });
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, oneStep, previousCampaign.feeBps),
+    true,
+  );
+  assert.equal(
+    genLayerResolutionCampaignPostcondition(previous, oneStep, previousCampaign, unchangedCampaign),
+    true,
+  );
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, {
+      ...oneStep,
+      resolutionAttempts: 2,
+      resolutionRound: 2,
+    }, previousCampaign.feeBps),
+    false,
+    "a later snapshot must not be attributed to the old finalized transaction",
+  );
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, {
+      ...oneStep,
+      resolutionRequestId: `0x${"5f".repeat(32)}`,
+    }, previousCampaign.feeBps),
+    false,
+    "the next request must be derived from the frozen evidence and exact next round",
+  );
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, oneStep, previousCampaign.feeBps),
+    true,
+    "a concurrent shared campaign update must not invalidate the exact target assignment transition",
+  );
+  assert.equal(
+    genLayerResolutionCampaignPostcondition(previous, oneStep, previousCampaign, {
+      ...unchangedCampaign,
+      applicationCount: unchangedCampaign.applicationCount + 1,
+    }),
+    false,
+    "a later shared snapshot must not be stamped with the older resolution receipt",
+  );
+
+  const settledPass = {
+    ...oneStep,
+    status: "SETTLED_PASS" as const,
+    outcome: "PASS" as const,
+    resolutionRequestId: requestId,
+    resolutionRound: 0,
+    resolutionEligibleAtEpoch: previous.resolutionEligibleAtEpoch,
+    creatorCreditAtto: "488",
+    brandCreditAtto: "0",
+    feeAtto: "12",
+    settledAtEpoch: 1_800_000_000,
+  };
+  const settledCampaign = {
+    ...unchangedCampaign,
+    reservedAtto: "0",
+    settledAtto: "500",
+    creatorPaidAtto: "488",
+    feeAtto: "12",
+  };
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, settledPass, previousCampaign.feeBps),
+    true,
+    "terminal assignment credits must exactly conserve the agreed amount and campaign fee",
+  );
+  assert.equal(
+    genLayerResolutionCampaignPostcondition(previous, settledPass, previousCampaign, settledCampaign),
+    true,
+    "an exact terminal shared delta may be attributed to the finalized resolution",
+  );
+  assert.equal(
+    genLayerResolutionAssignmentPostcondition(previous, {
+      ...settledPass,
+      creatorCreditAtto: "489",
+    }, previousCampaign.feeBps),
+    false,
+    "terminal assignment accounting must fail closed",
   );
 });
 
@@ -1472,7 +1865,7 @@ test("journal terminal and projection ordering guards are enforced in SQL", asyn
   assert.match(repository, /status\} <> 'FINALIZED'/);
   assert.match(repository, /for update skip locked/);
   assert.match(repository, /reconciliation_attempts < \$\{maxAttempts\}/);
-  assert.match(repository, /Campaigns\.finalizedAt\} < \$\{input\.finalizedAt\}/);
+  assert.match(repository, /Campaigns\.observationTicket\} < \$\{input\.observationTicket\}/);
   assert.match(repository, /Assignments\.finalizedAt\} < \$\{input\.finalizedAt\}/);
   assert.match(repository, /ProjectionCursors\.lastFinalizedAt\} < \$\{input\.finalizedAt\}/);
 });
@@ -1547,6 +1940,56 @@ test("campaign projection accepts only exact contract states and conserved nativ
   assert.throws(
     () => parseCampaignState({ ...toContractCampaign(state), status: "ACTIVE" }),
     /status/,
+  );
+});
+
+test("campaign accounting accepts mixed assignment settlement and unused-budget refunds", () => {
+  const mixed = toContractCampaign(parseCampaignState({
+    ...toContractCampaign(parseCampaignState({
+      campaign_id: campaignId,
+      brand,
+      client_nonce: "refund-mix-0001",
+      content_source: "X",
+      title: "Mixed refund campaign",
+      brief: "A campaign with settled assignments and a final unused-budget refund.",
+      required_phrases: [],
+      forbidden_phrases: [],
+      require_ad_disclosure: true,
+      terms_hash: deriveCampaignTermsHash(frozenTerms),
+      status: "OPEN",
+      application_deadline_epoch: 1_800_000_000,
+      selection_deadline_epoch: 1_800_003_600,
+      submission_deadline_epoch: 1_800_007_200,
+      retention_seconds: 3_600,
+      max_undetermined_retries: 3,
+      fee_bps: 250,
+      treasury: contract,
+      budget_atto: "1000",
+      available_atto: "700",
+      reserved_atto: "0",
+      settled_atto: "300",
+      creator_paid_atto: "200",
+      brand_refunded_atto: "75",
+      fee_atto: "25",
+      application_count: 2,
+      assignment_count: 2,
+      created_at_epoch: 1_799_999_000,
+      closed_at_epoch: 0,
+    })),
+    status: "CLOSED",
+    available_atto: "0",
+    brand_refunded_atto: "775",
+    closed_at_epoch: 1_800_020_000,
+  }));
+  assert.equal(mixed.settled_atto, "300");
+  assert.equal(mixed.brand_refunded_atto, "775");
+  assert.throws(
+    () => parseCampaignState({ ...mixed, settled_atto: "224" }),
+    /conservation/,
+  );
+  assert.throws(
+    () => parseCampaignState({ ...mixed, status: "CLOSED", available_atto: "1", brand_refunded_atto: "774" }),
+    /contract bounds/,
   );
 });
 

@@ -196,7 +196,7 @@ test("queue publisher emits only immutable identifiers with bounded retention", 
     requestId: REQUEST_ID,
   });
   assert.deepEqual(options, {
-    idempotencyKey: `influencedx-campaign-progression-v3:0x${"ab".repeat(32)}:${REQUEST_ID}`,
+    idempotencyKey: `influencedx-campaign-progression-v4:0x${"ab".repeat(32)}:${REQUEST_ID}`,
     retentionSeconds: CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS,
     delaySeconds: 0,
   });

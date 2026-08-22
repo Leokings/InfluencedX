@@ -39,6 +39,8 @@ import {
 } from "./marketplace-genlayer-rpc.ts";
 import {
   deriveProjectionId,
+  type GenLayerCampaignState,
+  type GenLayerClaimableState,
   type GenLayerContentSource,
 } from "./marketplace-genlayer-core.ts";
 import { enqueueMarketplaceMaintenanceHeartbeat } from "./marketplace-genlayer-maintenance-queue.ts";
@@ -77,6 +79,18 @@ export type PreparedMarketplaceTransaction = Readonly<{
 }>;
 
 export const MAX_GENLAYER_RECONCILIATION_ATTEMPTS = 12;
+
+export async function nextGenLayerSharedObservationTicket(): Promise<number> {
+  const result = await getDb().execute(sql`
+    select nextval('marketplace_genlayer_shared_observation_ticket_seq')::bigint as observation_ticket
+  `);
+  const raw = firstRawRow(result)?.observation_ticket;
+  const ticket = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isSafeInteger(ticket) || ticket <= 0) {
+    throw new Error("The shared observation ticket is invalid.");
+  }
+  return ticket;
+}
 
 export async function insertGenLayerCampaignDraft(input: {
   id?: string;
@@ -983,10 +997,75 @@ export async function upsertGenLayerCampaignProjection(input: {
   lastTxHash: string;
   finalizedAt: number;
   snapshotHash: string;
+  observationTicket: number;
   nowMs?: number;
 }): Promise<GenLayerCampaignProjection> {
   assertCampaignMoney(input);
-  const nowMs = input.nowMs ?? Date.now();
+  if (!Number.isSafeInteger(input.observationTicket) || input.observationTicket <= 0) {
+    throw new Error("The campaign observation ticket is invalid.");
+  }
+  const nowMs = Math.max(input.nowMs ?? Date.now(), input.finalizedAt);
+  const normalizedSnapshotHash = normalizeHash(input.snapshotHash);
+  const mayReplaceObservation = sql`
+    (${marketplaceGenLayerCampaigns.observationTicket} is null
+      or ${marketplaceGenLayerCampaigns.observationTicket} < ${input.observationTicket})
+    and ${marketplaceGenLayerCampaigns.settledAtto} <= ${input.settledAtto}
+    and ${marketplaceGenLayerCampaigns.creatorPaidAtto} <= ${input.creatorPaidAtto}
+    and ${marketplaceGenLayerCampaigns.brandRefundedAtto} <= ${input.brandRefundedAtto}
+    and ${marketplaceGenLayerCampaigns.feeAtto} <= ${input.feeAtto}
+    and ${marketplaceGenLayerCampaigns.applicationCount} <= ${input.applicationCount}
+    and ${marketplaceGenLayerCampaigns.assignmentCount} <= ${input.assignmentCount}
+    and (${marketplaceGenLayerCampaigns.status} = 'OPEN' or ${marketplaceGenLayerCampaigns.status} = ${input.status})
+    and (
+      ${marketplaceGenLayerCampaigns.status} <> ${input.status}
+      or ${marketplaceGenLayerCampaigns.applicationCount} <> ${input.applicationCount}
+      or ${marketplaceGenLayerCampaigns.assignmentCount} <> ${input.assignmentCount}
+      or ${marketplaceGenLayerCampaigns.settledAtto} <> ${input.settledAtto}
+      or ${marketplaceGenLayerCampaigns.creatorPaidAtto} <> ${input.creatorPaidAtto}
+      or ${marketplaceGenLayerCampaigns.brandRefundedAtto} <> ${input.brandRefundedAtto}
+      or ${marketplaceGenLayerCampaigns.feeAtto} <> ${input.feeAtto}
+      or (
+        ${marketplaceGenLayerCampaigns.availableAtto} <= ${input.availableAtto}
+        and ${marketplaceGenLayerCampaigns.reservedAtto} >= ${input.reservedAtto}
+      )
+    )
+    and ${input.settledAtto} >= (
+      select coalesce(sum(known_assignment.agreed_rate_atto), 0)
+      from ${marketplaceGenLayerAssignments} as known_assignment
+      where known_assignment.network = ${MARKETPLACE_GENLAYER_NETWORK}
+        and known_assignment.chain_id = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+        and known_assignment.contract_address = ${marketplaceContractAddress()}
+        and known_assignment.campaign_id = ${normalizeHash(input.campaignId)}
+        and known_assignment.status in ('SETTLED_PASS', 'SETTLED_FAIL', 'REFUNDED')
+    )
+    and ${input.creatorPaidAtto} >= (
+      select coalesce(sum(known_assignment.creator_credit_atto), 0)
+      from ${marketplaceGenLayerAssignments} as known_assignment
+      where known_assignment.network = ${MARKETPLACE_GENLAYER_NETWORK}
+        and known_assignment.chain_id = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+        and known_assignment.contract_address = ${marketplaceContractAddress()}
+        and known_assignment.campaign_id = ${normalizeHash(input.campaignId)}
+        and known_assignment.status in ('SETTLED_PASS', 'SETTLED_FAIL', 'REFUNDED')
+    )
+    and ${input.brandRefundedAtto} >= (
+      select coalesce(sum(known_assignment.brand_credit_atto), 0)
+      from ${marketplaceGenLayerAssignments} as known_assignment
+      where known_assignment.network = ${MARKETPLACE_GENLAYER_NETWORK}
+        and known_assignment.chain_id = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+        and known_assignment.contract_address = ${marketplaceContractAddress()}
+        and known_assignment.campaign_id = ${normalizeHash(input.campaignId)}
+        and known_assignment.status in ('SETTLED_PASS', 'SETTLED_FAIL', 'REFUNDED')
+    )
+    and ${input.feeAtto} >= (
+      select coalesce(sum(known_assignment.fee_atto), 0)
+      from ${marketplaceGenLayerAssignments} as known_assignment
+      where known_assignment.network = ${MARKETPLACE_GENLAYER_NETWORK}
+        and known_assignment.chain_id = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+        and known_assignment.contract_address = ${marketplaceContractAddress()}
+        and known_assignment.campaign_id = ${normalizeHash(input.campaignId)}
+        and known_assignment.status in ('SETTLED_PASS', 'SETTLED_FAIL', 'REFUNDED')
+    )
+  `;
   const projectionId = deriveProjectionId({
     network: MARKETPLACE_GENLAYER_NETWORK,
     chainId: MARKETPLACE_GENLAYER_CHAIN_ID,
@@ -1029,38 +1108,46 @@ export async function upsertGenLayerCampaignProjection(input: {
       creationTxHash: normalizeHash(input.creationTxHash),
       lastTxHash: normalizeHash(input.lastTxHash),
       finalizedAt: input.finalizedAt,
-      snapshotHash: normalizeHash(input.snapshotHash),
+      snapshotHash: normalizedSnapshotHash,
+      observedAfterTxHash: normalizeHash(input.lastTxHash),
+      observedAfterFinalizedAt: input.finalizedAt,
+      observationTicket: input.observationTicket,
+      observationRevision: 1,
+      observedAt: nowMs,
       projectedAt: nowMs,
     })
     .onConflictDoUpdate({
       target: marketplaceGenLayerCampaigns.projectionId,
       set: {
         budgetAtto: input.budgetAtto,
-        availableAtto: input.availableAtto,
-        reservedAtto: input.reservedAtto,
-        settledAtto: input.settledAtto,
-        creatorPaidAtto: input.creatorPaidAtto,
-        brandRefundedAtto: input.brandRefundedAtto,
-        feeAtto: input.feeAtto,
-        status: input.status,
+        availableAtto: sql`case when ${mayReplaceObservation} then ${input.availableAtto} else ${marketplaceGenLayerCampaigns.availableAtto} end`,
+        reservedAtto: sql`case when ${mayReplaceObservation} then ${input.reservedAtto} else ${marketplaceGenLayerCampaigns.reservedAtto} end`,
+        settledAtto: sql`case when ${mayReplaceObservation} then ${input.settledAtto} else ${marketplaceGenLayerCampaigns.settledAtto} end`,
+        creatorPaidAtto: sql`case when ${mayReplaceObservation} then ${input.creatorPaidAtto} else ${marketplaceGenLayerCampaigns.creatorPaidAtto} end`,
+        brandRefundedAtto: sql`case when ${mayReplaceObservation} then ${input.brandRefundedAtto} else ${marketplaceGenLayerCampaigns.brandRefundedAtto} end`,
+        feeAtto: sql`case when ${mayReplaceObservation} then ${input.feeAtto} else ${marketplaceGenLayerCampaigns.feeAtto} end`,
+        status: sql`case when ${mayReplaceObservation} then ${input.status} else ${marketplaceGenLayerCampaigns.status} end`,
         feeBps: input.feeBps,
         treasuryWallet: normalizeAddress(input.treasuryWallet),
-        applicationCount: input.applicationCount,
-        assignmentCount: input.assignmentCount,
+        applicationCount: sql`case when ${mayReplaceObservation} then ${input.applicationCount} else ${marketplaceGenLayerCampaigns.applicationCount} end`,
+        assignmentCount: sql`case when ${mayReplaceObservation} then ${input.assignmentCount} else ${marketplaceGenLayerCampaigns.assignmentCount} end`,
         maxUndeterminedRetries: input.maxUndeterminedRetries,
         applicationDeadlineEpoch: input.applicationDeadlineEpoch,
         selectionDeadlineEpoch: input.selectionDeadlineEpoch,
         submissionDeadlineEpoch: input.submissionDeadlineEpoch,
         retentionSeconds: input.retentionSeconds,
         createdAtEpoch: input.createdAtEpoch,
-        closedAtEpoch: input.closedAtEpoch,
+        closedAtEpoch: sql`case when ${mayReplaceObservation} then ${input.closedAtEpoch} else ${marketplaceGenLayerCampaigns.closedAtEpoch} end`,
         creationTxHash: normalizeHash(input.creationTxHash),
-        lastTxHash: normalizeHash(input.lastTxHash),
-        finalizedAt: input.finalizedAt,
-        snapshotHash: normalizeHash(input.snapshotHash),
-        projectedAt: nowMs,
+        snapshotHash: sql`case when ${mayReplaceObservation} then ${normalizedSnapshotHash} else ${marketplaceGenLayerCampaigns.snapshotHash} end`,
+        observedAfterTxHash: sql`case when ${mayReplaceObservation} then ${normalizeHash(input.lastTxHash)} else ${marketplaceGenLayerCampaigns.observedAfterTxHash} end`,
+        observedAfterFinalizedAt: sql`case when ${mayReplaceObservation} then ${input.finalizedAt} else ${marketplaceGenLayerCampaigns.observedAfterFinalizedAt} end`,
+        observationTicket: sql`case when ${mayReplaceObservation} then ${input.observationTicket} else ${marketplaceGenLayerCampaigns.observationTicket} end`,
+        observationRevision: sql`case when ${mayReplaceObservation} then ${marketplaceGenLayerCampaigns.observationRevision} + 1 else ${marketplaceGenLayerCampaigns.observationRevision} end`,
+        observedAt: sql`case when ${mayReplaceObservation} then ${nowMs} else ${marketplaceGenLayerCampaigns.observedAt} end`,
+        projectedAt: sql`case when ${mayReplaceObservation} then ${nowMs} else ${marketplaceGenLayerCampaigns.projectedAt} end`,
       },
-      setWhere: sql`${marketplaceGenLayerCampaigns.finalizedAt} < ${input.finalizedAt}`,
+      setWhere: mayReplaceObservation,
     })
     .returning();
   if (row) return row;
@@ -1069,7 +1156,16 @@ export async function upsertGenLayerCampaignProjection(input: {
     .from(marketplaceGenLayerCampaigns)
     .where(eq(marketplaceGenLayerCampaigns.projectionId, projectionId))
     .limit(1);
-  if (!current || current.finalizedAt < input.finalizedAt) {
+  if (
+    !current ||
+    !(
+      (current.observationTicket ?? 0) > input.observationTicket ||
+      (
+        current.observationTicket === input.observationTicket &&
+        current.snapshotHash === normalizedSnapshotHash
+      )
+    )
+  ) {
     throw new Error("Campaign projection ordering could not be preserved.");
   }
   return current;
@@ -1115,9 +1211,45 @@ export async function upsertGenLayerAssignmentProjection(input: {
   lastTxHash: string;
   finalizedAt: number;
   snapshotHash: string;
+  sharedProjectionPending?: boolean;
+  sharedProjectionAnchorTxHash?: string | null;
+  sharedProjectionObservationTicket?: number | null;
+  sharedProjectionAttempts?: number;
+  sharedProjectionNextRepairAt?: number;
+  expectedPreviousSnapshotHash?: string;
   nowMs?: number;
 }): Promise<GenLayerAssignmentProjection> {
   assertAssignmentMoney(input);
+  const sharedProjectionPending = input.sharedProjectionPending ?? false;
+  const sharedProjectionAnchorTxHash = input.sharedProjectionAnchorTxHash
+    ? normalizeHash(input.sharedProjectionAnchorTxHash)
+    : null;
+  const sharedProjectionAttempts = input.sharedProjectionAttempts ?? 0;
+  const sharedProjectionNextRepairAt = input.sharedProjectionNextRepairAt ?? 0;
+  const sharedProjectionObservationTicket = input.sharedProjectionObservationTicket ?? null;
+  const expectedPreviousSnapshotHash = input.expectedPreviousSnapshotHash
+    ? normalizeHash(input.expectedPreviousSnapshotHash)
+    : null;
+  const normalizedLastTxHash = normalizeHash(input.lastTxHash);
+  const normalizedSnapshotHash = normalizeHash(input.snapshotHash);
+  if (
+    sharedProjectionPending &&
+    sharedProjectionAnchorTxHash !== normalizeHash(input.lastTxHash)
+  ) {
+    throw new Error("The shared projection marker is not bound to the assignment receipt.");
+  }
+  if (
+    !Number.isSafeInteger(sharedProjectionAttempts) ||
+    sharedProjectionAttempts < 0 ||
+    !Number.isSafeInteger(sharedProjectionNextRepairAt) ||
+    sharedProjectionNextRepairAt < 0 ||
+    (
+      sharedProjectionObservationTicket !== null &&
+      (!Number.isSafeInteger(sharedProjectionObservationTicket) || sharedProjectionObservationTicket <= 0)
+    )
+  ) {
+    throw new Error("The shared projection repair schedule is invalid.");
+  }
   const nowMs = input.nowMs ?? Date.now();
   const projectionId = deriveProjectionId({
     network: MARKETPLACE_GENLAYER_NETWORK,
@@ -1175,9 +1307,14 @@ export async function upsertGenLayerAssignmentProjection(input: {
       settledAtEpoch: input.settledAtEpoch,
       closedAtEpoch: input.closedAtEpoch,
       selectionTxHash: normalizeHash(input.selectionTxHash),
-      lastTxHash: normalizeHash(input.lastTxHash),
+      lastTxHash: normalizedLastTxHash,
       finalizedAt: input.finalizedAt,
-      snapshotHash: normalizeHash(input.snapshotHash),
+      snapshotHash: normalizedSnapshotHash,
+      sharedProjectionPending,
+      sharedProjectionAnchorTxHash,
+      sharedProjectionObservationTicket,
+      sharedProjectionAttempts,
+      sharedProjectionNextRepairAt,
       projectedAt: nowMs,
     })
     .onConflictDoUpdate({
@@ -1205,12 +1342,19 @@ export async function upsertGenLayerAssignmentProjection(input: {
         submittedAtEpoch: input.submittedAtEpoch,
         settledAtEpoch: input.settledAtEpoch,
         closedAtEpoch: input.closedAtEpoch,
-        lastTxHash: normalizeHash(input.lastTxHash),
+        lastTxHash: normalizedLastTxHash,
         finalizedAt: input.finalizedAt,
-        snapshotHash: normalizeHash(input.snapshotHash),
+        snapshotHash: normalizedSnapshotHash,
+        sharedProjectionPending,
+        sharedProjectionAnchorTxHash,
+        sharedProjectionObservationTicket,
+        sharedProjectionAttempts,
+        sharedProjectionNextRepairAt,
         projectedAt: nowMs,
       },
-      setWhere: sql`${marketplaceGenLayerAssignments.finalizedAt} < ${input.finalizedAt}`,
+      setWhere: expectedPreviousSnapshotHash === null
+        ? sql`${marketplaceGenLayerAssignments.finalizedAt} < ${input.finalizedAt}`
+        : sql`${marketplaceGenLayerAssignments.snapshotHash} = ${expectedPreviousSnapshotHash}`,
     })
     .returning();
   if (row) return row;
@@ -1222,6 +1366,16 @@ export async function upsertGenLayerAssignmentProjection(input: {
   if (!current || current.finalizedAt < input.finalizedAt) {
     throw new Error("Assignment projection ordering could not be preserved.");
   }
+  if (
+    expectedPreviousSnapshotHash !== null &&
+    !(
+      current.lastTxHash === normalizedLastTxHash &&
+      current.snapshotHash === normalizedSnapshotHash &&
+      current.finalizedAt === input.finalizedAt
+    )
+  ) {
+    throw new Error("Assignment projection compare-and-set could not be preserved.");
+  }
   return current;
 }
 
@@ -1232,13 +1386,17 @@ export async function upsertGenLayerClaimableBalance(input: {
   nextWithdrawalNonce: number;
   transactionHash: string;
   snapshotHash: string;
+  observationTicket: number;
   nowMs?: number;
 }): Promise<void> {
   if (!decimalPattern.test(input.amountAtto)) {
     throw new Error("Claimable GEN amount is invalid.");
   }
+  if (!Number.isSafeInteger(input.observationTicket) || input.observationTicket <= 0) {
+    throw new Error("The claimable observation ticket is invalid.");
+  }
   const nowMs = input.nowMs ?? Date.now();
-  await getDb()
+  const [updated] = await getDb()
     .insert(marketplaceGenLayerClaimableBalances)
     .values({
       network: MARKETPLACE_GENLAYER_NETWORK,
@@ -1249,6 +1407,11 @@ export async function upsertGenLayerClaimableBalance(input: {
       nextWithdrawalNonce: input.nextWithdrawalNonce,
       lastTransactionHash: normalizeHash(input.transactionHash),
       snapshotHash: normalizeHash(input.snapshotHash),
+      observedAfterTxHash: normalizeHash(input.transactionHash),
+      observedAfterFinalizedAt: nowMs,
+      observationTicket: input.observationTicket,
+      observationRevision: 1,
+      observedAt: nowMs,
       projectedAt: nowMs,
     })
     .onConflictDoUpdate({
@@ -1261,12 +1424,577 @@ export async function upsertGenLayerClaimableBalance(input: {
       set: {
         amountAtto: input.amountAtto,
         nextWithdrawalNonce: input.nextWithdrawalNonce,
-        lastTransactionHash: normalizeHash(input.transactionHash),
         snapshotHash: normalizeHash(input.snapshotHash),
+        observedAfterTxHash: normalizeHash(input.transactionHash),
+        observedAfterFinalizedAt: nowMs,
+        observationTicket: input.observationTicket,
+        observationRevision: sql`${marketplaceGenLayerClaimableBalances.observationRevision} + 1`,
+        observedAt: nowMs,
         projectedAt: nowMs,
       },
-      setWhere: sql`${marketplaceGenLayerClaimableBalances.projectedAt} < ${nowMs}`,
-    });
+      setWhere: and(
+        or(
+          isNull(marketplaceGenLayerClaimableBalances.observationTicket),
+          lt(marketplaceGenLayerClaimableBalances.observationTicket, input.observationTicket),
+        ),
+        or(
+          lt(
+            marketplaceGenLayerClaimableBalances.nextWithdrawalNonce,
+            input.nextWithdrawalNonce,
+          ),
+          and(
+            eq(
+              marketplaceGenLayerClaimableBalances.nextWithdrawalNonce,
+              input.nextWithdrawalNonce,
+            ),
+            lte(marketplaceGenLayerClaimableBalances.amountAtto, input.amountAtto),
+          ),
+        ),
+      ),
+    })
+    .returning();
+  if (updated) return;
+  const [current] = await getDb()
+    .select()
+    .from(marketplaceGenLayerClaimableBalances)
+    .where(and(
+      eq(marketplaceGenLayerClaimableBalances.network, MARKETPLACE_GENLAYER_NETWORK),
+      eq(marketplaceGenLayerClaimableBalances.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+      eq(marketplaceGenLayerClaimableBalances.contractAddress, input.contractAddress.toLowerCase()),
+      eq(marketplaceGenLayerClaimableBalances.wallet, normalizeAddress(input.wallet)),
+    ))
+    .limit(1);
+  if (
+    !current ||
+    !(
+      (current.observationTicket ?? 0) > input.observationTicket ||
+      (
+        current.observationTicket === input.observationTicket &&
+        current.snapshotHash === normalizeHash(input.snapshotHash)
+      )
+    )
+  ) {
+    throw new Error("Claimable projection ordering could not be preserved.");
+  }
+}
+
+/**
+ * Stores a stable LATEST_FINAL campaign observation made after a verified
+ * receipt. The receipt is an observation anchor, not a claim that it alone
+ * caused every value in this wallet-shared snapshot.
+ */
+export async function observeGenLayerCampaignProjection(input: {
+  state: GenLayerCampaignState;
+  anchorTransactionHash: string;
+  anchorFinalizedAt: number;
+  observationTicket: number;
+  observationStartedAt: number;
+}): Promise<GenLayerCampaignProjection> {
+  assertCampaignMoney(input.state);
+  if (
+    !Number.isSafeInteger(input.anchorFinalizedAt) ||
+    input.anchorFinalizedAt <= 0 ||
+    !Number.isSafeInteger(input.observationTicket) ||
+    input.observationTicket <= 0 ||
+    !Number.isSafeInteger(input.observationStartedAt) ||
+    input.observationStartedAt <= input.anchorFinalizedAt
+  ) {
+    throw new Error("The campaign observation clock is invalid.");
+  }
+  const projectionId = deriveProjectionId({
+    network: MARKETPLACE_GENLAYER_NETWORK,
+    chainId: MARKETPLACE_GENLAYER_CHAIN_ID,
+    contractAddress: marketplaceContractAddress(),
+    entityId: input.state.campaignId,
+  });
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const snapshotHash = canonicalHash(input.state);
+  const [before] = await getDb()
+    .select()
+    .from(marketplaceGenLayerCampaigns)
+    .where(eq(marketplaceGenLayerCampaigns.projectionId, projectionId))
+    .limit(1);
+  if (!before) throw new Error("The campaign observation target is unavailable.");
+  if (
+    before.observationTicket === input.observationTicket &&
+    before.snapshotHash === snapshotHash
+  ) return before;
+  if (
+    before.observationTicket !== null &&
+    before.observationTicket >= input.observationTicket
+  ) throw new Error("The campaign observation ticket was superseded.");
+  const knownTerminal = await knownTerminalCampaignAccounting(input.state.campaignId);
+  assertGenLayerCampaignObservationFloors(before, input.state, knownTerminal);
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerCampaigns)
+    .set({
+      availableAtto: input.state.availableAtto,
+      reservedAtto: input.state.reservedAtto,
+      settledAtto: input.state.settledAtto,
+      creatorPaidAtto: input.state.creatorPaidAtto,
+      brandRefundedAtto: input.state.brandRefundedAtto,
+      feeAtto: input.state.feeAtto,
+      status: input.state.status,
+      applicationCount: input.state.applicationCount,
+      assignmentCount: input.state.assignmentCount,
+      closedAtEpoch: input.state.closedAtEpoch,
+      snapshotHash,
+      observedAfterTxHash: anchorTransactionHash,
+      observedAfterFinalizedAt: input.anchorFinalizedAt,
+      observationTicket: input.observationTicket,
+      observationRevision: before.observationRevision + 1,
+      observedAt: input.observationStartedAt,
+      projectedAt: input.observationStartedAt,
+    })
+    .where(and(
+      eq(marketplaceGenLayerCampaigns.projectionId, projectionId),
+      eq(marketplaceGenLayerCampaigns.observationRevision, before.observationRevision),
+      or(
+        isNull(marketplaceGenLayerCampaigns.observationTicket),
+        lt(marketplaceGenLayerCampaigns.observationTicket, input.observationTicket),
+      ),
+    ))
+    .returning();
+  if (updated) return updated;
+  const [current] = await getDb()
+    .select()
+    .from(marketplaceGenLayerCampaigns)
+    .where(eq(marketplaceGenLayerCampaigns.projectionId, projectionId))
+    .limit(1);
+  if (
+    !current ||
+    current.observationTicket !== input.observationTicket ||
+    current.snapshotHash !== snapshotHash
+  ) {
+    throw new Error("The campaign observation ordering could not be preserved.");
+  }
+  return current;
+}
+
+/** Same start-time CAS as campaign observation, scoped to one wallet. */
+export async function observeGenLayerClaimableBalance(input: {
+  state: GenLayerClaimableState;
+  anchorTransactionHash: string;
+  anchorFinalizedAt: number;
+  observationTicket: number;
+  observationStartedAt: number;
+}): Promise<GenLayerClaimableBalance> {
+  if (!decimalPattern.test(input.state.claimableAtto)) {
+    throw new Error("Claimable GEN observation contains an invalid amount.");
+  }
+  if (
+    !Number.isSafeInteger(input.anchorFinalizedAt) ||
+    input.anchorFinalizedAt <= 0 ||
+    !Number.isSafeInteger(input.observationTicket) ||
+    input.observationTicket <= 0 ||
+    !Number.isSafeInteger(input.observationStartedAt) ||
+    input.observationStartedAt <= input.anchorFinalizedAt
+  ) {
+    throw new Error("The claimable observation clock is invalid.");
+  }
+  const wallet = normalizeAddress(input.state.account);
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const snapshotHash = canonicalHash(input.state);
+  const key = and(
+    eq(marketplaceGenLayerClaimableBalances.network, MARKETPLACE_GENLAYER_NETWORK),
+    eq(marketplaceGenLayerClaimableBalances.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+    eq(marketplaceGenLayerClaimableBalances.contractAddress, marketplaceContractAddress()),
+    eq(marketplaceGenLayerClaimableBalances.wallet, wallet),
+  );
+  let [before] = await getDb()
+    .select()
+    .from(marketplaceGenLayerClaimableBalances)
+    .where(key)
+    .limit(1);
+  if (!before) {
+    const [inserted] = await getDb()
+    .insert(marketplaceGenLayerClaimableBalances)
+    .values({
+      network: MARKETPLACE_GENLAYER_NETWORK,
+      chainId: MARKETPLACE_GENLAYER_CHAIN_ID,
+      contractAddress: marketplaceContractAddress(),
+      wallet,
+      amountAtto: input.state.claimableAtto,
+      nextWithdrawalNonce: input.state.nextWithdrawalNonce,
+      lastTransactionHash: anchorTransactionHash,
+      snapshotHash,
+      observedAfterTxHash: anchorTransactionHash,
+      observedAfterFinalizedAt: input.anchorFinalizedAt,
+      observationTicket: input.observationTicket,
+      observationRevision: 1,
+      observedAt: input.observationStartedAt,
+      projectedAt: input.observationStartedAt,
+    })
+    .onConflictDoNothing({
+      target: [
+        marketplaceGenLayerClaimableBalances.network,
+        marketplaceGenLayerClaimableBalances.chainId,
+        marketplaceGenLayerClaimableBalances.contractAddress,
+        marketplaceGenLayerClaimableBalances.wallet,
+      ],
+    })
+    .returning();
+    if (inserted) return inserted;
+    [before] = await getDb()
+      .select()
+      .from(marketplaceGenLayerClaimableBalances)
+      .where(key)
+      .limit(1);
+  }
+  if (!before) throw new Error("The claimable observation target is unavailable.");
+  if (
+    before.observationTicket === input.observationTicket &&
+    before.snapshotHash === snapshotHash
+  ) return before;
+  if (
+    before.observationTicket !== null &&
+    before.observationTicket >= input.observationTicket
+  ) throw new Error("The claimable observation ticket was superseded.");
+  if (
+    before.snapshotHash !== snapshotHash &&
+    (
+      input.state.nextWithdrawalNonce < before.nextWithdrawalNonce ||
+      (
+        input.state.nextWithdrawalNonce === before.nextWithdrawalNonce &&
+        BigInt(input.state.claimableAtto) < BigInt(before.amountAtto)
+      )
+    )
+  ) {
+    throw new Error("The claimable observation regresses wallet state.");
+  }
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerClaimableBalances)
+    .set({
+      amountAtto: input.state.claimableAtto,
+      nextWithdrawalNonce: input.state.nextWithdrawalNonce,
+      snapshotHash,
+      observedAfterTxHash: anchorTransactionHash,
+      observedAfterFinalizedAt: input.anchorFinalizedAt,
+      observationTicket: input.observationTicket,
+      observationRevision: before.observationRevision + 1,
+      observedAt: input.observationStartedAt,
+      projectedAt: input.observationStartedAt,
+    })
+    .where(and(
+      key,
+      eq(
+        marketplaceGenLayerClaimableBalances.observationRevision,
+        before.observationRevision,
+      ),
+      or(
+        isNull(marketplaceGenLayerClaimableBalances.observationTicket),
+        lt(
+          marketplaceGenLayerClaimableBalances.observationTicket,
+          input.observationTicket,
+        ),
+      ),
+    ))
+    .returning();
+  if (updated) return updated;
+  const [current] = await getDb()
+    .select()
+    .from(marketplaceGenLayerClaimableBalances)
+    .where(key)
+    .limit(1);
+  if (
+    !current ||
+    current.observationTicket !== input.observationTicket ||
+    current.snapshotHash !== snapshotHash
+  ) {
+    throw new Error("The claimable observation ordering could not be preserved.");
+  }
+  return current;
+}
+
+export async function listPendingGenLayerSharedResolutionRepairs(input: {
+  nowMs: number;
+  limit: number;
+}): Promise<GenLayerAssignmentProjection[]> {
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs <= 0) {
+    throw new Error("The shared projection repair clock is invalid.");
+  }
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 25) {
+    throw new Error("The shared projection repair limit is invalid.");
+  }
+  return getDb()
+    .select()
+    .from(marketplaceGenLayerAssignments)
+    .where(and(
+      eq(marketplaceGenLayerAssignments.network, MARKETPLACE_GENLAYER_NETWORK),
+      eq(marketplaceGenLayerAssignments.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+      eq(marketplaceGenLayerAssignments.contractAddress, marketplaceContractAddress()),
+      eq(marketplaceGenLayerAssignments.sharedProjectionPending, true),
+      inArray(marketplaceGenLayerAssignments.status, ["SETTLED_PASS", "SETTLED_FAIL"]),
+      lte(marketplaceGenLayerAssignments.sharedProjectionNextRepairAt, input.nowMs),
+    ))
+    .orderBy(
+      marketplaceGenLayerAssignments.sharedProjectionNextRepairAt,
+      marketplaceGenLayerAssignments.projectedAt,
+      marketplaceGenLayerAssignments.projectionId,
+    )
+    .limit(input.limit);
+}
+
+export async function ensureGenLayerSharedResolutionRepairMarker(input: {
+  projectionId: string;
+  anchorTransactionHash: string;
+  snapshotHash: string;
+}): Promise<GenLayerAssignmentProjection | null> {
+  const projectionId = normalizeHash(input.projectionId);
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const snapshotHash = normalizeHash(input.snapshotHash);
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerAssignments)
+    .set({
+      sharedProjectionPending: true,
+      sharedProjectionAnchorTxHash: anchorTransactionHash,
+      sharedProjectionObservationTicket: null,
+      sharedProjectionAttempts: 0,
+      sharedProjectionNextRepairAt: 0,
+    })
+    .where(and(
+      eq(marketplaceGenLayerAssignments.projectionId, projectionId),
+      eq(marketplaceGenLayerAssignments.lastTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.snapshotHash, snapshotHash),
+      eq(marketplaceGenLayerAssignments.sharedProjectionPending, false),
+      isNull(marketplaceGenLayerAssignments.sharedProjectionAnchorTxHash),
+      inArray(marketplaceGenLayerAssignments.status, ["SETTLED_PASS", "SETTLED_FAIL"]),
+    ))
+    .returning();
+  if (updated) return updated;
+  const [current] = await getDb()
+    .select()
+    .from(marketplaceGenLayerAssignments)
+    .where(eq(marketplaceGenLayerAssignments.projectionId, projectionId))
+    .limit(1);
+  if (
+    !current ||
+    current.lastTxHash !== anchorTransactionHash ||
+    current.snapshotHash !== snapshotHash ||
+    current.sharedProjectionAnchorTxHash !== anchorTransactionHash
+  ) return null;
+  return current;
+}
+
+export async function beginGenLayerSharedResolutionObservationAttempt(input: {
+  projectionId: string;
+  anchorTransactionHash: string;
+  assignmentSnapshotHash: string;
+}): Promise<GenLayerAssignmentProjection | null> {
+  const projectionId = normalizeHash(input.projectionId);
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const assignmentSnapshotHash = normalizeHash(input.assignmentSnapshotHash);
+  const observationTicket = await nextGenLayerSharedObservationTicket();
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerAssignments)
+    .set({ sharedProjectionObservationTicket: observationTicket })
+    .where(and(
+      eq(marketplaceGenLayerAssignments.projectionId, projectionId),
+      eq(marketplaceGenLayerAssignments.sharedProjectionPending, true),
+      eq(marketplaceGenLayerAssignments.sharedProjectionAnchorTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.lastTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.snapshotHash, assignmentSnapshotHash),
+      or(
+        isNull(marketplaceGenLayerAssignments.sharedProjectionObservationTicket),
+        lt(
+          marketplaceGenLayerAssignments.sharedProjectionObservationTicket,
+          observationTicket,
+        ),
+      ),
+    ))
+    .returning();
+  return updated ?? null;
+}
+
+export async function completeGenLayerSharedResolutionRepair(input: {
+  projectionId: string;
+  anchorTransactionHash: string;
+  assignmentSnapshotHash: string;
+  observationTicket: number;
+  anchorFinalizedAt: number;
+  campaignId: string;
+  campaignSnapshotHash: string;
+  claimables: ReadonlyArray<Readonly<{ wallet: string; snapshotHash: string }>>;
+}): Promise<boolean> {
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const projectionId = normalizeHash(input.projectionId);
+  const campaignId = normalizeHash(input.campaignId);
+  const campaignSnapshotHash = normalizeHash(input.campaignSnapshotHash);
+  if (!Number.isSafeInteger(input.anchorFinalizedAt) || input.anchorFinalizedAt <= 0) {
+    throw new Error("The shared repair anchor time is invalid.");
+  }
+  if (!Number.isSafeInteger(input.observationTicket) || input.observationTicket <= 0) {
+    throw new Error("The shared repair observation ticket is invalid.");
+  }
+  const claimables = [...new Map(input.claimables.map((claimable) => [
+    normalizeAddress(claimable.wallet),
+    normalizeHash(claimable.snapshotHash),
+  ])).entries()];
+  const claimableEvidence = claimables.map(([wallet, snapshotHash]) => sql`exists (
+    select 1
+    from ${marketplaceGenLayerClaimableBalances} as observed_claimable
+    where observed_claimable.network = ${MARKETPLACE_GENLAYER_NETWORK}
+      and observed_claimable.chain_id = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+      and observed_claimable.contract_address = ${marketplaceContractAddress()}
+      and observed_claimable.wallet = ${wallet}
+      and observed_claimable.observation_ticket = ${input.observationTicket}
+      and observed_claimable.snapshot_hash = ${snapshotHash}
+  )`);
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerAssignments)
+    .set({
+      sharedProjectionPending: false,
+      sharedProjectionAttempts: 0,
+      sharedProjectionNextRepairAt: 0,
+    })
+    .where(and(
+      eq(marketplaceGenLayerAssignments.projectionId, projectionId),
+      eq(marketplaceGenLayerAssignments.sharedProjectionPending, true),
+      eq(marketplaceGenLayerAssignments.sharedProjectionAnchorTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.lastTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.snapshotHash, normalizeHash(input.assignmentSnapshotHash)),
+      eq(
+        marketplaceGenLayerAssignments.sharedProjectionObservationTicket,
+        input.observationTicket,
+      ),
+      sql`exists (
+        select 1
+        from ${marketplaceGenLayerCampaigns}
+        where ${marketplaceGenLayerCampaigns.network} = ${MARKETPLACE_GENLAYER_NETWORK}
+          and ${marketplaceGenLayerCampaigns.chainId} = ${MARKETPLACE_GENLAYER_CHAIN_ID}
+          and ${marketplaceGenLayerCampaigns.contractAddress} = ${marketplaceContractAddress()}
+          and ${marketplaceGenLayerCampaigns.campaignId} = ${campaignId}
+          and ${marketplaceGenLayerCampaigns.observationTicket} = ${input.observationTicket}
+          and ${marketplaceGenLayerCampaigns.snapshotHash} = ${campaignSnapshotHash}
+      )`,
+      ...claimableEvidence,
+    ))
+    .returning({ projectionId: marketplaceGenLayerAssignments.projectionId });
+  if (updated) return true;
+  const [current] = await getDb()
+    .select({
+      lastTxHash: marketplaceGenLayerAssignments.lastTxHash,
+      pending: marketplaceGenLayerAssignments.sharedProjectionPending,
+      anchor: marketplaceGenLayerAssignments.sharedProjectionAnchorTxHash,
+    })
+    .from(marketplaceGenLayerAssignments)
+    .where(eq(marketplaceGenLayerAssignments.projectionId, projectionId))
+    .limit(1);
+  return Boolean(
+    current &&
+    current.lastTxHash === anchorTransactionHash &&
+    current.anchor === anchorTransactionHash &&
+    current.pending === false
+  );
+}
+
+export async function deferGenLayerSharedResolutionRepair(input: {
+  projectionId: string;
+  anchorTransactionHash: string;
+  snapshotHash: string;
+  observationTicket: number | null;
+  nowMs: number;
+}): Promise<boolean> {
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs <= 0) {
+    throw new Error("The shared repair deferral clock is invalid.");
+  }
+  const projectionId = normalizeHash(input.projectionId);
+  const anchorTransactionHash = normalizeHash(input.anchorTransactionHash);
+  const snapshotHash = normalizeHash(input.snapshotHash);
+  const [updated] = await getDb()
+    .update(marketplaceGenLayerAssignments)
+    .set({
+      sharedProjectionAttempts: sql`${marketplaceGenLayerAssignments.sharedProjectionAttempts} + 1`,
+      sharedProjectionNextRepairAt: sql`${input.nowMs} + case
+        when ${marketplaceGenLayerAssignments.sharedProjectionAttempts} = 0 then 15000
+        when ${marketplaceGenLayerAssignments.sharedProjectionAttempts} = 1 then 30000
+        when ${marketplaceGenLayerAssignments.sharedProjectionAttempts} = 2 then 60000
+        when ${marketplaceGenLayerAssignments.sharedProjectionAttempts} = 3 then 120000
+        else 300000
+      end`,
+    })
+    .where(and(
+      eq(marketplaceGenLayerAssignments.projectionId, projectionId),
+      eq(marketplaceGenLayerAssignments.sharedProjectionPending, true),
+      eq(marketplaceGenLayerAssignments.sharedProjectionAnchorTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.lastTxHash, anchorTransactionHash),
+      eq(marketplaceGenLayerAssignments.snapshotHash, snapshotHash),
+      input.observationTicket === null
+        ? isNull(marketplaceGenLayerAssignments.sharedProjectionObservationTicket)
+        : eq(
+          marketplaceGenLayerAssignments.sharedProjectionObservationTicket,
+          input.observationTicket,
+        ),
+    ))
+    .returning({ projectionId: marketplaceGenLayerAssignments.projectionId });
+  return Boolean(updated);
+}
+
+export function assertGenLayerCampaignObservationFloors(
+  current: GenLayerCampaignProjection,
+  observed: GenLayerCampaignState,
+  knownTerminal: Readonly<{
+    settledAtto: string;
+    creatorPaidAtto: string;
+    brandRefundedAtto: string;
+    feeAtto: string;
+  }>,
+): void {
+  const cumulative = [
+    [observed.settledAtto, current.settledAtto],
+    [observed.creatorPaidAtto, current.creatorPaidAtto],
+    [observed.brandRefundedAtto, current.brandRefundedAtto],
+    [observed.feeAtto, current.feeAtto],
+  ] as const;
+  const sharedCountersUnchanged =
+    observed.status === current.status &&
+    observed.applicationCount === current.applicationCount &&
+    observed.assignmentCount === current.assignmentCount &&
+    cumulative.every(([next, before]) => next === before);
+  if (
+    cumulative.some(([next, before]) => BigInt(next) < BigInt(before)) ||
+    observed.applicationCount < current.applicationCount ||
+    observed.assignmentCount < current.assignmentCount ||
+    (current.status !== "OPEN" && observed.status !== current.status) ||
+    BigInt(observed.settledAtto) < BigInt(knownTerminal.settledAtto) ||
+    BigInt(observed.creatorPaidAtto) < BigInt(knownTerminal.creatorPaidAtto) ||
+    BigInt(observed.brandRefundedAtto) < BigInt(knownTerminal.brandRefundedAtto) ||
+    BigInt(observed.feeAtto) < BigInt(knownTerminal.feeAtto) ||
+    (
+      sharedCountersUnchanged &&
+      (
+        BigInt(observed.availableAtto) < BigInt(current.availableAtto) ||
+        BigInt(observed.reservedAtto) > BigInt(current.reservedAtto)
+      )
+    )
+  ) {
+    throw new Error("The campaign observation regresses durable accounting.");
+  }
+}
+
+async function knownTerminalCampaignAccounting(campaignId: string): Promise<Readonly<{
+  settledAtto: string;
+  creatorPaidAtto: string;
+  brandRefundedAtto: string;
+  feeAtto: string;
+}>> {
+  const [row] = await getDb()
+    .select({
+      settledAtto: sql<string>`coalesce(sum(${marketplaceGenLayerAssignments.agreedRateAtto}), 0)`,
+      creatorPaidAtto: sql<string>`coalesce(sum(${marketplaceGenLayerAssignments.creatorCreditAtto}), 0)`,
+      brandRefundedAtto: sql<string>`coalesce(sum(${marketplaceGenLayerAssignments.brandCreditAtto}), 0)`,
+      feeAtto: sql<string>`coalesce(sum(${marketplaceGenLayerAssignments.feeAtto}), 0)`,
+    })
+    .from(marketplaceGenLayerAssignments)
+    .where(and(
+      eq(marketplaceGenLayerAssignments.network, MARKETPLACE_GENLAYER_NETWORK),
+      eq(marketplaceGenLayerAssignments.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+      eq(marketplaceGenLayerAssignments.contractAddress, marketplaceContractAddress()),
+      eq(marketplaceGenLayerAssignments.campaignId, normalizeHash(campaignId)),
+      inArray(marketplaceGenLayerAssignments.status, ["SETTLED_PASS", "SETTLED_FAIL", "REFUNDED"]),
+    ));
+  if (!row) throw new Error("Known terminal campaign accounting is unavailable.");
+  return Object.freeze(row);
 }
 
 export async function upsertGenLayerWithdrawalProjection(input: {
@@ -1285,9 +2013,22 @@ export async function upsertGenLayerWithdrawalProjection(input: {
   lastTxHash: string;
   finalizedAt: number;
   snapshotHash: string;
+  expectedPreviousSnapshotHash?: string;
+  expectedPreviousLastTxHash?: string;
   nowMs?: number;
 }): Promise<GenLayerWithdrawalProjection> {
   const nowMs = input.nowMs ?? Date.now();
+  const expectedPreviousSnapshotHash = input.expectedPreviousSnapshotHash
+    ? normalizeHash(input.expectedPreviousSnapshotHash)
+    : null;
+  const expectedPreviousLastTxHash = input.expectedPreviousLastTxHash
+    ? normalizeHash(input.expectedPreviousLastTxHash)
+    : null;
+  if ((expectedPreviousSnapshotHash === null) !== (expectedPreviousLastTxHash === null)) {
+    throw new Error("The withdrawal compare-and-set binding is incomplete.");
+  }
+  const normalizedLastTxHash = normalizeHash(input.lastTxHash);
+  const normalizedSnapshotHash = normalizeHash(input.snapshotHash);
   const projectionId = deriveProjectionId({
     network: MARKETPLACE_GENLAYER_NETWORK,
     chainId: MARKETPLACE_GENLAYER_CHAIN_ID,
@@ -1313,9 +2054,9 @@ export async function upsertGenLayerWithdrawalProjection(input: {
       evidenceHash: normalizeHash(input.evidenceHash),
       recapitalizedAtto: input.recapitalizedAtto,
       requestTxHash: normalizeHash(input.requestTxHash),
-      lastTxHash: normalizeHash(input.lastTxHash),
+      lastTxHash: normalizedLastTxHash,
       finalizedAt: input.finalizedAt,
-      snapshotHash: normalizeHash(input.snapshotHash),
+      snapshotHash: normalizedSnapshotHash,
       projectedAt: nowMs,
     })
     .onConflictDoUpdate({
@@ -1328,12 +2069,17 @@ export async function upsertGenLayerWithdrawalProjection(input: {
         reconciledAtEpoch: input.reconciledAtEpoch,
         evidenceHash: normalizeHash(input.evidenceHash),
         recapitalizedAtto: input.recapitalizedAtto,
-        lastTxHash: normalizeHash(input.lastTxHash),
+        lastTxHash: normalizedLastTxHash,
         finalizedAt: input.finalizedAt,
-        snapshotHash: normalizeHash(input.snapshotHash),
+        snapshotHash: normalizedSnapshotHash,
         projectedAt: nowMs,
       },
-      setWhere: sql`${marketplaceGenLayerWithdrawals.finalizedAt} < ${input.finalizedAt}`,
+      setWhere: expectedPreviousSnapshotHash === null
+        ? sql`${marketplaceGenLayerWithdrawals.finalizedAt} < ${input.finalizedAt}`
+        : sql`(
+          ${marketplaceGenLayerWithdrawals.snapshotHash} = ${expectedPreviousSnapshotHash}
+          and ${marketplaceGenLayerWithdrawals.lastTxHash} = ${expectedPreviousLastTxHash}
+        )`,
     })
     .returning();
   if (row) return row;
@@ -1344,6 +2090,16 @@ export async function upsertGenLayerWithdrawalProjection(input: {
     .limit(1);
   if (!current || current.finalizedAt < input.finalizedAt) {
     throw new Error("Withdrawal projection ordering could not be preserved.");
+  }
+  if (
+    expectedPreviousSnapshotHash !== null &&
+    !(
+      current.lastTxHash === normalizedLastTxHash &&
+      current.snapshotHash === normalizedSnapshotHash &&
+      current.finalizedAt === input.finalizedAt
+    )
+  ) {
+    throw new Error("Withdrawal projection compare-and-set could not be preserved.");
   }
   return current;
 }
@@ -1883,6 +2639,7 @@ function assertCampaignMoney(input: {
   creatorPaidAtto: string;
   brandRefundedAtto: string;
   feeAtto: string;
+  status: string;
 }): void {
   const values = [
     input.budgetAtto,
@@ -1901,7 +2658,9 @@ function assertCampaignMoney(input: {
   if (
     budget <= 0n ||
     available + reserved + creatorPaid + brandRefunded + fee !== budget ||
-    settled !== creatorPaid + brandRefunded + fee
+    settled < creatorPaid + fee ||
+    settled > creatorPaid + fee + brandRefunded ||
+    (input.status !== "OPEN" && (available !== 0n || reserved !== 0n))
   ) {
     throw new Error("Campaign GEN projection does not conserve funds.");
   }

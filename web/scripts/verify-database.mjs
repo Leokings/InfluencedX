@@ -19,6 +19,7 @@ const [state] = await sql.query(`
       and to_regclass('public.marketplace_genlayer_withdrawals') is not null
       and to_regclass('public.marketplace_genlayer_projection_cursors') is not null
       and to_regclass('public.marketplace_genlayer_maintenance_generations') is not null
+      and to_regclass('public.marketplace_genlayer_shared_observation_ticket_seq') is not null
     ) as native_tables_ready,
     not exists (
       select 1
@@ -53,6 +54,11 @@ const [state] = await sql.query(`
         ('marketplace_genlayer_campaigns', 'creator_paid_atto'),
         ('marketplace_genlayer_campaigns', 'brand_refunded_atto'),
         ('marketplace_genlayer_campaigns', 'fee_atto'),
+        ('marketplace_genlayer_campaigns', 'observed_after_tx_hash'),
+        ('marketplace_genlayer_campaigns', 'observed_after_finalized_at'),
+        ('marketplace_genlayer_campaigns', 'observation_revision'),
+        ('marketplace_genlayer_campaigns', 'observation_ticket'),
+        ('marketplace_genlayer_campaigns', 'observed_at'),
         ('marketplace_genlayer_assignments', 'projection_id'),
         ('marketplace_genlayer_assignments', 'network'),
         ('marketplace_genlayer_assignments', 'chain_id'),
@@ -60,6 +66,16 @@ const [state] = await sql.query(`
         ('marketplace_genlayer_assignments', 'assignment_id'),
         ('marketplace_genlayer_assignments', 'content_source'),
         ('marketplace_genlayer_assignments', 'resolution_checks'),
+        ('marketplace_genlayer_assignments', 'shared_projection_pending'),
+        ('marketplace_genlayer_assignments', 'shared_projection_anchor_tx_hash'),
+        ('marketplace_genlayer_assignments', 'shared_projection_observation_ticket'),
+        ('marketplace_genlayer_assignments', 'shared_projection_attempts'),
+        ('marketplace_genlayer_assignments', 'shared_projection_next_repair_at'),
+        ('marketplace_genlayer_claimable_balances', 'observed_after_tx_hash'),
+        ('marketplace_genlayer_claimable_balances', 'observed_after_finalized_at'),
+        ('marketplace_genlayer_claimable_balances', 'observation_revision'),
+        ('marketplace_genlayer_claimable_balances', 'observation_ticket'),
+        ('marketplace_genlayer_claimable_balances', 'observed_at'),
         ('marketplace_genlayer_transactions', 'arg_types'),
         ('marketplace_genlayer_transactions', 'intent_key'),
         ('marketplace_genlayer_transactions', 'value_atto'),
@@ -78,7 +94,7 @@ const [state] = await sql.query(`
       )
     ) as native_columns_ready,
     (
-      select count(*)::int = 16
+      select count(*)::int = 23
       from pg_constraint c
       join pg_class t on t.oid = c.conrelid
       join pg_namespace n on n.oid = t.relnamespace
@@ -96,6 +112,13 @@ const [state] = await sql.query(`
           'marketplace_genlayer_profiles_source',
           'marketplace_genlayer_campaigns_namespace',
           'marketplace_genlayer_assignments_namespace',
+          'marketplace_genlayer_assignments_shared_pending',
+          'marketplace_genlayer_assignments_shared_schedule',
+          'marketplace_genlayer_campaigns_observation_tuple',
+          'marketplace_genlayer_campaigns_observation_hash',
+          'marketplace_genlayer_campaigns_terminal_balances',
+          'marketplace_genlayer_claimable_observation_tuple',
+          'marketplace_genlayer_claimable_observation_hash',
           'marketplace_genlayer_withdrawals_namespace',
           'marketplace_genlayer_maintenance_generations_namespace',
           'marketplace_genlayer_maintenance_generations_vercel',
@@ -104,7 +127,7 @@ const [state] = await sql.query(`
         and c.convalidated
     ) as native_constraints_ready,
     (
-      select count(*)::int = 10
+      select count(*)::int = 11
       from pg_indexes
       where schemaname = 'public'
         and indexname in (
@@ -113,6 +136,7 @@ const [state] = await sql.query(`
           'marketplace_genlayer_profiles_identity_contract_idx',
           'marketplace_genlayer_campaigns_entity_contract_idx',
           'marketplace_genlayer_assignments_entity_contract_idx',
+          'marketplace_genlayer_assignments_shared_pending_idx',
           'marketplace_genlayer_transactions_hash_idx',
           'marketplace_genlayer_transactions_intent_idx',
           'marketplace_genlayer_withdrawals_entity_contract_idx',
@@ -157,6 +181,21 @@ const [campaignState] = await sql.query(
 const [assignmentState] = await sql.query(
   "select count(*)::int as assignment_count from public.marketplace_genlayer_assignments",
 );
+const [unanchoredResolutionState] = await sql.query(`
+  select count(*)::int as unanchored_resolution_count
+  from public.marketplace_genlayer_assignments
+  where status in ('SETTLED_PASS', 'SETTLED_FAIL')
+    and resolution_attempts > 0
+    and resolution_request_id is not null
+    and evidence_hash is not null
+    and last_resolution_at_epoch > 0
+    and shared_projection_anchor_tx_hash is null
+`);
+if (unanchoredResolutionState.unanchored_resolution_count !== 0) {
+  throw new Error(
+    "Legacy terminal resolutions require an audited receipt-anchor repair before rollout.",
+  );
+}
 const [withdrawalState] = await sql.query(
   "select count(*)::int as withdrawal_count from public.marketplace_genlayer_withdrawals",
 );
@@ -165,11 +204,12 @@ process.stdout.write(JSON.stringify({
   ok: true,
   network: "studionet",
   chainId: 61_999,
-  schemaVersion: 4,
+  schemaVersion: 5,
   verificationColumns: state.verification_column_count,
   verificationRequests: requestState.request_count,
   campaigns: campaignState.campaign_count,
   assignments: assignmentState.assignment_count,
+  unanchoredResolutions: unanchoredResolutionState.unanchored_resolution_count,
   withdrawals: withdrawalState.withdrawal_count,
   historicalTablesPresent: state.historical_table_count,
   genLayerNativeReady: true,

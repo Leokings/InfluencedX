@@ -32,6 +32,7 @@ import {
   insertGenLayerCampaignDraft,
   listGenLayerCampaignDraftRows,
   listGenLayerPrivateApplicationsForCampaign,
+  nextGenLayerSharedObservationTicket,
   prepareGenLayerMarketplaceTransaction,
   recordGenLayerTransactionStatus,
   setGenLayerCampaignDraftStatus,
@@ -327,6 +328,7 @@ export async function confirmGenLayerCampaignFunding(input: {
     throw confirmationProblem(classifiedError);
   }
 
+  const observationTicket = await nextGenLayerSharedObservationTicket();
   let state: GenLayerCampaignState;
   try {
     state = parseCampaignState(await readMarketplaceState("get_campaign", [expectedId]));
@@ -378,6 +380,7 @@ export async function confirmGenLayerCampaignFunding(input: {
     lastTxHash: transactionHash,
     finalizedAt: finalizedAtMs,
     snapshotHash,
+    observationTicket,
     nowMs,
   });
   await setGenLayerCampaignDraftStatus({

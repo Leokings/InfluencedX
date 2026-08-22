@@ -32,6 +32,8 @@ import {
 } from "./marketplace-genlayer-core.ts";
 import {
   bindGenLayerTransactionHash,
+  exactGenLayerJournalCall,
+  ensureGenLayerSharedResolutionRepairMarker,
   findGenLayerAssignmentProjectionByAssignmentId,
   findGenLayerAssignmentProjectionByApplicationId,
   findGenLayerCampaignProjectionByOnchainId,
@@ -45,6 +47,7 @@ import {
   findGenLayerPrivateApplicationForCreator,
   findGenLayerProfileByWallet,
   insertGenLayerPrivateApplication,
+  nextGenLayerSharedObservationTicket,
   prepareGenLayerMarketplaceTransaction,
   recoverPreparedMarketplaceTransactionBeforePreflight,
   recordGenLayerTransactionStatus,
@@ -77,6 +80,7 @@ import {
   type MarketplaceGenLayerCall,
 } from "./marketplace-genlayer-rpc.ts";
 import { getGenLayerMarketplaceCampaignDetail } from "./marketplace-genlayer-service.ts";
+import { observeGenLayerResolutionSharedState } from "./marketplace-genlayer-shared-observation.ts";
 import {
   WithdrawalReconcilerClientProblem,
   createWithdrawalReconcilerClient,
@@ -105,10 +109,12 @@ const USER_SUBMITTED_MARKETPLACE_OPERATIONS = new Set([
 ]);
 
 export function nextGenLayerResolutionProgression(input: {
-  assignment: Pick<
-    GenLayerAssignmentState,
-    "status" | "assignmentId" | "resolutionRequestId" | "resolutionEligibleAtEpoch"
-  >;
+  assignment: Readonly<{
+    status: string;
+    assignmentId: string;
+    resolutionRequestId: string | null;
+    resolutionEligibleAtEpoch: number;
+  }>;
   previousRequestId: string;
   finalizedAtEpoch: number;
 }) {
@@ -390,6 +396,7 @@ export async function confirmGenLayerSelection(input: ActionInput) {
     agreementHash,
   ], ["string", "string", "address", "uint256", "string"]);
   const finalized = await confirmExact(input, context, "SELECT_CREATOR", call, context.draft.brandWallet);
+  const observationTicket = await nextGenLayerSharedObservationTicket();
   const assignment = parseAssignmentState(await readMarketplaceState("get_assignment", [assignmentId]));
   assertAssignmentBinding(assignment, context, assignmentId, agreementHash);
   const campaign = parseCampaignState(await readMarketplaceState("get_campaign", [context.campaign.campaignId]));
@@ -400,7 +407,7 @@ export async function confirmGenLayerSelection(input: ActionInput) {
     status: "SELECTED",
     nowMs: finalized.finalizedAt * 1_000,
   });
-  await projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalized.finalizedAt * 1_000);
+  await projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalized.finalizedAt * 1_000, observationTicket);
   await finalizePrepared(input, finalized, canonicalHash({ assignment, campaign }));
   return mutationResponse(context.draft, context.campaign, context.application, projected);
 }
@@ -674,7 +681,14 @@ export async function confirmGenLayerSubmission(input: ActionInput) {
   const assignment = parseAssignmentState(await readMarketplaceState("get_assignment", [context.assignment.assignmentId]));
   if (assignment.status !== "SUBMITTED" || assignment.submissionHash !== submissionHash || assignment.resolutionRequestId !== requestId || assignment.postId !== contentId) stateMismatch();
   const campaign = parseCampaignState(await readMarketplaceState("get_campaign", [context.campaign.campaignId]));
-  const projected = await projectAssignment(context, assignment, campaign, finalized, context.assignment.selectionTxHash);
+  const projected = await projectAssignment(
+    context,
+    assignment,
+    campaign,
+    finalized,
+    context.assignment.selectionTxHash,
+    { expectedPreviousSnapshotHash: context.assignment.snapshotHash },
+  );
   await finalizePrepared(input, finalized, canonicalHash(assignment));
   await enqueueCampaignProgression({
     assignmentId: assignment.assignmentId,
@@ -735,23 +749,99 @@ export async function prepareGenLayerResolution(input: ActionInput) {
 
 export async function confirmGenLayerResolution(input: ActionInput) {
   const context = await applicationContext(input);
-  if (!context.assignment?.resolutionRequestId) invalidState();
+  if (!context.assignment) invalidState();
   if (![context.draft.brandWallet, context.application.creatorWallet].includes(input.session.wallet.toLowerCase())) forbidden();
-  const call = callPlan("resolve_assignment", [context.assignment.assignmentId, context.assignment.resolutionRequestId], ["string", "string"]);
-  const finalized = await confirmExact(input, context, "RESOLVE_ASSIGNMENT", call, input.session.wallet);
+  const prepared = await requirePrepared(input.body.preparedId);
+  if (
+    prepared.operation !== "RESOLVE_ASSIGNMENT" ||
+    prepared.localCampaignId !== context.draft.id ||
+    prepared.localApplicationId !== context.application.id
+  ) preparedMismatch();
+  let call: MarketplaceGenLayerCall;
+  try {
+    call = exactGenLayerJournalCall(prepared);
+  } catch {
+    preparedMismatch();
+  }
+  if (
+    call.functionName !== "resolve_assignment" ||
+    call.value !== "0" ||
+    call.args.length !== 2 ||
+    call.argTypes.length !== 2 ||
+    call.argTypes[0] !== "string" ||
+    call.argTypes[1] !== "string" ||
+    call.args[0] !== context.assignment.assignmentId
+  ) preparedMismatch();
+  const preparedRequestId = requireHash(call.args[1], "requestId");
+  const finalized = await confirmPrepared(
+    input.body,
+    prepared,
+    call,
+    input.session.wallet,
+    input.reconciliationFenceToken,
+  );
+  if (resolutionReceiptAlreadyProjected(context.assignment, finalized)) {
+    let projected = context.assignment;
+    if (resolutionRequiresSharedObservation(projected)) {
+      const rebound = await ensureGenLayerSharedResolutionRepairMarker({
+        projectionId: projected.projectionId,
+        anchorTransactionHash: finalized.hash,
+        snapshotHash: projected.snapshotHash,
+      });
+      if (!rebound) stateMismatch();
+      projected = rebound;
+    }
+    await finalizePrepared(input, finalized, projected.snapshotHash);
+    const retry = nextGenLayerResolutionProgression({
+      assignment: projected,
+      previousRequestId: preparedRequestId,
+      finalizedAtEpoch: finalized.finalizedAt,
+    });
+    if (retry) await enqueueCampaignProgression(retry);
+    if (resolutionRequiresSharedObservation(projected)) {
+      await repairSharedObservationBestEffort(projected, finalized);
+    }
+    return mutationResponse(
+      context.draft,
+      context.campaign,
+      context.application,
+      projected,
+    );
+  }
   const assignment = parseAssignmentState(await readMarketplaceState("get_assignment", [context.assignment.assignmentId]));
   const campaign = parseCampaignState(await readMarketplaceState("get_campaign", [context.campaign.campaignId]));
-  const projected = await projectAssignment(context, assignment, campaign, finalized, context.assignment.selectionTxHash);
-  await projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalized.finalizedAt * 1_000);
-  await projectClaimable(context.application.creatorWallet, finalized.hash, finalized.finalizedAt * 1_000);
-  await projectClaimable(context.draft.brandWallet, finalized.hash, finalized.finalizedAt * 1_000);
-  await finalizePrepared(input, finalized, canonicalHash({ assignment, campaign }));
+  assertOperatorAssignmentBinding(context.assignment, assignment, campaign);
+  assertOperatorCampaignBinding(context.campaign, campaign);
+  const assignmentSnapshotHash = canonicalHash(assignment);
+  if (
+    context.assignment.resolutionRequestId !== preparedRequestId ||
+    !genLayerResolutionAssignmentPostcondition(
+      context.assignment,
+      assignment,
+      context.campaign.feeBps,
+    )
+  ) stateMismatch();
+  const projected = await projectAssignment(
+    context,
+    assignment,
+    campaign,
+    finalized,
+    context.assignment.selectionTxHash,
+    {
+      sharedProjectionPending: resolutionRequiresSharedObservation(assignment),
+      expectedPreviousSnapshotHash: context.assignment.snapshotHash,
+    },
+  );
+  await finalizePrepared(input, finalized, assignmentSnapshotHash);
   const retry = nextGenLayerResolutionProgression({
     assignment,
-    previousRequestId: context.assignment.resolutionRequestId,
+    previousRequestId: preparedRequestId,
     finalizedAtEpoch: finalized.finalizedAt,
   });
   if (retry) await enqueueCampaignProgression(retry);
+  if (resolutionRequiresSharedObservation(projected)) {
+    await repairSharedObservationBestEffort(projected, finalized);
+  }
   return mutationResponse(context.draft, context.campaign, context.application, projected);
 }
 
@@ -768,7 +858,8 @@ export async function reconcileGenLayerOperatorResolution(input: {
   const existing = await findGenLayerAssignmentProjectionByAssignmentId(
     requireHash(input.assignmentId, "assignmentId"),
   );
-  if (!existing || existing.resolutionRequestId !== requireHash(input.requestId, "requestId")) {
+  const requestId = requireHash(input.requestId, "requestId");
+  if (!existing) {
     throw problem(409, "GENLAYER_OPERATOR_BINDING_MISMATCH", "The operator result is not bound to a projected assignment.");
   }
   const application = await findGenLayerPrivateApplication(existing.localApplicationId);
@@ -777,50 +868,191 @@ export async function reconcileGenLayerOperatorResolution(input: {
     campaignId: application.localCampaignId,
     applicationId: application.id,
   });
-  const assignment = parseAssignmentState(
-    await readMarketplaceState("get_assignment", [existing.assignmentId]),
-  );
-  const campaign = parseCampaignState(
-    await readMarketplaceState("get_campaign", [existing.campaignId]),
-  );
+  const finalized = await loadExactOperatorFinalizedTransaction({
+    transactionHash: input.transactionHash,
+    finalizedAtMs: input.finalizedAtMs,
+    functionName: "resolve_assignment",
+    args: [existing.assignmentId, requestId],
+  });
+  if (resolutionReceiptAlreadyProjected(existing, finalized)) {
+    let projected = existing;
+    if (resolutionRequiresSharedObservation(projected)) {
+      const rebound = await ensureGenLayerSharedResolutionRepairMarker({
+        projectionId: projected.projectionId,
+        anchorTransactionHash: finalized.hash,
+        snapshotHash: projected.snapshotHash,
+      });
+      if (!rebound) stateMismatch();
+      projected = rebound;
+    }
+    await updateGenLayerProjectionCursor({
+      contractAddress: marketplaceContractAddress(),
+      transactionHash: finalized.hash,
+      finalizedAt: finalized.finalizedAt * 1_000,
+      snapshotHash: projected.snapshotHash,
+    });
+    const retry = nextGenLayerResolutionProgression({
+      assignment: projected,
+      previousRequestId: requestId,
+      finalizedAtEpoch: finalized.finalizedAt,
+    });
+    if (retry) await enqueueCampaignProgression(retry);
+    if (resolutionRequiresSharedObservation(projected)) {
+      await repairSharedObservationBestEffort(projected, finalized);
+    }
+    return Object.freeze({ assignment: projected, campaign: context.campaign });
+  }
+  if (existing.resolutionRequestId !== requestId) {
+    throw problem(409, "GENLAYER_OPERATOR_BINDING_MISMATCH", "The operator result is not bound to the current projected resolution request.");
+  }
+  const [rawAssignment, rawCampaign] = await Promise.all([
+    readMarketplaceState("get_assignment", [existing.assignmentId]),
+    readMarketplaceState("get_campaign", [existing.campaignId]),
+  ]);
+  const assignment = parseAssignmentState(rawAssignment);
+  const campaign = parseCampaignState(rawCampaign);
   if (
     assignment.assignmentId !== existing.assignmentId ||
     assignment.campaignId !== existing.campaignId ||
     campaign.campaignId !== existing.campaignId
   ) stateMismatch();
   assertOperatorAssignmentBinding(existing, assignment, campaign);
-  const finalized = await loadExactOperatorFinalizedTransaction({
-    transactionHash: input.transactionHash,
-    finalizedAtMs: input.finalizedAtMs,
-    functionName: "resolve_assignment",
-    args: [existing.assignmentId, input.requestId],
-  });
+  assertOperatorCampaignBinding(context.campaign, campaign);
   const finalizedAtMs = finalized.finalizedAt * 1_000;
+  const assignmentSnapshotHash = canonicalHash(assignment);
+  if (!genLayerResolutionAssignmentPostcondition(
+    existing,
+    assignment,
+    context.campaign.feeBps,
+  )) stateMismatch();
   const projected = await projectAssignment(
     context,
     assignment,
     campaign,
     finalized,
     existing.selectionTxHash,
+    {
+      sharedProjectionPending: resolutionRequiresSharedObservation(assignment),
+      expectedPreviousSnapshotHash: existing.snapshotHash,
+    },
   );
-  await Promise.all([
-    projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalizedAtMs),
-    projectClaimable(context.draft.brandWallet, finalized.hash, finalizedAtMs),
-    projectClaimable(context.application.creatorWallet, finalized.hash, finalizedAtMs),
-    updateGenLayerProjectionCursor({
-      contractAddress: marketplaceContractAddress(),
-      transactionHash: finalized.hash,
-      finalizedAt: finalizedAtMs,
-      snapshotHash: canonicalHash({ assignment, campaign }),
-    }),
-  ]);
+  await updateGenLayerProjectionCursor({
+    contractAddress: marketplaceContractAddress(),
+    transactionHash: finalized.hash,
+    finalizedAt: finalizedAtMs,
+    snapshotHash: assignmentSnapshotHash,
+  });
   const retry = nextGenLayerResolutionProgression({
     assignment,
-    previousRequestId: input.requestId,
+    previousRequestId: requestId,
     finalizedAtEpoch: finalized.finalizedAt,
   });
   if (retry) await enqueueCampaignProgression(retry);
+  if (resolutionRequiresSharedObservation(projected)) {
+    await repairSharedObservationBestEffort(projected, finalized);
+  }
   return Object.freeze({ assignment: projected, campaign });
+}
+
+export function genLayerResolutionAssignmentPostcondition(
+  previous: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+  feeBps: number,
+): boolean {
+  if (
+    assignment.postId !== previous.postId ||
+    assignment.submissionHash !== previous.submissionHash ||
+    assignment.submittedAtEpoch !== previous.submittedAtEpoch ||
+    assignment.resolutionAttempts !== previous.resolutionAttempts + 1 ||
+    assignment.lastResolutionAtEpoch <= previous.lastResolutionAtEpoch ||
+    !assignment.evidenceHash ||
+    !assignment.outcome
+  ) return false;
+
+  if (assignment.status === "UNDETERMINED") {
+    if (!previous.submissionHash || !previous.postId) return false;
+    const expectedRequestId = deriveResolutionRequestId({
+      assignmentId: previous.assignmentId,
+      agreementHash: previous.agreementHash,
+      submissionHash: previous.submissionHash,
+      contentSource: previous.contentSource,
+      postId: previous.postId,
+      roundIndex: previous.resolutionRound + 1,
+    });
+    return assignment.outcome === "UNDETERMINED"
+      && assignment.resolutionRound === previous.resolutionRound + 1
+      && assignment.resolutionRequestId === expectedRequestId
+      && assignment.resolutionEligibleAtEpoch > assignment.lastResolutionAtEpoch
+      && assignment.creatorCreditAtto === previous.creatorCreditAtto
+      && assignment.brandCreditAtto === previous.brandCreditAtto
+      && assignment.feeAtto === previous.feeAtto
+      && assignment.settledAtEpoch === previous.settledAtEpoch
+      && assignment.closedAtEpoch === previous.closedAtEpoch;
+  }
+
+  if (assignment.resolutionRound !== previous.resolutionRound
+    || assignment.resolutionRequestId !== previous.resolutionRequestId
+    || assignment.resolutionEligibleAtEpoch !== previous.resolutionEligibleAtEpoch
+    || assignment.settledAtEpoch <= 0
+    || assignment.closedAtEpoch !== previous.closedAtEpoch) return false;
+  const amount = BigInt(previous.agreedRateAtto);
+
+  if (assignment.status === "SETTLED_PASS" && assignment.outcome === "PASS") {
+    const fee = amount * BigInt(feeBps) / 10_000n;
+    const creatorCredit = amount - fee;
+    return assignment.creatorCreditAtto === creatorCredit.toString()
+      && assignment.brandCreditAtto === "0"
+      && assignment.feeAtto === fee.toString();
+  }
+  if (assignment.status === "SETTLED_FAIL" && assignment.outcome === "FAIL") {
+    return assignment.creatorCreditAtto === "0"
+      && assignment.brandCreditAtto === amount.toString()
+      && assignment.feeAtto === "0";
+  }
+  return false;
+}
+
+export function genLayerResolutionCampaignPostcondition(
+  previousAssignment: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+  previous: GenLayerCampaignProjection,
+  campaign: GenLayerCampaignState,
+): boolean {
+  if (
+    campaign.status !== previous.status ||
+    campaign.availableAtto !== previous.availableAtto ||
+    campaign.applicationCount !== previous.applicationCount ||
+    campaign.assignmentCount !== previous.assignmentCount ||
+    campaign.closedAtEpoch !== previous.closedAtEpoch
+  ) return false;
+  if (assignment.status === "UNDETERMINED") {
+    return campaign.reservedAtto === previous.reservedAtto
+      && campaign.settledAtto === previous.settledAtto
+      && campaign.creatorPaidAtto === previous.creatorPaidAtto
+      && campaign.brandRefundedAtto === previous.brandRefundedAtto
+      && campaign.feeAtto === previous.feeAtto;
+  }
+
+  const amount = BigInt(previousAssignment.agreedRateAtto);
+  const reservedBefore = BigInt(previous.reservedAtto);
+  if (
+    reservedBefore < amount ||
+    BigInt(campaign.reservedAtto) !== reservedBefore - amount ||
+    BigInt(campaign.settledAtto) !== BigInt(previous.settledAtto) + amount
+  ) return false;
+  if (assignment.status === "SETTLED_PASS") {
+    const fee = amount * BigInt(previous.feeBps) / 10_000n;
+    const creatorCredit = amount - fee;
+    return BigInt(campaign.creatorPaidAtto) === BigInt(previous.creatorPaidAtto) + creatorCredit
+      && campaign.brandRefundedAtto === previous.brandRefundedAtto
+      && BigInt(campaign.feeAtto) === BigInt(previous.feeAtto) + fee;
+  }
+  if (assignment.status === "SETTLED_FAIL") {
+    return campaign.creatorPaidAtto === previous.creatorPaidAtto
+      && BigInt(campaign.brandRefundedAtto) === BigInt(previous.brandRefundedAtto) + amount
+      && campaign.feeAtto === previous.feeAtto;
+  }
+  return false;
 }
 
 /** Reconciles a permissionless assignment expiry from exact finalized state. */
@@ -841,30 +1073,24 @@ export async function reconcileGenLayerOperatorExpiry(input: {
     campaignId: application.localCampaignId,
     applicationId: application.id,
   });
-  const [assignment, campaign, finalized] = await Promise.all([
+  const finalized = await loadExactOperatorFinalizedTransaction({
+    transactionHash: input.transactionHash,
+    finalizedAtMs: input.finalizedAtMs,
+    functionName: "expire_assignment",
+    args: [existing.assignmentId],
+  });
+  const observationTicket = await nextGenLayerSharedObservationTicket();
+  const [assignment, campaign] = await Promise.all([
     readMarketplaceState("get_assignment", [existing.assignmentId]).then(parseAssignmentState),
     readMarketplaceState("get_campaign", [existing.campaignId]).then(parseCampaignState),
-    loadExactOperatorFinalizedTransaction({
-      transactionHash: input.transactionHash,
-      finalizedAtMs: input.finalizedAtMs,
-      functionName: "expire_assignment",
-      args: [existing.assignmentId],
-    }),
   ]);
   assertOperatorAssignmentBinding(existing, assignment, campaign);
   if (!["EXPIRED", "SETTLED_FAIL"].includes(assignment.status)) stateMismatch();
   const finalizedAtMs = finalized.finalizedAt * 1_000;
-  const projected = await projectAssignment(
-    context,
-    assignment,
-    campaign,
-    finalized,
-    existing.selectionTxHash,
-  );
   await Promise.all([
-    projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalizedAtMs),
-    projectClaimable(context.draft.brandWallet, finalized.hash, finalizedAtMs),
-    projectClaimable(context.application.creatorWallet, finalized.hash, finalizedAtMs),
+    projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalizedAtMs, observationTicket),
+    projectClaimable(context.draft.brandWallet, finalized.hash, finalizedAtMs, observationTicket),
+    projectClaimable(context.application.creatorWallet, finalized.hash, finalizedAtMs, observationTicket),
     updateGenLayerProjectionCursor({
       contractAddress: marketplaceContractAddress(),
       transactionHash: finalized.hash,
@@ -872,6 +1098,16 @@ export async function reconcileGenLayerOperatorExpiry(input: {
       snapshotHash: canonicalHash({ assignment, campaign }),
     }),
   ]);
+  // Assignment status is the due-scan commit marker. Keep it nonterminal until
+  // every shared projection succeeds so a crash is repaired by the next replay.
+  const projected = await projectAssignment(
+    context,
+    assignment,
+    campaign,
+    finalized,
+    existing.selectionTxHash,
+    { expectedPreviousSnapshotHash: existing.snapshotHash },
+  );
   return Object.freeze({ assignment: projected, campaign });
 }
 
@@ -888,27 +1124,22 @@ export async function reconcileGenLayerOperatorCampaignFinalization(input: {
     throw problem(409, "GENLAYER_OPERATOR_BINDING_MISMATCH", "The operator finalization is not bound to a projected campaign.");
   }
   const context = await campaignContext(existing.localCampaignId);
-  const [campaign, finalized] = await Promise.all([
-    readMarketplaceState("get_campaign", [existing.campaignId]).then(parseCampaignState),
-    loadExactOperatorFinalizedTransaction({
-      transactionHash: input.transactionHash,
-      finalizedAtMs: input.finalizedAtMs,
-      functionName: "finalize_campaign",
-      args: [existing.campaignId],
-    }),
-  ]);
+  const finalized = await loadExactOperatorFinalizedTransaction({
+    transactionHash: input.transactionHash,
+    finalizedAtMs: input.finalizedAtMs,
+    functionName: "finalize_campaign",
+    args: [existing.campaignId],
+  });
+  const observationTicket = await nextGenLayerSharedObservationTicket();
+  const campaign = await readMarketplaceState(
+    "get_campaign",
+    [existing.campaignId],
+  ).then(parseCampaignState);
   assertOperatorCampaignBinding(existing, campaign);
   if (campaign.status !== "CLOSED" || campaign.reservedAtto !== "0" || campaign.availableAtto !== "0") {
     stateMismatch();
   }
   const finalizedAtMs = finalized.finalizedAt * 1_000;
-  const projected = await projectCampaign(
-    context.draft,
-    context.projection,
-    campaign,
-    finalized.hash,
-    finalizedAtMs,
-  );
   await Promise.all([
     setGenLayerCampaignDraftStatus({
       id: context.draft.id,
@@ -916,7 +1147,7 @@ export async function reconcileGenLayerOperatorCampaignFinalization(input: {
       status: "CLOSED",
       nowMs: finalizedAtMs,
     }),
-    projectClaimable(context.draft.brandWallet, finalized.hash, finalizedAtMs),
+    projectClaimable(context.draft.brandWallet, finalized.hash, finalizedAtMs, observationTicket),
     updateGenLayerProjectionCursor({
       contractAddress: marketplaceContractAddress(),
       transactionHash: finalized.hash,
@@ -924,6 +1155,16 @@ export async function reconcileGenLayerOperatorCampaignFinalization(input: {
       snapshotHash: canonicalHash(campaign),
     }),
   ]);
+  // Campaign status is the due-scan commit marker. Writing CLOSED last makes
+  // every earlier partial failure replayable from the durable OPEN projection.
+  const projected = await projectCampaign(
+    context.draft,
+    context.projection,
+    campaign,
+    finalized.hash,
+    finalizedAtMs,
+    observationTicket,
+  );
   return Object.freeze({ campaign: projected });
 }
 
@@ -1133,6 +1374,8 @@ export async function getGenLayerSettlement(input: CampaignActionInput) {
       latestWithdrawal!.requestTxHash,
       withdrawalReconciliation.confirmationTxHash,
       Date.parse(withdrawalReconciliation.finalizedAt),
+      latestWithdrawal!.snapshotHash,
+      latestWithdrawal!.lastTxHash,
     );
     latestWithdrawal = await findLatestGenLayerWithdrawalProjection(wallet);
   }
@@ -1184,11 +1427,12 @@ export async function confirmGenLayerWithdrawal(input: CampaignActionInput) {
   if (prepared.operation !== "REQUEST_WITHDRAWAL" || prepared.localCampaignId !== context.draft.id || prepared.actorWallet !== input.session.wallet.toLowerCase()) preparedMismatch();
   const call = storedCall(prepared);
   const finalized = await confirmPrepared(input.body, prepared, call, input.session.wallet, input.reconciliationFenceToken);
+  const observationTicket = await nextGenLayerSharedObservationTicket();
   const withdrawalId = requireHash(prepared.onchainEntityId, "withdrawalId");
   const withdrawal = parseWithdrawalState(await readMarketplaceState("get_withdrawal", [withdrawalId]));
   if (withdrawal.status !== "PENDING" || withdrawal.account !== input.session.wallet.toLowerCase()) stateMismatch();
   await projectWithdrawal(withdrawal, finalized.hash, finalized.hash, finalized.finalizedAt * 1_000);
-  await projectClaimable(withdrawal.account, finalized.hash, finalized.finalizedAt * 1_000);
+  await projectClaimable(withdrawal.account, finalized.hash, finalized.finalizedAt * 1_000, observationTicket);
   await finalizePrepared(input, finalized, canonicalHash(withdrawal));
   return { ...(await getGenLayerSettlement(input)), withdrawal: withdrawalDto(withdrawal), withdrawalId };
 }
@@ -1224,7 +1468,14 @@ export async function confirmGenLayerWithdrawalExecution(input: CampaignActionIn
   if (withdrawal.status !== "EMITTED_UNCONFIRMED") stateMismatch();
   const existing = await findGenLayerWithdrawalProjectionById(withdrawalId);
   if (!existing) stateMismatch();
-  await projectWithdrawal(withdrawal, existing.requestTxHash, finalized.hash, finalized.finalizedAt * 1_000);
+  await projectWithdrawal(
+    withdrawal,
+    existing.requestTxHash,
+    finalized.hash,
+    finalized.finalizedAt * 1_000,
+    existing.snapshotHash,
+    existing.lastTxHash,
+  );
   await finalizePrepared(input, finalized, canonicalHash(withdrawal));
   let reconciliation: WithdrawalReconciliationProjection;
   try {
@@ -1349,13 +1600,29 @@ async function confirmAssignmentSimple(
   else if (![context.draft.brandWallet, context.application.creatorWallet].includes(input.session.wallet.toLowerCase())) forbidden();
   const call = callPlan(method, [context.assignment.assignmentId], ["string"]);
   const finalized = await confirmExact(input, context, operation, call, input.session.wallet);
+  const observationTicket = await nextGenLayerSharedObservationTicket();
   const assignment = parseAssignmentState(await readMarketplaceState("get_assignment", [context.assignment.assignmentId]));
   if (assignment.status !== expectedStatus) stateMismatch();
   const campaign = parseCampaignState(await readMarketplaceState("get_campaign", [context.campaign.campaignId]));
-  const projected = await projectAssignment(context, assignment, campaign, finalized, context.assignment.selectionTxHash);
+  const projected = await projectAssignment(
+    context,
+    assignment,
+    campaign,
+    finalized,
+    context.assignment.selectionTxHash,
+    { expectedPreviousSnapshotHash: context.assignment.snapshotHash },
+  );
   if (expectedStatus === "ACCEPTED") await setGenLayerPrivateApplicationStatus({ id: context.application.id, expectedStatuses: ["SELECTED"], status: "ACCEPTED", nowMs: finalized.finalizedAt * 1_000 });
   if (expectedStatus === "DECLINED") await setGenLayerPrivateApplicationStatus({ id: context.application.id, expectedStatuses: ["SELECTED"], status: "DECLINED", nowMs: finalized.finalizedAt * 1_000 });
-  await projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalized.finalizedAt * 1_000);
+  await projectCampaign(context.draft, context.campaign, campaign, finalized.hash, finalized.finalizedAt * 1_000, observationTicket);
+  if (expectedStatus === "REFUNDED") {
+    await projectClaimable(
+      context.draft.brandWallet,
+      finalized.hash,
+      finalized.finalizedAt * 1_000,
+      observationTicket,
+    );
+  }
   await finalizePrepared(input, finalized, canonicalHash({ assignment, campaign }));
   return mutationResponse(context.draft, context.campaign, context.application, projected);
 }
@@ -1371,11 +1638,12 @@ async function confirmCampaignSimple(
   const prepared = await requirePrepared(input.body.preparedId);
   if (prepared.operation !== operation || prepared.localCampaignId !== context.draft.id) preparedMismatch();
   const finalized = await confirmPrepared(input.body, prepared, call, input.session.wallet, input.reconciliationFenceToken);
+  const observationTicket = await nextGenLayerSharedObservationTicket();
   const state = parseCampaignState(await readMarketplaceState("get_campaign", [context.projection.campaignId]));
   if (!genLayerCampaignActionPostcondition(method, state)) stateMismatch();
-  const projected = await projectCampaign(context.draft, context.projection, state, finalized.hash, finalized.finalizedAt * 1_000);
+  const projected = await projectCampaign(context.draft, context.projection, state, finalized.hash, finalized.finalizedAt * 1_000, observationTicket);
   if (state.status !== "OPEN") await setGenLayerCampaignDraftStatus({ id: context.draft.id, expectedStatus: context.draft.status, status: state.status, nowMs: finalized.finalizedAt * 1_000 });
-  await projectClaimable(context.draft.brandWallet, finalized.hash, finalized.finalizedAt * 1_000);
+  await projectClaimable(context.draft.brandWallet, finalized.hash, finalized.finalizedAt * 1_000, observationTicket);
   await finalizePrepared(input, finalized, canonicalHash(state));
   return { campaign: (await getGenLayerMarketplaceCampaignDetail({ campaignId: context.draft.id, viewerWallet: input.session.wallet })).campaign, projection: projected };
 }
@@ -1590,7 +1858,9 @@ function assertOperatorCampaignBinding(
     campaign.selectionDeadlineEpoch !== existing.selectionDeadlineEpoch ||
     campaign.submissionDeadlineEpoch !== existing.submissionDeadlineEpoch ||
     campaign.retentionSeconds !== existing.retentionSeconds ||
-    campaign.maxUndeterminedRetries !== existing.maxUndeterminedRetries
+    campaign.maxUndeterminedRetries !== existing.maxUndeterminedRetries ||
+    campaign.feeBps !== existing.feeBps ||
+    campaign.treasury !== existing.treasuryWallet
   ) stateMismatch();
 }
 
@@ -1600,9 +1870,10 @@ async function projectCampaign(
   state: GenLayerCampaignState,
   txHash: string,
   finalizedAt: number,
+  observationTicket: number,
 ) {
   return upsertGenLayerCampaignProjection({
-    campaignId: state.campaignId, localCampaignId: draft.id, contractAddress: marketplaceContractAddress(), brandWallet: state.brand, clientNonce: state.clientNonce, contentSource: state.contentSource, termsHash: state.termsHash, budgetAtto: state.budgetAtto, availableAtto: state.availableAtto, reservedAtto: state.reservedAtto, settledAtto: state.settledAtto, creatorPaidAtto: state.creatorPaidAtto, brandRefundedAtto: state.brandRefundedAtto, feeAtto: state.feeAtto, status: state.status, feeBps: state.feeBps, treasuryWallet: state.treasury, applicationCount: state.applicationCount, assignmentCount: state.assignmentCount, maxUndeterminedRetries: state.maxUndeterminedRetries, applicationDeadlineEpoch: state.applicationDeadlineEpoch, selectionDeadlineEpoch: state.selectionDeadlineEpoch, submissionDeadlineEpoch: state.submissionDeadlineEpoch, retentionSeconds: state.retentionSeconds, createdAtEpoch: state.createdAtEpoch, closedAtEpoch: state.closedAtEpoch, creationTxHash: existing.creationTxHash, lastTxHash: txHash, finalizedAt, snapshotHash: campaignSnapshotHash(state), nowMs: finalizedAt,
+    campaignId: state.campaignId, localCampaignId: draft.id, contractAddress: marketplaceContractAddress(), brandWallet: state.brand, clientNonce: state.clientNonce, contentSource: state.contentSource, termsHash: state.termsHash, budgetAtto: state.budgetAtto, availableAtto: state.availableAtto, reservedAtto: state.reservedAtto, settledAtto: state.settledAtto, creatorPaidAtto: state.creatorPaidAtto, brandRefundedAtto: state.brandRefundedAtto, feeAtto: state.feeAtto, status: state.status, feeBps: state.feeBps, treasuryWallet: state.treasury, applicationCount: state.applicationCount, assignmentCount: state.assignmentCount, maxUndeterminedRetries: state.maxUndeterminedRetries, applicationDeadlineEpoch: state.applicationDeadlineEpoch, selectionDeadlineEpoch: state.selectionDeadlineEpoch, submissionDeadlineEpoch: state.submissionDeadlineEpoch, retentionSeconds: state.retentionSeconds, createdAtEpoch: state.createdAtEpoch, closedAtEpoch: state.closedAtEpoch, creationTxHash: existing.creationTxHash, lastTxHash: txHash, finalizedAt, snapshotHash: campaignSnapshotHash(state), observationTicket, nowMs: finalizedAt,
   });
 }
 
@@ -1612,15 +1883,66 @@ async function projectAssignment(
   campaign: GenLayerCampaignState,
   finalized: FinalizedMarketplaceTransaction,
   selectionTxHash: string,
+  options: {
+    sharedProjectionPending?: boolean;
+    expectedPreviousSnapshotHash?: string;
+  } = {},
 ) {
+  const sharedProjectionPending = options.sharedProjectionPending ?? false;
   return upsertGenLayerAssignmentProjection({
-    contractAddress: marketplaceContractAddress(), assignmentId: state.assignmentId, campaignId: state.campaignId, localApplicationId: context.application.id, brandWallet: state.brand, creatorWallet: state.creator, contentSource: state.contentSource, creatorHandle: state.creatorHandle, creatorExternalUserId: state.creatorExternalUserId, creatorIdentityHash: state.creatorIdentityHash, applicationId: state.applicationId, agreedRateAtto: state.agreedRateAtto, agreementHash: state.agreementHash, status: state.status, selectedAtEpoch: state.selectedAtEpoch, acceptanceDeadlineEpoch: state.acceptanceDeadlineEpoch, acceptedAtEpoch: state.acceptedAtEpoch, postId: state.postId, submissionHash: state.submissionHash, resolutionRequestId: state.resolutionRequestId, resolutionAttempts: state.resolutionAttempts, resolutionEligibleAtEpoch: state.resolutionEligibleAtEpoch, lastResolutionAtEpoch: state.lastResolutionAtEpoch, evidenceHash: state.evidenceHash, outcome: state.outcome, reasoning: state.reasoning, resolutionChecks: state.resolutionChecks, resolutionRound: state.resolutionRound, maxUndeterminedRetries: campaign.maxUndeterminedRetries, creatorCreditAtto: state.creatorCreditAtto, brandCreditAtto: state.brandCreditAtto, feeAtto: state.feeAtto, submittedAtEpoch: state.submittedAtEpoch, settledAtEpoch: state.settledAtEpoch, closedAtEpoch: state.closedAtEpoch, selectionTxHash, lastTxHash: finalized.hash, finalizedAt: finalized.finalizedAt * 1_000, snapshotHash: canonicalHash(state), nowMs: finalized.finalizedAt * 1_000,
+    contractAddress: marketplaceContractAddress(), assignmentId: state.assignmentId, campaignId: state.campaignId, localApplicationId: context.application.id, brandWallet: state.brand, creatorWallet: state.creator, contentSource: state.contentSource, creatorHandle: state.creatorHandle, creatorExternalUserId: state.creatorExternalUserId, creatorIdentityHash: state.creatorIdentityHash, applicationId: state.applicationId, agreedRateAtto: state.agreedRateAtto, agreementHash: state.agreementHash, status: state.status, selectedAtEpoch: state.selectedAtEpoch, acceptanceDeadlineEpoch: state.acceptanceDeadlineEpoch, acceptedAtEpoch: state.acceptedAtEpoch, postId: state.postId, submissionHash: state.submissionHash, resolutionRequestId: state.resolutionRequestId, resolutionAttempts: state.resolutionAttempts, resolutionEligibleAtEpoch: state.resolutionEligibleAtEpoch, lastResolutionAtEpoch: state.lastResolutionAtEpoch, evidenceHash: state.evidenceHash, outcome: state.outcome, reasoning: state.reasoning, resolutionChecks: state.resolutionChecks, resolutionRound: state.resolutionRound, maxUndeterminedRetries: campaign.maxUndeterminedRetries, creatorCreditAtto: state.creatorCreditAtto, brandCreditAtto: state.brandCreditAtto, feeAtto: state.feeAtto, submittedAtEpoch: state.submittedAtEpoch, settledAtEpoch: state.settledAtEpoch, closedAtEpoch: state.closedAtEpoch, selectionTxHash, lastTxHash: finalized.hash, finalizedAt: finalized.finalizedAt * 1_000, snapshotHash: canonicalHash(state), sharedProjectionPending, sharedProjectionAnchorTxHash: sharedProjectionPending ? finalized.hash : null, expectedPreviousSnapshotHash: options.expectedPreviousSnapshotHash, nowMs: finalized.finalizedAt * 1_000,
   });
 }
 
-async function projectClaimable(wallet: string, txHash: string, nowMs: number) {
+function resolutionRequiresSharedObservation(
+  assignment: Pick<GenLayerAssignmentProjection | GenLayerAssignmentState, "status">,
+): boolean {
+  return assignment.status === "SETTLED_PASS" || assignment.status === "SETTLED_FAIL";
+}
+
+function resolutionReceiptAlreadyProjected(
+  assignment: GenLayerAssignmentProjection,
+  finalized: FinalizedMarketplaceTransaction,
+): boolean {
+  return assignment.lastTxHash === finalized.hash
+    && assignment.finalizedAt === finalized.finalizedAt * 1_000
+    && HASH.test(assignment.snapshotHash)
+    && ["UNDETERMINED", "SETTLED_PASS", "SETTLED_FAIL"].includes(assignment.status);
+}
+
+function exactFinalizedLoader(
+  finalized: FinalizedMarketplaceTransaction,
+): typeof loadFinalizedMarketplaceTransaction {
+  return async (transactionHash: string) => {
+    if (requireHash(transactionHash, "transactionHash") !== finalized.hash) {
+      throw new Error("The shared observation requested another receipt.");
+    }
+    return finalized;
+  };
+}
+
+async function repairSharedObservationBestEffort(
+  assignment: GenLayerAssignmentProjection,
+  finalized: FinalizedMarketplaceTransaction,
+): Promise<void> {
+  try {
+    await observeGenLayerResolutionSharedState({
+      assignment,
+      dependencies: { loadFinalized: exactFinalizedLoader(finalized) },
+    });
+  } catch {
+    // The exact assignment marker is durable; bounded maintenance owns retry.
+  }
+}
+
+async function projectClaimable(
+  wallet: string,
+  txHash: string,
+  nowMs: number,
+  observationTicket: number,
+) {
   const state = parseClaimableState(await readMarketplaceState("get_claimable", [marketplaceCalldataAddress(wallet)]));
-  await upsertGenLayerClaimableBalance({ contractAddress: marketplaceContractAddress(), wallet: state.account, amountAtto: state.claimableAtto, nextWithdrawalNonce: state.nextWithdrawalNonce, transactionHash: txHash, snapshotHash: canonicalHash(state), nowMs });
+  await upsertGenLayerClaimableBalance({ contractAddress: marketplaceContractAddress(), wallet: state.account, amountAtto: state.claimableAtto, nextWithdrawalNonce: state.nextWithdrawalNonce, transactionHash: txHash, snapshotHash: canonicalHash(state), observationTicket, nowMs });
 }
 
 async function projectWithdrawal(
@@ -1628,6 +1950,8 @@ async function projectWithdrawal(
   requestTxHash: string,
   lastTxHash: string,
   finalizedAt: number,
+  expectedPreviousSnapshotHash?: string,
+  expectedPreviousLastTxHash?: string,
 ) {
   return upsertGenLayerWithdrawalProjection({
     contractAddress: marketplaceContractAddress(),
@@ -1645,6 +1969,8 @@ async function projectWithdrawal(
     lastTxHash,
     finalizedAt,
     snapshotHash: canonicalHash(state),
+    expectedPreviousSnapshotHash,
+    expectedPreviousLastTxHash,
     nowMs: finalizedAt,
   });
 }

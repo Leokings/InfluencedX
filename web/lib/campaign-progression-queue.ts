@@ -40,7 +40,7 @@ export async function enqueueCampaignProgression(
       CAMPAIGN_PROGRESSION_QUEUE_TOPIC,
       message,
       {
-        idempotencyKey: `influencedx-campaign-progression-v3:${message.assignmentId}:${message.requestId}`,
+        idempotencyKey: `influencedx-campaign-progression-v4:${message.assignmentId}:${message.requestId}`,
         retentionSeconds: CAMPAIGN_PROGRESSION_QUEUE_RETENTION_SECONDS,
         delaySeconds,
       },

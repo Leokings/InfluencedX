@@ -8,6 +8,7 @@ import {
   jsonb,
   numeric,
   pgEnum,
+  pgSequence,
   pgTable,
   primaryKey,
   text,
@@ -211,6 +212,11 @@ export const marketplaceResolutionOutcomeEnum = pgEnum(
 );
 
 const epochMs = (name: string) => bigint(name, { mode: "number" });
+
+export const marketplaceGenLayerSharedObservationTicketSequence = pgSequence(
+  "marketplace_genlayer_shared_observation_ticket_seq",
+  { startWith: 1 },
+);
 
 export const postgresVerificationRequests = pgTable(
   "verification_requests",
@@ -1239,6 +1245,11 @@ export const marketplaceGenLayerCampaigns = pgTable(
     lastTxHash: text("last_tx_hash").notNull(),
     finalizedAt: epochMs("finalized_at").notNull(),
     snapshotHash: text("snapshot_hash").notNull(),
+    observedAfterTxHash: text("observed_after_tx_hash"),
+    observedAfterFinalizedAt: epochMs("observed_after_finalized_at"),
+    observationTicket: epochMs("observation_ticket"),
+    observationRevision: epochMs("observation_revision").notNull().default(0),
+    observedAt: epochMs("observed_at"),
     projectedAt: epochMs("projected_at").notNull(),
   },
   (table) => [
@@ -1279,7 +1290,7 @@ export const marketplaceGenLayerCampaigns = pgTable(
     ),
     check(
       "marketplace_genlayer_campaigns_money",
-      sql`${table.budgetAtto} > 0 and ${table.availableAtto} >= 0 and ${table.reservedAtto} >= 0 and ${table.settledAtto} >= 0 and ${table.creatorPaidAtto} >= 0 and ${table.brandRefundedAtto} >= 0 and ${table.feeAtto} >= 0 and ${table.availableAtto} + ${table.reservedAtto} + ${table.creatorPaidAtto} + ${table.brandRefundedAtto} + ${table.feeAtto} = ${table.budgetAtto} and ${table.settledAtto} = ${table.creatorPaidAtto} + ${table.brandRefundedAtto} + ${table.feeAtto}`,
+      sql`${table.budgetAtto} > 0 and ${table.availableAtto} >= 0 and ${table.reservedAtto} >= 0 and ${table.settledAtto} >= 0 and ${table.creatorPaidAtto} >= 0 and ${table.brandRefundedAtto} >= 0 and ${table.feeAtto} >= 0 and ${table.availableAtto} + ${table.reservedAtto} + ${table.creatorPaidAtto} + ${table.brandRefundedAtto} + ${table.feeAtto} = ${table.budgetAtto} and ${table.creatorPaidAtto} + ${table.feeAtto} <= ${table.settledAtto} and ${table.settledAtto} <= ${table.creatorPaidAtto} + ${table.feeAtto} + ${table.brandRefundedAtto}`,
     ),
     check(
       "marketplace_genlayer_campaigns_deadlines",
@@ -1294,8 +1305,20 @@ export const marketplaceGenLayerCampaigns = pgTable(
       sql`${table.status} in ('OPEN', 'CANCELLED', 'CLOSED')`,
     ),
     check(
+      "marketplace_genlayer_campaigns_terminal_balances",
+      sql`${table.status} = 'OPEN' or (${table.availableAtto} = 0 and ${table.reservedAtto} = 0)`,
+    ),
+    check(
       "marketplace_genlayer_campaigns_counts",
       sql`${table.applicationCount} >= 0 and ${table.assignmentCount} >= 0 and ${table.feeBps} between 0 and 1000`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_observation_tuple",
+      sql`(${table.observationRevision} = 0 and ${table.observedAfterTxHash} is null and ${table.observedAfterFinalizedAt} is null and ${table.observationTicket} is null and ${table.observedAt} is null) or (${table.observationRevision} > 0 and ${table.observedAfterTxHash} is not null and ${table.observedAfterFinalizedAt} is not null and ${table.observationTicket} > 0 and ${table.observedAt} is not null and ${table.observedAt} >= ${table.observedAfterFinalizedAt})`,
+    ),
+    check(
+      "marketplace_genlayer_campaigns_observation_hash",
+      sql`${table.observedAfterTxHash} is null or ${table.observedAfterTxHash} ~ '^0x[0-9a-f]{64}$'`,
     ),
   ],
 );
@@ -1382,6 +1405,17 @@ export const marketplaceGenLayerAssignments = pgTable(
     lastTxHash: text("last_tx_hash").notNull(),
     finalizedAt: epochMs("finalized_at").notNull(),
     snapshotHash: text("snapshot_hash").notNull(),
+    sharedProjectionPending: boolean("shared_projection_pending")
+      .notNull()
+      .default(false),
+    sharedProjectionAnchorTxHash: text("shared_projection_anchor_tx_hash"),
+    sharedProjectionObservationTicket: epochMs("shared_projection_observation_ticket"),
+    sharedProjectionAttempts: integer("shared_projection_attempts")
+      .notNull()
+      .default(0),
+    sharedProjectionNextRepairAt: epochMs("shared_projection_next_repair_at")
+      .notNull()
+      .default(0),
     projectedAt: epochMs("projected_at").notNull(),
   },
   (table) => [
@@ -1402,6 +1436,16 @@ export const marketplaceGenLayerAssignments = pgTable(
       table.campaignId,
       table.status,
     ),
+    index("marketplace_genlayer_assignments_shared_pending_idx")
+      .on(
+        table.network,
+        table.chainId,
+        table.contractAddress,
+        table.sharedProjectionNextRepairAt,
+        table.projectedAt,
+        table.projectionId,
+      )
+      .where(sql`${table.sharedProjectionPending} = true`),
     check(
       "marketplace_genlayer_assignments_namespace",
       sql`${table.network} ~ '^[a-z][a-z0-9_-]{1,31}$' and ${table.chainId} > 0`,
@@ -1409,6 +1453,14 @@ export const marketplaceGenLayerAssignments = pgTable(
     check(
       "marketplace_genlayer_assignments_hashes",
       sql`${table.projectionId} ~ '^0x[0-9a-f]{64}$' and ${table.assignmentId} ~ '^0x[0-9a-f]{64}$' and ${table.campaignId} ~ '^0x[0-9a-f]{64}$' and ${table.applicationId} ~ '^0x[0-9a-f]{64}$' and ${table.agreementHash} ~ '^0x[0-9a-f]{64}$' and ${table.creatorIdentityHash} ~ '^0x[0-9a-f]{64}$' and ${table.selectionTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.lastTxHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$' and (${table.resolutionRequestId} is null or ${table.resolutionRequestId} ~ '^0x[0-9a-f]{64}$') and (${table.submissionHash} is null or ${table.submissionHash} ~ '^0x[0-9a-f]{64}$') and (${table.evidenceHash} is null or ${table.evidenceHash} ~ '^0x[0-9a-f]{64}$')`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_shared_pending",
+      sql`(${table.sharedProjectionAnchorTxHash} is null or ${table.sharedProjectionAnchorTxHash} ~ '^0x[0-9a-f]{64}$') and (not ${table.sharedProjectionPending} or (${table.sharedProjectionAnchorTxHash} = ${table.lastTxHash} and ${table.status} in ('SETTLED_PASS', 'SETTLED_FAIL')))`,
+    ),
+    check(
+      "marketplace_genlayer_assignments_shared_schedule",
+      sql`${table.sharedProjectionAttempts} >= 0 and ${table.sharedProjectionNextRepairAt} >= 0 and (${table.sharedProjectionObservationTicket} is null or ${table.sharedProjectionObservationTicket} > 0)`,
     ),
     check(
       "marketplace_genlayer_assignments_creator",
@@ -1552,6 +1604,11 @@ export const marketplaceGenLayerClaimableBalances = pgTable(
       .default(0),
     lastTransactionHash: text("last_transaction_hash").notNull(),
     snapshotHash: text("snapshot_hash").notNull(),
+    observedAfterTxHash: text("observed_after_tx_hash"),
+    observedAfterFinalizedAt: epochMs("observed_after_finalized_at"),
+    observationTicket: epochMs("observation_ticket"),
+    observationRevision: epochMs("observation_revision").notNull().default(0),
+    observedAt: epochMs("observed_at"),
     projectedAt: epochMs("projected_at").notNull(),
   },
   (table) => [
@@ -1574,6 +1631,14 @@ export const marketplaceGenLayerClaimableBalances = pgTable(
     check(
       "marketplace_genlayer_claimable_balances_tx",
       sql`${table.lastTransactionHash} ~ '^0x[0-9a-f]{64}$' and ${table.snapshotHash} ~ '^0x[0-9a-f]{64}$'`,
+    ),
+    check(
+      "marketplace_genlayer_claimable_observation_tuple",
+      sql`(${table.observationRevision} = 0 and ${table.observedAfterTxHash} is null and ${table.observedAfterFinalizedAt} is null and ${table.observationTicket} is null and ${table.observedAt} is null) or (${table.observationRevision} > 0 and ${table.observedAfterTxHash} is not null and ${table.observedAfterFinalizedAt} is not null and ${table.observationTicket} > 0 and ${table.observedAt} is not null and ${table.observedAt} >= ${table.observedAfterFinalizedAt})`,
+    ),
+    check(
+      "marketplace_genlayer_claimable_observation_hash",
+      sql`${table.observedAfterTxHash} is null or ${table.observedAfterTxHash} ~ '^0x[0-9a-f]{64}$'`,
     ),
   ],
 );

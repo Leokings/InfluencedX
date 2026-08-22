@@ -651,7 +651,8 @@ export function parseCampaignState(value: unknown): GenLayerCampaignState {
     state.maxUndeterminedRetries < 1 ||
     state.maxUndeterminedRetries > 5 ||
     state.retentionSeconds < 60 ||
-    state.retentionSeconds > 604_800
+    state.retentionSeconds > 604_800 ||
+    (state.status !== "OPEN" && (state.availableAtto !== "0" || state.reservedAtto !== "0"))
   ) {
     throw new Error("The campaign state violates contract bounds.");
   }
@@ -986,7 +987,8 @@ export function assertCampaignStateAccounting(state: Pick<
   const fee = BigInt(state.feeAtto);
   if (
     available + reserved + creator + refunded + fee !== budget ||
-    settled !== creator + refunded + fee
+    settled < creator + fee ||
+    settled > creator + fee + refunded
   ) {
     throw new Error("The campaign state violates GEN conservation.");
   }

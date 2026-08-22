@@ -378,7 +378,7 @@ test("0005 marketplace migration is journaled and includes all durable tables", 
     ),
   ) as { entries: Array<{ tag: string }> };
   assert.ok(journal.entries.some((entry) => entry.tag === "0005_influencedx_marketplace"));
-  assert.equal(journal.entries.at(-1)?.tag, "0014_marketplace_transaction_intent_fence");
+  assert.equal(journal.entries.at(-1)?.tag, "0015_resolution_shared_observation");
 });
 
 test("0007 adds a recoverable CAS lease without storing signer material", async () => {

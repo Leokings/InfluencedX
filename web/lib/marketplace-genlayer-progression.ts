@@ -93,12 +93,43 @@ export async function reconcileQueuedGenLayerProgression(input: {
   assignmentId: string;
   requestId: string;
   dependencies?: GenLayerProgressionDependencies;
-}): Promise<Readonly<{ status: "FINALIZED"; operationId: string }>> {
+}): Promise<Readonly<{ status: "FINALIZED" | "STALE"; operationId: string }>> {
   const dependencies = input.dependencies ?? {};
   const existing = await (
     dependencies.findAssignment ?? findGenLayerAssignmentProjectionByAssignmentId
   )(input.assignmentId);
-  if (!existing || existing.resolutionRequestId !== input.requestId) {
+  if (!existing) {
+    throw new GenLayerProgressionPoisonError(
+      "The queue message no longer matches its projected resolution request.",
+    );
+  }
+  const submit = dependencies.submit ?? await defaultSubmitter();
+  const { operation } = await submit({
+    schemaVersion: 1,
+    action: "resolve_assignment",
+    assignmentId: input.assignmentId,
+    requestId: input.requestId,
+  });
+  assertOperatorProjectionBinding(operation, "resolve_assignment");
+  if (operation.status === "FINALIZED") {
+    const complete = completeOrRetry(operation, "resolve_assignment");
+    await (dependencies.reconcileResolution ?? reconcileGenLayerOperatorResolution)({
+      assignmentId: input.assignmentId,
+      requestId: input.requestId,
+      transactionHash: operation.txHash!,
+      finalizedAtMs: Date.parse(operation.finalizedAt!),
+    });
+    return complete;
+  }
+  if (existing.resolutionRequestId !== input.requestId) {
+    if (
+      operation.status === "PRECHECK_FAILED" &&
+      operation.txHash === null &&
+      operation.broadcastStartedAt === null &&
+      operation.submittedAt === null
+    ) {
+      return Object.freeze({ status: "STALE" as const, operationId: operation.operationId });
+    }
     throw new GenLayerProgressionPoisonError(
       "The queue message no longer matches its projected resolution request.",
     );
@@ -108,28 +139,23 @@ export async function reconcileQueuedGenLayerProgression(input: {
     dependencies.readAssignment,
   );
   assertResolutionBinding(existing, authoritative, input.requestId);
-
-  const submit = dependencies.submit ?? await defaultSubmitter();
-  const { operation } = await submit({
-    schemaVersion: 1,
-    action: "resolve_assignment",
-    assignmentId: input.assignmentId,
-    requestId: input.requestId,
-  });
-  const complete = completeOrRetry(operation, "resolve_assignment");
-  await (dependencies.reconcileResolution ?? reconcileGenLayerOperatorResolution)({
-    assignmentId: input.assignmentId,
-    requestId: input.requestId,
-    transactionHash: operation.txHash!,
-    finalizedAtMs: Date.parse(operation.finalizedAt!),
-  });
-  return complete;
+  if (
+    operation.status === "PRECHECK_FAILED" &&
+    authoritative.resolutionRequestId !== input.requestId &&
+    operation.txHash === null &&
+    operation.broadcastStartedAt === null &&
+    operation.submittedAt === null
+  ) {
+    return Object.freeze({ status: "STALE" as const, operationId: operation.operationId });
+  }
+  return completeOrRetry(operation, "resolve_assignment");
 }
 
 /**
  * Repairs queue-publication gaps and advances permissionless V2 deadlines.
- * Candidates are projection-bound; expiry/finalization are re-read from
- * StudioNet before the fixed zero-value operator request is submitted.
+ * Candidates are projection-bound. Deterministic operator records are replayed
+ * before any current-state check; only an unbroadcast precheck failure uses a
+ * fresh StudioNet read to prove that the projected candidate became stale.
  */
 export async function runGenLayerProgressionBatch(options: {
   nowMs?: number;
@@ -204,26 +230,32 @@ async function processExpiryCandidate(
   submit: OperatorSubmit,
   dependencies: GenLayerProgressionDependencies,
 ): Promise<LifecycleResult> {
-  const [assignment, campaign] = await Promise.all([
-    readAssignment(candidate.assignment.assignmentId, dependencies.readAssignment),
-    readCampaign(candidate.campaign.campaignId, dependencies.readCampaign),
-  ]);
-  assertAssignmentCandidateBinding(candidate, assignment, campaign);
-  if (!assignmentExpiryIsDue(assignment, campaign, nowEpoch)) {
-    return Object.freeze({ status: "STALE", operationId: null });
-  }
   const { operation } = await submit({
     schemaVersion: 1,
     action: "expire_assignment",
-    assignmentId: assignment.assignmentId,
+    assignmentId: candidate.assignment.assignmentId,
   });
-  const complete = completeOrRetry(operation, "expire_assignment");
-  await (dependencies.reconcileExpiry ?? reconcileGenLayerOperatorExpiry)({
-    assignmentId: assignment.assignmentId,
-    transactionHash: operation.txHash!,
-    finalizedAtMs: Date.parse(operation.finalizedAt!),
-  });
-  return complete;
+  assertOperatorProjectionBinding(operation, "expire_assignment");
+  if (operation.status === "FINALIZED") {
+    const complete = completeOrRetry(operation, "expire_assignment");
+    await (dependencies.reconcileExpiry ?? reconcileGenLayerOperatorExpiry)({
+      assignmentId: candidate.assignment.assignmentId,
+      transactionHash: operation.txHash!,
+      finalizedAtMs: Date.parse(operation.finalizedAt!),
+    });
+    return complete;
+  }
+  if (operatorPrecheckProvesNoBroadcast(operation)) {
+    const [assignment, campaign] = await Promise.all([
+      readAssignment(candidate.assignment.assignmentId, dependencies.readAssignment),
+      readCampaign(candidate.campaign.campaignId, dependencies.readCampaign),
+    ]);
+    assertAssignmentCandidateBinding(candidate, assignment, campaign);
+    if (!assignmentExpiryIsDue(assignment, campaign, nowEpoch)) {
+      return Object.freeze({ status: "STALE", operationId: operation.operationId });
+    }
+  }
+  return completeOrRetry(operation, "expire_assignment");
 }
 
 async function processFinalizationCandidate(
@@ -232,23 +264,38 @@ async function processFinalizationCandidate(
   submit: OperatorSubmit,
   dependencies: GenLayerProgressionDependencies,
 ): Promise<LifecycleResult> {
-  const campaign = await readCampaign(candidate.campaignId, dependencies.readCampaign);
-  assertCampaignCandidateBinding(candidate, campaign);
-  if (!campaignFinalizationIsDue(campaign, nowEpoch)) {
-    return Object.freeze({ status: "STALE", operationId: null });
-  }
   const { operation } = await submit({
     schemaVersion: 1,
     action: "finalize_campaign",
-    campaignId: campaign.campaignId,
+    campaignId: candidate.campaignId,
   });
-  const complete = completeOrRetry(operation, "finalize_campaign");
-  await (dependencies.reconcileFinalization ?? reconcileGenLayerOperatorCampaignFinalization)({
-    campaignId: campaign.campaignId,
-    transactionHash: operation.txHash!,
-    finalizedAtMs: Date.parse(operation.finalizedAt!),
-  });
-  return complete;
+  assertOperatorProjectionBinding(operation, "finalize_campaign");
+  if (operation.status === "FINALIZED") {
+    const complete = completeOrRetry(operation, "finalize_campaign");
+    await (dependencies.reconcileFinalization ?? reconcileGenLayerOperatorCampaignFinalization)({
+      campaignId: candidate.campaignId,
+      transactionHash: operation.txHash!,
+      finalizedAtMs: Date.parse(operation.finalizedAt!),
+    });
+    return complete;
+  }
+  if (operatorPrecheckProvesNoBroadcast(operation)) {
+    const campaign = await readCampaign(candidate.campaignId, dependencies.readCampaign);
+    assertCampaignCandidateBinding(candidate, campaign);
+    if (!campaignFinalizationIsDue(campaign, nowEpoch)) {
+      return Object.freeze({ status: "STALE", operationId: operation.operationId });
+    }
+  }
+  return completeOrRetry(operation, "finalize_campaign");
+}
+
+function operatorPrecheckProvesNoBroadcast(
+  operation: GenLayerOperatorProjection,
+): boolean {
+  return operation.status === "PRECHECK_FAILED"
+    && operation.txHash === null
+    && operation.broadcastStartedAt === null
+    && operation.submittedAt === null;
 }
 
 export function assignmentExpiryIsDue(
@@ -333,8 +380,7 @@ function assertResolutionBinding(
     projected.creatorIdentityHash !== authoritative.creatorIdentityHash ||
     projected.applicationId !== authoritative.applicationId ||
     projected.agreementHash !== authoritative.agreementHash ||
-    projected.resolutionRequestId !== requestId ||
-    authoritative.resolutionRequestId !== requestId
+    projected.resolutionRequestId !== requestId
   ) {
     throw new GenLayerProgressionPoisonError(
       "The authoritative StudioNet resolution binding changed.",
