@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { QueueClient } from "@vercel/queue";
 import { abi } from "genlayer-js";
 
 import {
@@ -85,7 +86,9 @@ import {
 import {
   MarketplaceMaintenanceDeploymentConfigurationError,
   MarketplaceMaintenanceGenerationConflictError,
+  claimMarketplaceMaintenanceSlot,
   marketplaceMaintenanceDeploymentContext,
+  marketplaceMaintenanceSlotStartMs,
   promoteMarketplaceMaintenanceGeneration,
   type MarketplaceMaintenanceDeploymentContext,
   type MarketplaceMaintenanceGeneration,
@@ -100,6 +103,11 @@ import {
   validateMarketplaceMaintenanceMessage,
 } from "../lib/marketplace-genlayer-maintenance-queue.ts";
 import {
+  MARKETPLACE_MAINTENANCE_RENEW_AFTER_DELIVERY,
+  MarketplaceMaintenanceRedeliveryError,
+  marketplaceMaintenanceHeartbeatNeedsRenewal,
+  marketplaceMaintenanceResultRetryAfterSeconds,
+  marketplaceMaintenanceRetryDirective,
   processMarketplaceMaintenanceHeartbeat,
 } from "../lib/marketplace-genlayer-maintenance-worker.ts";
 import type {
@@ -135,6 +143,9 @@ const creator = "0x5555555555555555555555555555555555555555";
 const maintenanceDeploymentId = "dpl_7Gw5ZMBpQA8h9GF832KGp7nwbuh3";
 const nextMaintenanceDeploymentId = "dpl_8Hx6ANCqRB9i0HG943LHq8oxcvi4";
 const maintenanceProjectId = "prj_Rej9WaMNRbffVm34MfDqa4daCEvZzzE";
+const maintenanceSlot = 6_000_001;
+const maintenanceNowMs =
+  maintenanceSlot * MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS * 1_000;
 const maintenanceContext: MarketplaceMaintenanceDeploymentContext = {
   deploymentId: maintenanceDeploymentId,
   projectId: maintenanceProjectId,
@@ -1670,11 +1681,11 @@ test("finalized execution failures leave reconciliation and permit a new intent 
   }]);
 });
 
-test("maintenance heartbeat binds the DB-authorized deployment generation without operation authority", async () => {
+test("maintenance successor publishes immediately into one exact future slot", async () => {
   const calls: unknown[][] = [];
   const generation = maintenanceGeneration();
   const result = await enqueueMarketplaceMaintenanceHeartbeat(
-    { nowMs: 1_800_000_000_000, delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS },
+    { nowMs: 1_800_000_000_000, slot: "NEXT" },
     {
       readGeneration: async () => generation,
       send: (async (...args: unknown[]) => {
@@ -1704,7 +1715,7 @@ test("maintenance heartbeat binds the DB-authorized deployment generation withou
     {
       idempotencyKey: `influencedx-studionet-maintenance-v2:${maintenanceDeploymentId}:7:${expectedSlot}`,
       retentionSeconds: MARKETPLACE_MAINTENANCE_RETENTION_SECONDS,
-      delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+      delaySeconds: 0,
     },
   ]);
   assert.doesNotMatch(JSON.stringify(calls[0]?.[1]), /operation|method|args|value|wallet|transaction/i);
@@ -1797,11 +1808,17 @@ test("maintenance generation activation is explicit, monotonic, and compare-and-
 
 test("stale maintenance generations acknowledge without work or re-enqueue", async () => {
   let maintenanceCalls = 0;
+  let claimCalls = 0;
   let enqueueCalls = 0;
   const result = await processMarketplaceMaintenanceHeartbeat(
     maintenanceMessage(),
+    maintenanceDelivery(),
     {
       isActive: async () => false,
+      claimSlot: async () => {
+        claimCalls += 1;
+        return "CLAIMED";
+      },
       runMaintenance: async () => {
         maintenanceCalls += 1;
         return {} as never;
@@ -1814,17 +1831,199 @@ test("stale maintenance generations acknowledge without work or re-enqueue", asy
   );
   assert.deepEqual(result, { kind: "STALE" });
   assert.equal(maintenanceCalls, 0);
+  assert.equal(claimCalls, 0);
   assert.equal(enqueueCalls, 0);
 });
 
-test("active maintenance rechecks its generation before extending the heartbeat", async () => {
+test("maintenance slot claims use a fixed clock and concrete queue message", async () => {
+  const calls: unknown[] = [];
+  const result = await claimMarketplaceMaintenanceSlot(
+    {
+      expected: {
+        deploymentId: maintenanceDeploymentId,
+        generation: 7,
+      },
+      messageId: "msg_maintenance_claim_1",
+      nowMs: 1_800_000_123_456,
+    },
+    {
+      context: maintenanceContext,
+      claim: async (input) => {
+        calls.push(input);
+        return "CLAIMED";
+      },
+    },
+  );
+  assert.equal(result, "CLAIMED");
+  assert.deepEqual(calls, [{
+    context: maintenanceContext,
+    expected: {
+      deploymentId: maintenanceDeploymentId,
+      generation: 7,
+    },
+    messageId: "msg_maintenance_claim_1",
+    nowMs: 1_800_000_123_456,
+    slotStartMs: marketplaceMaintenanceSlotStartMs(1_800_000_123_456),
+  }]);
+});
+
+test("competing heartbeat messages self-thin without running duplicate work", async () => {
+  let maintenanceCalls = 0;
+  const duplicate = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery({ messageId: "msg_competing_heartbeat" }),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: async () => "CONFLICT",
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(duplicate, { kind: "DUPLICATE" });
+  assert.equal(maintenanceCalls, 0);
+
+  const leasedDuplicate = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery(),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: async () => "SAME_MESSAGE",
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(leasedDuplicate, { kind: "LEASED_DUPLICATE" });
+  assert.equal(maintenanceCalls, 0);
+});
+
+test("an immediate future-slot candidate parks before any claim or work", async () => {
+  let claimCalls = 0;
+  let maintenanceCalls = 0;
+  const beforeBoundaryMs = maintenanceNowMs - 123_456;
+  const future = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery({ messageId: "msg_future_heartbeat" }),
+    {
+      isActive: async () => true,
+      nowMs: () => beforeBoundaryMs,
+      claimSlot: async () => {
+        claimCalls += 1;
+        return "CLAIMED";
+      },
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(future, {
+    kind: "FUTURE",
+    retryAfterSeconds: 124,
+  });
+  assert.equal(marketplaceMaintenanceResultRetryAfterSeconds(future), 124);
+  assert.equal(claimCalls, 0);
+  assert.equal(maintenanceCalls, 0);
+
+  await assert.rejects(
+    processMarketplaceMaintenanceHeartbeat(
+      maintenanceMessage({ slot: maintenanceSlot + 1 }),
+      maintenanceDelivery({ messageId: "msg_poison_clock" }),
+      {
+        isActive: async () => true,
+        nowMs: () => beforeBoundaryMs,
+        claimSlot: async () => "CLAIMED",
+        runMaintenance: async () => ({} as never),
+      },
+    ),
+    MarketplaceMaintenanceMessageError,
+  );
+});
+
+test("a received successor wins the next slot before the old message acknowledges", async () => {
+  let winnerMessageId: string | null = null;
+  let maintenanceCalls = 0;
+  const claimSlot = async (input: Readonly<{ messageId: string }>) => {
+    if (winnerMessageId === null) {
+      winnerMessageId = input.messageId;
+      return "CLAIMED" as const;
+    }
+    return winnerMessageId === input.messageId
+      ? "SAME_MESSAGE" as const
+      : "CONFLICT" as const;
+  };
+  const successor = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery({ messageId: "msg_received_successor" }),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: claimSlot as never,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(successor, {
+    kind: "PROCESSED",
+    renewalPublished: false,
+  });
+  assert.equal(
+    marketplaceMaintenanceResultRetryAfterSeconds(successor),
+    MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+  );
+
+  const old = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage({ slot: maintenanceSlot - 20 }),
+    maintenanceDelivery({ messageId: "msg_old_heartbeat", deliveryCount: 21 }),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: claimSlot as never,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(old, { kind: "DUPLICATE" });
+  assert.equal(marketplaceMaintenanceResultRetryAfterSeconds(old), null);
+
+  const extraCandidate = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery({ messageId: "msg_extra_successor" }),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: claimSlot as never,
+      runMaintenance: async () => {
+        maintenanceCalls += 1;
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(extraCandidate, { kind: "DUPLICATE" });
+  assert.equal(marketplaceMaintenanceResultRetryAfterSeconds(extraCandidate), null);
+  assert.equal(maintenanceCalls, 1);
+});
+
+test("active maintenance rechecks its generation before continuing the heartbeat", async () => {
   const checks = [true, false];
   let maintenanceCalls = 0;
   let enqueueCalls = 0;
   const superseded = await processMarketplaceMaintenanceHeartbeat(
     maintenanceMessage(),
+    maintenanceDelivery(),
     {
       isActive: async () => checks.shift() ?? false,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: async () => "CLAIMED",
       runMaintenance: async () => {
         maintenanceCalls += 1;
         return {} as never;
@@ -1841,20 +2040,192 @@ test("active maintenance rechecks its generation before extending the heartbeat"
 
   const processed = await processMarketplaceMaintenanceHeartbeat(
     maintenanceMessage(),
+    maintenanceDelivery(),
     {
       isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: async () => "CLAIMED",
       runMaintenance: async () => ({} as never),
       enqueue: async (input) => {
         assert.deepEqual(input, {
-          delaySeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+          nowMs: maintenanceNowMs,
+          slot: "NEXT",
         });
         enqueueCalls += 1;
         return {} as never;
       },
     },
   );
-  assert.deepEqual(processed, { kind: "PROCESSED" });
-  assert.equal(enqueueCalls, 1);
+  assert.deepEqual(processed, {
+    kind: "PROCESSED",
+    renewalPublished: false,
+  });
+  assert.equal(enqueueCalls, 0);
+});
+
+test("heartbeat renewal overlaps old and new messages until delivery is proven", async () => {
+  const enqueueInputs: unknown[] = [];
+  const result = await processMarketplaceMaintenanceHeartbeat(
+    maintenanceMessage(),
+    maintenanceDelivery({
+      deliveryCount: MARKETPLACE_MAINTENANCE_RENEW_AFTER_DELIVERY,
+    }),
+    {
+      isActive: async () => true,
+      nowMs: () => maintenanceNowMs,
+      claimSlot: async () => "CLAIMED",
+      runMaintenance: async () => ({} as never),
+      enqueue: async (input) => {
+        enqueueInputs.push(input);
+        return {} as never;
+      },
+    },
+  );
+  assert.deepEqual(result, {
+    kind: "PROCESSED",
+    renewalPublished: true,
+  });
+  assert.equal(
+    marketplaceMaintenanceResultRetryAfterSeconds(result),
+    MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS,
+  );
+  assert.deepEqual(enqueueInputs, [{
+    nowMs: maintenanceNowMs,
+    slot: "NEXT",
+  }]);
+  assert.equal(
+    marketplaceMaintenanceHeartbeatNeedsRenewal(
+      maintenanceDelivery({
+        deliveryCount: 1,
+        expiresAt: new Date(1_800_000_000_000 + 30 * 60_000),
+      }),
+      1_800_000_000_000,
+    ),
+    true,
+  );
+});
+
+test("heartbeat renewal precedes fallible work and a failed batch keeps the old message retryable", async () => {
+  const events: string[] = [];
+  await assert.rejects(
+    processMarketplaceMaintenanceHeartbeat(
+      maintenanceMessage(),
+      maintenanceDelivery({
+        deliveryCount: MARKETPLACE_MAINTENANCE_RENEW_AFTER_DELIVERY,
+      }),
+      {
+        isActive: async () => true,
+        nowMs: () => maintenanceNowMs,
+        claimSlot: async () => "CLAIMED",
+        enqueue: async (input) => {
+          assert.ok(input);
+          events.push(`renew:${input.slot}:${input.nowMs}`);
+          return {} as never;
+        },
+        runMaintenance: async () => {
+          events.push("work");
+          throw new Error("persistent GenLayer failure");
+        },
+      },
+    ),
+    /persistent GenLayer failure/,
+  );
+  assert.deepEqual(events, [
+    `renew:NEXT:${maintenanceNowMs}`,
+    "work",
+  ]);
+  assert.deepEqual(
+    marketplaceMaintenanceRetryDirective(
+      new Error("persistent GenLayer failure"),
+      { deliveryCount: MARKETPLACE_MAINTENANCE_RENEW_AFTER_DELIVERY },
+    ),
+    { afterSeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS },
+  );
+});
+
+test("maintenance retry directives acknowledge poison and redeliver everything else at five minutes", () => {
+  assert.deepEqual(
+    marketplaceMaintenanceRetryDirective(
+      new MarketplaceMaintenanceMessageError(),
+      { deliveryCount: 1 },
+    ),
+    { acknowledge: true },
+  );
+  assert.deepEqual(
+    marketplaceMaintenanceRetryDirective(
+      new MarketplaceMaintenanceRedeliveryError(124),
+      { deliveryCount: 1 },
+    ),
+    { afterSeconds: 124 },
+  );
+  for (const [error, deliveryCount] of [
+    [new MarketplaceMaintenanceRedeliveryError(), 1],
+    [new Error("temporary database failure"), 1],
+    [new Error("temporary database failure"), 99],
+  ] as const) {
+    assert.deepEqual(
+      marketplaceMaintenanceRetryDirective(error, { deliveryCount }),
+      { afterSeconds: MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS },
+    );
+  }
+});
+
+test("Vercel Queue 0.4 parks a future heartbeat with a 200 and exact visibility change", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ method: string; url: string; body: string | null }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({
+      method: init?.method ?? "GET",
+      url: String(input),
+      body: typeof init?.body === "string" ? init.body : null,
+    });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const client = new QueueClient({
+      region: "iad1",
+      token: "test-queue-token",
+      deploymentId: null,
+      resolveBaseUrl: () => new URL("https://queue.example.test"),
+    });
+    const callback = client.handleCallback(
+      async () => {
+        throw new MarketplaceMaintenanceRedeliveryError(124);
+      },
+      {
+        visibilityTimeoutSeconds: 10 * 60,
+        retry: marketplaceMaintenanceRetryDirective,
+      },
+    );
+    const response = await callback(new Request(
+      "https://app.example.test/api/queues/marketplace-maintenance",
+      {
+        method: "POST",
+        headers: {
+          "ce-type": "com.vercel.queue.v2beta",
+          "ce-vqsqueuename": MARKETPLACE_MAINTENANCE_QUEUE_TOPIC,
+          "ce-vqsconsumergroup": "marketplace-maintenance-test",
+          "ce-vqsmessageid": "msg_callback_heartbeat",
+          "ce-vqsreceipthandle": "receipt_callback_heartbeat",
+          "ce-vqsdeliverycount": "1",
+          "ce-vqscreatedat": new Date(1_800_000_000_000).toISOString(),
+          "ce-vqsexpiresat": new Date(1_800_000_000_000 + 86_400_000).toISOString(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(maintenanceMessage()),
+      },
+    ));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: "success" });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.method, "PATCH");
+    assert.match(requests[0]?.url ?? "", /receipt_callback_heartbeat$/);
+    assert.deepEqual(JSON.parse(requests[0]?.body ?? "{}"), {
+      visibilityTimeoutSeconds: 124,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("journal terminal and projection ordering guards are enforced in SQL", async () => {
@@ -2505,6 +2876,87 @@ test("0010 adds an empty, environment-scoped maintenance generation fence", asyn
   assert.match(seedRoute, /x-influencedx-maintenance-generation/);
   assert.match(seedRoute, /promoteMarketplaceMaintenanceGeneration/);
   assert.doesNotMatch(seedRoute, /runGenLayerMaintenanceBatch/);
+});
+
+test("0016 records only the opaque queue winner needed for safe heartbeat handoff", async () => {
+  const [migration, generation, worker, route, queue, repository, seedRoute] = await Promise.all([
+    readFile(
+      new URL(
+        "../drizzle-postgres/0016_maintenance_heartbeat_lease.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../lib/marketplace-genlayer-maintenance-generation.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../lib/marketplace-genlayer-maintenance-worker.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../app/api/queues/marketplace-maintenance/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../lib/marketplace-genlayer-maintenance-queue.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../lib/marketplace-genlayer-repository.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../app/api/internal/campaign-progression/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ]);
+  assert.match(migration, /ADD COLUMN "heartbeat_message_id" text/);
+  assert.doesNotMatch(migration, /\b(?:INSERT|UPDATE|DELETE)\b/i);
+  assert.match(
+    generation,
+    /heartbeatMessageId: input\.messageId[\s\S]*updatedAt:[\s\S]*greatest/,
+  );
+  assert.match(
+    generation,
+    /state\.heartbeatMessageId === input\.messageId[\s\S]*return "SAME_MESSAGE"/,
+  );
+  assert.match(
+    worker,
+    /MARKETPLACE_MAINTENANCE_RENEW_AFTER_DELIVERY = 20/,
+  );
+  assert.match(
+    worker,
+    /renewalPublished[\s\S]*slot: "NEXT"[\s\S]*kind: "PROCESSED"/,
+  );
+  assert.match(
+    route,
+    /marketplaceMaintenanceResultRetryAfterSeconds[\s\S]*MarketplaceMaintenanceRedeliveryError/,
+  );
+  assert.match(queue, /slot === "NEXT" \? 1 : 0/);
+  assert.match(queue, /delaySeconds: 0/);
+  assert.doesNotMatch(worker, /delaySeconds/);
+  assert.doesNotMatch(repository, /delaySeconds/);
+  assert.doesNotMatch(seedRoute, /delaySeconds/);
 });
 
 test("0011 releases legacy identity locks and journals atomic bundle child IDs", async () => {
@@ -3421,11 +3873,13 @@ test("database verifier requires the complete native projection and activation s
     "activation_prepared_id",
     "activation_tx_hash",
     "activation_confirmed_at",
+    "heartbeat_message_id",
     "farcaster_cast_hash",
     "marketplace_genlayer_assignments_entity_contract_idx",
     "intent_key",
     "marketplace_genlayer_transactions_intent_idx",
   ]) assert.match(verifier, new RegExp(required));
+  assert.match(verifier, /schemaVersion: 6/);
   assert.match(verifier, /genLayerNativeReady: true/);
   assert.doesNotMatch(verifier, /column_count !== 68|base_relay_column_count|marketplace_relay_column_count/);
 });
@@ -3551,12 +4005,35 @@ function maintenanceGeneration(
   });
 }
 
-function maintenanceMessage() {
+function maintenanceMessage(
+  overrides: Partial<{
+    schemaVersion: 2;
+    deploymentId: string;
+    generation: number;
+    slot: number;
+  }> = {},
+) {
   return Object.freeze({
     schemaVersion: 2 as const,
     deploymentId: maintenanceDeploymentId,
     generation: 7,
-    slot: 6_000_001,
+    slot: maintenanceSlot,
+    ...overrides,
+  });
+}
+
+function maintenanceDelivery(
+  overrides: Partial<{
+    messageId: string;
+    deliveryCount: number;
+    expiresAt: Date;
+  }> = {},
+) {
+  return Object.freeze({
+    messageId: "msg_maintenance_current",
+    deliveryCount: 1,
+    expiresAt: new Date(1_800_000_000_000 + 7 * 24 * 60 * 60_000),
+    ...overrides,
   });
 }
 

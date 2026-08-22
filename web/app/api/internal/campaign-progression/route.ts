@@ -73,9 +73,7 @@ async function handleMaintenanceSeed(request: Request, promote: boolean) {
           { context },
         )
       : { generation: current!, promoted: false };
-    const heartbeat = await enqueueMarketplaceMaintenanceHeartbeat({
-      delaySeconds: 0,
-    });
+    const heartbeat = await enqueueMarketplaceMaintenanceHeartbeat();
     return Response.json(
       {
         activation: {

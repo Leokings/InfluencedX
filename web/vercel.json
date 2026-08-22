@@ -18,7 +18,7 @@
         {
           "type": "queue/v2beta",
           "topic": "influencedx-studionet-maintenance-v2",
-          "retryAfterSeconds": 60,
+          "retryAfterSeconds": 300,
           "initialDelaySeconds": 0
         }
       ]

@@ -83,6 +83,7 @@ const [state] = await sql.query(`
         ('marketplace_genlayer_withdrawals', 'recapitalized_atto'),
         ('marketplace_genlayer_maintenance_generations', 'active_deployment_id'),
         ('marketplace_genlayer_maintenance_generations', 'generation'),
+        ('marketplace_genlayer_maintenance_generations', 'heartbeat_message_id'),
         ('marketplace_genlayer_maintenance_generations', 'vercel_project_id'),
         ('marketplace_genlayer_maintenance_generations', 'vercel_environment')
       ) as required(table_name, column_name)
@@ -204,7 +205,7 @@ process.stdout.write(JSON.stringify({
   ok: true,
   network: "studionet",
   chainId: 61_999,
-  schemaVersion: 5,
+  schemaVersion: 6,
   verificationColumns: state.verification_column_count,
   verificationRequests: requestState.request_count,
   campaigns: campaignState.campaign_count,

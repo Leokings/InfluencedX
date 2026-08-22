@@ -1,5 +1,6 @@
 import { DuplicateMessageError, send } from "@vercel/queue";
 import {
+  MARKETPLACE_MAINTENANCE_SLOT_DURATION_MS,
   readCurrentMarketplaceMaintenanceGeneration,
   type MarketplaceMaintenanceGeneration,
 } from "./marketplace-genlayer-maintenance-generation.ts";
@@ -7,7 +8,8 @@ import {
 export const MARKETPLACE_MAINTENANCE_QUEUE_TOPIC =
   "influencedx-studionet-maintenance-v2";
 export const MARKETPLACE_MAINTENANCE_QUEUE_SCHEMA_VERSION = 2;
-export const MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS = 5 * 60;
+export const MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS =
+  MARKETPLACE_MAINTENANCE_SLOT_DURATION_MS / 1_000;
 export const MARKETPLACE_MAINTENANCE_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 
 export type MarketplaceMaintenanceMessage = Readonly<{
@@ -28,7 +30,7 @@ type QueueDependencies = Readonly<{
  * binding is loaded from fenced Neon journals by the consumer.
  */
 export async function enqueueMarketplaceMaintenanceHeartbeat(
-  input: { nowMs?: number; delaySeconds?: number } = {},
+  input: { nowMs?: number; slot?: "CURRENT" | "NEXT" } = {},
   dependencies: QueueDependencies = {},
 ): Promise<
   Readonly<{
@@ -39,21 +41,16 @@ export async function enqueueMarketplaceMaintenanceHeartbeat(
   }>
 > {
   const nowMs = input.nowMs ?? Date.now();
-  const delaySeconds = input.delaySeconds ?? 0;
   if (!Number.isSafeInteger(nowMs) || nowMs <= 0) {
     throw new Error("The marketplace maintenance clock is invalid.");
   }
-  if (
-    !Number.isSafeInteger(delaySeconds) ||
-    delaySeconds < 0 ||
-    delaySeconds > MARKETPLACE_MAINTENANCE_RETENTION_SECONDS
-  ) {
-    throw new Error("The marketplace maintenance delay is invalid.");
+  if (input.slot !== undefined && !["CURRENT", "NEXT"].includes(input.slot)) {
+    throw new Error("The marketplace maintenance slot is invalid.");
   }
-  const slot = Math.floor(
-    (nowMs + delaySeconds * 1_000) /
-      (MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS * 1_000),
+  const currentSlot = Math.floor(
+    nowMs / (MARKETPLACE_MAINTENANCE_INTERVAL_SECONDS * 1_000),
   );
+  const slot = currentSlot + (input.slot === "NEXT" ? 1 : 0);
   const activeGeneration = await (
     dependencies.readGeneration ?? readCurrentMarketplaceMaintenanceGeneration
   )();
@@ -73,7 +70,7 @@ export async function enqueueMarketplaceMaintenanceHeartbeat(
       {
         idempotencyKey: `influencedx-studionet-maintenance-v2:${message.deploymentId}:${message.generation}:${slot}`,
         retentionSeconds: MARKETPLACE_MAINTENANCE_RETENTION_SECONDS,
-        delaySeconds,
+        delaySeconds: 0,
       },
     );
     return Object.freeze({

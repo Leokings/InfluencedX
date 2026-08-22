@@ -1726,6 +1726,7 @@ export const marketplaceGenLayerMaintenanceGenerations = pgTable(
     generation: epochMs("generation").notNull(),
     activatedAt: epochMs("activated_at").notNull(),
     updatedAt: epochMs("updated_at").notNull(),
+    heartbeatMessageId: text("heartbeat_message_id"),
   },
   (table) => [
     primaryKey({

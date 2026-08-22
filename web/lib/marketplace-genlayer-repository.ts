@@ -2716,7 +2716,6 @@ async function seedGenLayerJournalMaintenance(nowMs: number): Promise<void> {
   // user's exact transaction hash; the daily bootstrap will repair the gap.
   await enqueueMarketplaceMaintenanceHeartbeat({
     nowMs,
-    delaySeconds: 60,
   }).catch(() => undefined);
 }
 

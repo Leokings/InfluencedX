@@ -20,6 +20,13 @@ export type MarketplaceMaintenanceGeneration = Readonly<{
   updatedAt: number;
 }>;
 
+export const MARKETPLACE_MAINTENANCE_SLOT_DURATION_MS = 5 * 60 * 1_000;
+
+export type MarketplaceMaintenanceSlotClaim =
+  | "CLAIMED"
+  | "SAME_MESSAGE"
+  | "CONFLICT";
+
 type MaintenanceGenerationRow = InferSelectModel<
   typeof marketplaceGenLayerMaintenanceGenerations
 >;
@@ -215,6 +222,7 @@ const databaseMaintenanceGenerationStore: MarketplaceMaintenanceGenerationStore 
           generation: 1,
           activatedAt: nowMs,
           updatedAt: nowMs,
+          heartbeatMessageId: null,
         })
         .onConflictDoNothing()
         .returning();
@@ -230,6 +238,7 @@ const databaseMaintenanceGenerationStore: MarketplaceMaintenanceGenerationStore 
           generation: sql`${marketplaceGenLayerMaintenanceGenerations.generation} + 1`,
           activatedAt: nowMs,
           updatedAt: nowMs,
+          heartbeatMessageId: null,
         })
         .where(
           and(
@@ -249,6 +258,59 @@ const databaseMaintenanceGenerationStore: MarketplaceMaintenanceGenerationStore 
     },
   });
 
+/**
+ * Claims one wall-clock maintenance slot for one concrete queue message.
+ *
+ * The message ID is persisted so a duplicate delivery of the same leased
+ * message is retried instead of acknowledged. A different message that loses
+ * the slot can be acknowledged safely: another durable message already owns
+ * the heartbeat for this generation and slot.
+ */
+export async function claimMarketplaceMaintenanceSlot(
+  input: Readonly<{
+    expected: Readonly<{ deploymentId: string; generation: number }>;
+    messageId: string;
+    nowMs?: number;
+  }>,
+  dependencies: {
+    context?: MarketplaceMaintenanceDeploymentContext;
+    claim?: (input: Readonly<{
+      context: MarketplaceMaintenanceDeploymentContext;
+      expected: Readonly<{ deploymentId: string; generation: number }>;
+      messageId: string;
+      nowMs: number;
+      slotStartMs: number;
+    }>) => Promise<MarketplaceMaintenanceSlotClaim>;
+  } = {},
+): Promise<MarketplaceMaintenanceSlotClaim> {
+  validateGenerationClock(input.expected);
+  validateQueueMessageId(input.messageId);
+  const nowMs = input.nowMs ?? Date.now();
+  assertEpoch(nowMs);
+  const context = dependencies.context ?? marketplaceMaintenanceDeploymentContext();
+  validateContext(context);
+  if (input.expected.deploymentId !== context.deploymentId) return "CONFLICT";
+  const result = await (dependencies.claim ?? claimDatabaseMaintenanceSlot)({
+    context,
+    expected: input.expected,
+    messageId: input.messageId,
+    nowMs,
+    slotStartMs: marketplaceMaintenanceSlotStartMs(nowMs),
+  });
+  if (!["CLAIMED", "SAME_MESSAGE", "CONFLICT"].includes(result)) {
+    throw new MarketplaceMaintenanceGenerationStateError();
+  }
+  return result;
+}
+
+export function marketplaceMaintenanceSlotStartMs(nowMs: number): number {
+  assertEpoch(nowMs);
+  return (
+    Math.floor(nowMs / MARKETPLACE_MAINTENANCE_SLOT_DURATION_MS) *
+    MARKETPLACE_MAINTENANCE_SLOT_DURATION_MS
+  );
+}
+
 async function readDatabaseMaintenanceGeneration(
   context: MarketplaceMaintenanceDeploymentContext,
 ): Promise<MarketplaceMaintenanceGeneration | null> {
@@ -261,6 +323,78 @@ async function readDatabaseMaintenanceGeneration(
     throw new MarketplaceMaintenanceGenerationStateError();
   }
   return rows[0] ? generationFromRow(rows[0]) : null;
+}
+
+async function claimDatabaseMaintenanceSlot(input: Readonly<{
+  context: MarketplaceMaintenanceDeploymentContext;
+  expected: Readonly<{ deploymentId: string; generation: number }>;
+  messageId: string;
+  nowMs: number;
+  slotStartMs: number;
+}>): Promise<MarketplaceMaintenanceSlotClaim> {
+  const scope = databaseScope(input.context);
+  const rows = await getDb()
+    .update(marketplaceGenLayerMaintenanceGenerations)
+    .set({
+      heartbeatMessageId: input.messageId,
+      updatedAt: sql`greatest(
+        ${input.nowMs},
+        ${marketplaceGenLayerMaintenanceGenerations.activatedAt} + 1
+      )`,
+    })
+    .where(
+      and(
+        scopeWhere(scope),
+        eq(
+          marketplaceGenLayerMaintenanceGenerations.activeDeploymentId,
+          input.expected.deploymentId,
+        ),
+        eq(
+          marketplaceGenLayerMaintenanceGenerations.generation,
+          input.expected.generation,
+        ),
+        sql`(
+          ${marketplaceGenLayerMaintenanceGenerations.updatedAt} =
+            ${marketplaceGenLayerMaintenanceGenerations.activatedAt}
+          or ${marketplaceGenLayerMaintenanceGenerations.updatedAt} <
+            ${input.slotStartMs}
+        )`,
+      ),
+    )
+    .returning({
+      heartbeatMessageId:
+        marketplaceGenLayerMaintenanceGenerations.heartbeatMessageId,
+    });
+  if (rows.length > 1) {
+    throw new MarketplaceMaintenanceGenerationStateError();
+  }
+  if (rows.length === 1) return "CLAIMED";
+
+  const observed = await getDb()
+    .select({
+      activeDeploymentId:
+        marketplaceGenLayerMaintenanceGenerations.activeDeploymentId,
+      generation: marketplaceGenLayerMaintenanceGenerations.generation,
+      updatedAt: marketplaceGenLayerMaintenanceGenerations.updatedAt,
+      heartbeatMessageId:
+        marketplaceGenLayerMaintenanceGenerations.heartbeatMessageId,
+    })
+    .from(marketplaceGenLayerMaintenanceGenerations)
+    .where(scopeWhere(scope))
+    .limit(2);
+  if (observed.length > 1) {
+    throw new MarketplaceMaintenanceGenerationStateError();
+  }
+  const state = observed[0];
+  if (
+    state?.activeDeploymentId === input.expected.deploymentId &&
+    state.generation === input.expected.generation &&
+    state.updatedAt >= input.slotStartMs &&
+    state.heartbeatMessageId === input.messageId
+  ) {
+    return "SAME_MESSAGE";
+  }
+  return "CONFLICT";
 }
 
 function databaseScope(context: MarketplaceMaintenanceDeploymentContext) {
@@ -333,6 +467,24 @@ function validateGenerationClock(
     !deploymentIdPattern.test(generation.deploymentId) ||
     !Number.isSafeInteger(generation.generation) ||
     generation.generation <= 0
+  ) {
+    throw new MarketplaceMaintenanceGenerationStateError();
+  }
+}
+
+function validateQueueMessageId(messageId: string): void {
+  const containsControlCharacter =
+    typeof messageId === "string" &&
+    Array.from(messageId).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 31 || codePoint === 127;
+    });
+  if (
+    typeof messageId !== "string" ||
+    messageId.length === 0 ||
+    messageId.length > 512 ||
+    messageId.trim() !== messageId ||
+    containsControlCharacter
   ) {
     throw new MarketplaceMaintenanceGenerationStateError();
   }

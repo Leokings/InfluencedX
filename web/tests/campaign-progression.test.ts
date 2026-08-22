@@ -377,7 +377,7 @@ test("queue retries are bounded and Hobby uses a queue heartbeat with a daily bo
     [{
       type: "queue/v2beta",
       topic: MARKETPLACE_MAINTENANCE_QUEUE_TOPIC,
-      retryAfterSeconds: 60,
+      retryAfterSeconds: 300,
       initialDelaySeconds: 0,
     }],
   );

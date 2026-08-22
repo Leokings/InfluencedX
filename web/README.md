@@ -113,13 +113,16 @@ into a failed identity or campaign.
 
 ## Native marketplace projection
 
-Apply all migrations through
-[`0012_marketplace_contract_cutover.sql`](drizzle-postgres/0012_marketplace_contract_cutover.sql)
-before enabling V2 mutations. It expires unfinished identity and transaction
-work scoped to the retired marketplace and clears only the two retired
-marketplace namespaces that held maintenance-generation authority, without
-deleting audit evidence. `npm run
-db:verify` must pass afterward.
+Apply every migration through
+[`0016_maintenance_heartbeat_lease.sql`](drizzle-postgres/0016_maintenance_heartbeat_lease.sql)
+before deploying code that can activate the maintenance heartbeat or enabling
+V2 mutations. Migration `0012` expires unfinished identity and transaction work
+scoped to the retired marketplace and clears only the two retired marketplace
+namespaces that held maintenance-generation authority, without deleting audit
+evidence. Migration `0016` adds the durable queue-message winner required for a
+safe heartbeat handoff. This is a migration-first rollout: `npm run db:verify`
+must pass and report `"schemaVersion":6` before the new web deployment is
+activated.
 
 Native projection records are scoped by network, chain ID, contract address,
 protocol/storage version, and onchain ID. Private pitches are stored only for
@@ -151,9 +154,16 @@ is fail-closed unless all operator configuration is valid and
 The five-minute maintenance heartbeat uses
 `influencedx-studionet-maintenance-v2`. Each message is bound to the runtime's
 `VERCEL_DEPLOYMENT_ID` and to a monotonic generation held in Neon. Preview and
-Production are separate generation scopes. Consumers prove the active database
-row before claiming maintenance work and again before rescheduling; stale
-deployments acknowledge their messages without extending their loop.
+Production are separate generation scopes. A message first claims one fixed
+five-minute database slot, so concurrent/manual reseeds self-thin to a single
+live message without acknowledging a duplicate delivery of that same message.
+The winner uses queue visibility redelivery for the cadence. Before Vercel's
+forced retry-backoff range, it publishes an immediate next-slot successor. The
+successor parks itself with a visibility change until that slot boundary, while
+the old message stays retryable until the distinct successor is actually
+delivered and wins a slot. Consumers prove the active database row before work
+and after the bounded batch; stale and superseded deployments acknowledge
+without extending their loop.
 
 Migrations `0010` and `0012` intentionally leave the fresh contract namespace
 without an active generation. Never reuse a generation belonging to a retired
@@ -207,15 +217,24 @@ independent `CRON_SECRET` and alert if cleanup reports a capped backlog.
 
 Before enabling V2 web mutations:
 
-1. lint, unit, optimized build, rendered smoke, database migration, and
-   `db:verify` all pass on the exact commit;
-2. the live contract source/schema/config/receipt match the manifest;
-3. CSP and browser bundles expose no server secret or disallowed chain origin;
-4. operator and reconciler are separately deployed, disabled-first, and bound
+1. lint, unit, optimized build, and rendered smoke pass on the exact commit;
+2. migration `0016` is applied before the web deployment and `db:verify`
+   reports `"schemaVersion":6`;
+3. after deployment, activate only the next monotonic maintenance generation,
+   then run a controlled current-slot and next-slot reseed canary; observe at
+   least two five-minute redeliveries, one distinct `heartbeat_message_id`
+   winner per slot, stale/duplicate acknowledgement, and zero queue-handler
+   5xx responses before switching the public alias;
+4. alert when the active generation's `updated_at` fails to advance for two
+   expected slots, and keep an independent authenticated reseed runbook for a
+   queue outage or seven-day retention expiry;
+5. the live contract source/schema/config/receipt match the manifest;
+6. CSP and browser bundles expose no server secret or disallowed chain origin;
+7. operator and reconciler are separately deployed, disabled-first, and bound
    to the exact web workload identity;
-5. wrong wallet, extra request fields, wrong call/value, replay, terminated
+8. wrong wallet, extra request fields, wrong call/value, replay, terminated
    receipt, and service-auth failures all fail closed; and
-6. the complete X, Farcaster, native campaign, and confirmed withdrawal E2E is
+9. the complete X, Farcaster, native campaign, and confirmed withdrawal E2E is
    recorded in [`docs/TEST-REPORT.md`](../docs/TEST-REPORT.md).
 
 ## Historical code boundary
