@@ -218,6 +218,21 @@ export class OperationService {
         if (!envelope) throw new Error("OPERATION_ENVELOPE_MISSING");
         const finalState = await this.client.readState(envelope, true);
         assertPostState(envelope, record.preState, finalState);
+        if (
+          envelope.action === "resolve_assignment" &&
+          finalState.assignment?.status === "RESOLVING"
+        ) {
+          await this.repository.recordPoll(record.operationId, {
+            status: "POLLING",
+            lifecycleStatus,
+            executionResult,
+            pollAttempts: attempt,
+            lastPolledAt: this.now(),
+            errorCode: "RESOLUTION_CHILD_PENDING",
+          });
+          await this.queue.poll(record.operationId, attempt);
+          return;
+        }
         await this.repository.recordPoll(record.operationId, {
           status: "FINALIZED",
           lifecycleStatus,

@@ -120,6 +120,13 @@
       "when": 1787443200000,
       "tag": "0016_maintenance_heartbeat_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788528713918,
+      "tag": "0017_bounded_resolution_state",
+      "breakpoints": true
     }
   ]
 }

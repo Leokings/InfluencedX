@@ -134,6 +134,24 @@ export function resolvePassState(): StateSnapshot {
   };
 }
 
+export function resolvePendingState(): StateSnapshot {
+  return {
+    action: "resolve_assignment",
+    assignment: assignment({
+      status: "RESOLVING",
+      resolution_request_id: REQUEST_ID,
+      resolution_eligible_at_epoch: NOW_EPOCH - 1,
+      resolution_attempts: 1,
+      last_resolution_at_epoch: NOW_EPOCH,
+      resolution_pending: true,
+      resolution_pending_request_id: REQUEST_ID,
+      resolution_pending_round: 0,
+      resolution_pending_started_at_epoch: NOW_EPOCH,
+    }),
+    campaign: campaign(),
+  };
+}
+
 export function expirePreState(): StateSnapshot {
   return {
     action: "expire_assignment",
@@ -216,6 +234,10 @@ function assignment(overrides: Record<string, unknown> = {}): Record<string, unk
     resolution_attempts: 0,
     resolution_eligible_at_epoch: NOW_EPOCH - 1,
     last_resolution_at_epoch: 0,
+    resolution_pending: false,
+    resolution_pending_request_id: "",
+    resolution_pending_round: 0,
+    resolution_pending_started_at_epoch: 0,
     outcome: "",
     creator_credit_atto: "0",
     brand_credit_atto: "0",

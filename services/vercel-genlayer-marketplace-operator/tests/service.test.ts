@@ -15,6 +15,7 @@ import {
   MemoryRepository,
   NOW_EPOCH,
   resolveEnvelope,
+  resolvePendingState,
   resolvePassState,
   resolvePreState,
   SIGNER,
@@ -184,6 +185,33 @@ test("FINALIZED is accepted only with nested StudioNet success, return status, a
   assert.equal(record?.status, "FINALIZED");
   assert.equal(record?.executionResult, "FINISHED_WITH_RETURN");
   assert.ok(record?.postStateFingerprint);
+});
+
+test("a finalized resolution parent is polled until its ordered child messages settle", async () => {
+  const { repository, ingress, service, client, queue } = setup();
+  const envelope = resolveEnvelope();
+  await ingress.accept(envelope);
+  await service.process(message(envelope.operationId), 1);
+  client.receipt = finalizedReceipt(envelope);
+  client.finalState = resolvePendingState();
+
+  await service.process(message(envelope.operationId), 2);
+  const pending = repository.records.get(envelope.operationId);
+  assert.equal(pending?.status, "POLLING");
+  assert.equal(pending?.errorCode, "RESOLUTION_CHILD_PENDING");
+  assert.deepEqual(queue.polls, [
+    { operationId: envelope.operationId, attempt: 0 },
+    { operationId: envelope.operationId, attempt: 1 },
+  ]);
+  assert.equal(client.submitCalls, 1);
+
+  client.finalState = resolvePassState();
+  await service.process(message(envelope.operationId), 3);
+  const settled = repository.records.get(envelope.operationId);
+  assert.equal(settled?.status, "FINALIZED");
+  assert.equal(settled?.errorCode, null);
+  assert.ok(settled?.postStateFingerprint);
+  assert.equal(client.submitCalls, 1);
 });
 
 test("absent or mismatched nested leader execution fails closed", async () => {

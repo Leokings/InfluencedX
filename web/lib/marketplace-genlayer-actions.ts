@@ -812,6 +812,7 @@ export async function confirmGenLayerResolution(input: ActionInput) {
   const campaign = parseCampaignState(await readMarketplaceState("get_campaign", [context.campaign.campaignId]));
   assertOperatorAssignmentBinding(context.assignment, assignment, campaign);
   assertOperatorCampaignBinding(context.campaign, campaign);
+  deferPendingResolution(context.assignment, assignment, preparedRequestId);
   const assignmentSnapshotHash = canonicalHash(assignment);
   if (
     context.assignment.resolutionRequestId !== preparedRequestId ||
@@ -918,6 +919,7 @@ export async function reconcileGenLayerOperatorResolution(input: {
   ) stateMismatch();
   assertOperatorAssignmentBinding(existing, assignment, campaign);
   assertOperatorCampaignBinding(context.campaign, campaign);
+  deferPendingResolution(existing, assignment, requestId);
   const finalizedAtMs = finalized.finalizedAt * 1_000;
   const assignmentSnapshotHash = canonicalHash(assignment);
   if (!genLayerResolutionAssignmentPostcondition(
@@ -1010,6 +1012,51 @@ export function genLayerResolutionAssignmentPostcondition(
       && assignment.feeAtto === "0";
   }
   return false;
+}
+
+export function genLayerResolutionPendingPostcondition(
+  previous: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+): boolean {
+  return assignment.status === "RESOLVING"
+    && assignment.resolutionPending === true
+    && assignment.resolutionPendingRequestId === previous.resolutionRequestId
+    && assignment.resolutionPendingRound === previous.resolutionRound
+    && assignment.resolutionPendingStartedAtEpoch === assignment.lastResolutionAtEpoch
+    && assignment.postId === previous.postId
+    && assignment.submissionHash === previous.submissionHash
+    && assignment.submittedAtEpoch === previous.submittedAtEpoch
+    && assignment.resolutionAttempts === previous.resolutionAttempts + 1
+    && assignment.lastResolutionAtEpoch > previous.lastResolutionAtEpoch
+    && assignment.resolutionRequestId === previous.resolutionRequestId
+    && assignment.resolutionRound === previous.resolutionRound
+    && assignment.resolutionEligibleAtEpoch === previous.resolutionEligibleAtEpoch
+    && assignment.outcome === previous.outcome
+    && assignment.evidenceHash === previous.evidenceHash
+    && assignment.reasoning === previous.reasoning
+    && canonicalHash(assignment.resolutionChecks) === canonicalHash(previous.resolutionChecks)
+    && assignment.creatorCreditAtto === previous.creatorCreditAtto
+    && assignment.brandCreditAtto === previous.brandCreditAtto
+    && assignment.feeAtto === previous.feeAtto
+    && assignment.settledAtEpoch === previous.settledAtEpoch
+    && assignment.closedAtEpoch === previous.closedAtEpoch;
+}
+
+function deferPendingResolution(
+  previous: GenLayerAssignmentProjection,
+  assignment: GenLayerAssignmentState,
+  requestId: string,
+): void {
+  if (assignment.status !== "RESOLVING") return;
+  if (
+    previous.resolutionRequestId !== requestId ||
+    !genLayerResolutionPendingPostcondition(previous, assignment)
+  ) stateMismatch();
+  throw problem(
+    202,
+    "GENLAYER_RESOLUTION_CHILD_PENDING",
+    "The bounded resolution child transactions are still finalizing.",
+  );
 }
 
 export function genLayerResolutionCampaignPostcondition(

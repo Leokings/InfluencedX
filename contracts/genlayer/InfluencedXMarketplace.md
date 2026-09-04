@@ -1,4 +1,4 @@
-# InfluencedX GenLayer marketplace V2
+# InfluencedX GenLayer marketplace V3
 
 `InfluencedXMarketplace.py` is the authoritative GenLayer-only marketplace and
 escrow state machine. `AdProofXResolver.py` remains in the repository only as a
@@ -69,11 +69,38 @@ rule, three deadlines, retention, and retry limit. Public `compute_*` methods
 are the canonical client-side source for all IDs.
 
 Each terminal resolution also stores a deterministic
-`influencedx-resolution-result-v2` evidence hash. It binds the request,
+`influencedx-resolution-result-v3` evidence hash. It binds the request,
 assignment, campaign, frozen terms, agreement, submission, post, creator
-handle, stable identity, content source, round, outcome, and every deterministic/semantic check. Validators
-compare this hash directly; human-readable reasoning is fixed product copy and
-cannot be supplied by a leader.
+handle, stable identity, content source, round, outcome, whether semantic
+evaluation ran, and every deterministic/semantic check. Validators compare
+this hash directly; human-readable reasoning is fixed product copy and cannot
+be supplied by a leader.
+
+## Bounded resolution delivery
+
+`resolve_assignment` is now the deterministic, onchain admission step. It
+increments `resolution_attempts`, moves the assignment to `RESOLVING`, stores
+the exact pending request and round, and emits two ordered finalized self
+messages:
+
+1. `execute_resolution_attempt` evaluates the frozen public evidence and
+   records `PASS`, `FAIL`, or retryable `UNDETERMINED`.
+2. `record_resolution_failure` is an idempotent fallback. It records
+   `UNDETERMINED` only when the execution child did not advance the pending
+   attempt, including when validator disagreement prevents that child from
+   committing.
+
+Deterministic checks are completed before semantic evaluation. If they already
+prove the submission cannot pass, the semantic model is not called. Model
+errors and malformed semantic results are recorded as retryable
+`UNDETERMINED`, rather than reverting the attempt.
+
+Finalized same-recipient transactions are ordered, so the fallback observes
+the execution child's committed state. If message delivery itself is
+interrupted, anyone can call `recover_resolution_failure` after the 15-minute
+recovery delay. A pending attempt does not move escrow; only a terminal child
+settles the reservation, while `UNDETERMINED` remains in the existing bounded
+retry and refund flow.
 
 ## Deployment and administration
 

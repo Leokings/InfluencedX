@@ -127,6 +127,24 @@ export async function broadcastMarketplaceTransaction(
   // hash continue to confirmation even when the contract intentionally rolls
   // back, so the journal cannot remain stuck in recovery forever.
   assertMarketplaceTransactionConsensusFinality(receipt);
+  if (plan.functionName === "resolve_assignment") {
+    let triggered: readonly `0x${string}`[] = [];
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      triggered = await readClient.getTriggeredTransactionIds({ hash: hash as never });
+      if (triggered.length === 2) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+    }
+    if (triggered.length !== 2) {
+      throw new Error("The finalized resolution did not emit its execution and fallback transactions.");
+    }
+    const fallbackReceipt = await readClient.waitForTransactionReceipt({
+      hash: triggered[1] as never,
+      status: types.TransactionStatus.FINALIZED,
+      interval: 3_000,
+      retries: 120,
+    });
+    assertMarketplaceTransactionFinality(fallbackReceipt);
+  }
   options.onStage?.("finalized");
   return hash;
 }

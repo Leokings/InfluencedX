@@ -472,6 +472,20 @@ def resolve_at(direct_vm, contract, assignment_id, request_id, iso="2027-01-01T0
     direct_vm.warp(iso)
     direct_vm.value = 0
     contract.resolve_assignment(assignment_id, request_id)
+    pending = contract.get_assignment(assignment_id)
+    with direct_vm.prank(as_address(direct_vm._contract_address)):
+        contract.execute_resolution_attempt(
+            assignment_id,
+            request_id,
+            pending["resolution_pending_round"],
+            pending["resolution_attempts"],
+        )
+        contract.record_resolution_failure(
+            assignment_id,
+            request_id,
+            pending["resolution_pending_round"],
+            pending["resolution_attempts"],
+        )
 
 
 def assert_global_invariant(contract):
@@ -513,8 +527,8 @@ def test_contract_has_pinned_runner_and_gen_native_config(direct_vm, direct_depl
     assert "def activate_identity_bundle(" in source
     contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
     config = contract.get_config()
-    assert config["protocol_version"] == "INFLUENCEDX_MARKETPLACE_V2"
-    assert config["storage_schema_version"] == 2
+    assert config["protocol_version"] == "INFLUENCEDX_MARKETPLACE_V3"
+    assert config["storage_schema_version"] == 3
     assert config["upgrade_delay_seconds"] == 7 * 24 * 60 * 60
     assert config["native_token_symbol"] == "GEN"
     assert config["native_token_decimals"] == 18
@@ -1183,10 +1197,11 @@ def test_pass_settlement_credits_creator_and_fee_without_losing_liability(direct
         "required_checks": [True, True],
         "forbidden_checks": [False],
         "disclosure_present": True,
+        "semantic_evaluated": True,
         "semantic_pass": True,
     }
     expected_evidence = {
-            "protocol": "influencedx-resolution-result-v2",
+            "protocol": "influencedx-resolution-result-v3",
         "request_id": request_id,
         "assignment_id": assignment_id,
         "campaign_id": campaign_id,
@@ -1223,7 +1238,7 @@ def test_pass_settlement_credits_creator_and_fee_without_losing_liability(direct
     assert_global_invariant(contract)
 
 
-def test_resolution_rejects_non_boolean_semantic_output(
+def test_resolution_records_non_boolean_semantic_output_as_undetermined(
     direct_vm,
     direct_deploy,
     direct_owner,
@@ -1234,9 +1249,166 @@ def test_resolution_rejects_non_boolean_semantic_output(
     _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
     request_id = submit(direct_vm, contract, assignment_id, direct_bob)
     mock_resolution(direct_vm, semantic_pass="false")
-    with direct_vm.expect_revert("must be a JSON boolean"):
-        resolve_at(direct_vm, contract, assignment_id, request_id)
-    assert contract.get_assignment(assignment_id)["status"] == "SUBMITTED"
+    resolve_at(direct_vm, contract, assignment_id, request_id)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "UNDETERMINED"
+    assert assignment["resolution_attempts"] == 1
+    assert assignment["resolution_checks"]["semantic_evaluated"] is True
+    assert assignment["reasoning"] == (
+        "Semantic evaluation returned an invalid decision; retry required"
+    )
+
+
+def test_resolution_parent_commits_attempt_and_two_ordered_finalized_children(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    messages = []
+
+    def capture_emit(_vm, request):
+        if "PostMessage" in request:
+            messages.append(request["PostMessage"])
+            return {"ok": None}
+        return None
+
+    direct_vm._gl_call_hook = capture_emit
+    direct_vm.warp("2027-01-01T00:01:03Z")
+    contract.resolve_assignment(assignment_id, request_id)
+
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "RESOLVING"
+    assert assignment["resolution_attempts"] == 1
+    assert assignment["resolution_pending"] is True
+    assert assignment["resolution_pending_request_id"] == request_id
+    assert len(messages) == 2
+    assert [message["calldata"]["method"] for message in messages] == [
+        "execute_resolution_attempt",
+        "record_resolution_failure",
+    ]
+    assert all(message["on"] == "finalized" for message in messages)
+
+
+def test_only_finalized_self_message_can_execute_resolution(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    direct_vm.warp("2027-01-01T00:01:03Z")
+    contract.resolve_assignment(assignment_id, request_id)
+    pending = contract.get_assignment(assignment_id)
+    with direct_vm.expect_revert("Only a finalized marketplace message"):
+        contract.execute_resolution_attempt(
+            assignment_id,
+            request_id,
+            pending["resolution_pending_round"],
+            pending["resolution_attempts"],
+        )
+
+
+def test_ordered_fallback_records_protocol_failure_as_retryable_undetermined(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    campaign_id, assignment_id = prepare_assignment(
+        direct_vm,
+        contract,
+        direct_alice,
+        direct_bob,
+        max_retries=1,
+    )
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    direct_vm.warp("2027-01-01T00:01:03Z")
+    contract.resolve_assignment(assignment_id, request_id)
+    pending = contract.get_assignment(assignment_id)
+
+    with direct_vm.prank(as_address(direct_vm._contract_address)):
+        contract.record_resolution_failure(
+            assignment_id,
+            request_id,
+            pending["resolution_pending_round"],
+            pending["resolution_attempts"],
+        )
+
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "UNDETERMINED"
+    assert assignment["resolution_attempts"] == 1
+    assert assignment["resolution_round"] == 1
+    assert assignment["resolution_request_id"] != request_id
+    assert assignment["resolution_pending"] is False
+    assert assignment["reasoning"] == (
+        "Resolution child did not commit a result; retry required"
+    )
+    assert contract.get_campaign(campaign_id)["reserved_atto"] == RATE
+    assert contract.get_claimable(as_address(direct_alice))["claimable_atto"] == 0
+    assert contract.get_claimable(as_address(direct_bob))["claimable_atto"] == 0
+    assert_campaign_invariant(contract, campaign_id)
+    assert_global_invariant(contract)
+
+
+def test_deterministic_failure_skips_semantic_model(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    mock_resolution(
+        direct_vm,
+        semantic_pass="invalid-if-called",
+        text="#ad This post omits both frozen campaign phrases.",
+    )
+    resolve_at(direct_vm, contract, assignment_id, request_id)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "SETTLED_FAIL"
+    assert assignment["resolution_checks"]["required_checks"] == [False, False]
+    assert assignment["resolution_checks"]["semantic_evaluated"] is False
+
+
+def test_permissionless_recovery_closes_missing_fallback_after_delay(
+    direct_vm,
+    direct_deploy,
+    direct_owner,
+    direct_alice,
+    direct_bob,
+):
+    contract = deploy_marketplace(direct_vm, direct_deploy, direct_owner, direct_bob)
+    _, assignment_id = prepare_assignment(direct_vm, contract, direct_alice, direct_bob)
+    request_id = submit(direct_vm, contract, assignment_id, direct_bob)
+    direct_vm.warp("2027-01-01T00:01:03Z")
+    contract.resolve_assignment(assignment_id, request_id)
+
+    direct_vm.sender = as_address(direct_alice)
+    with direct_vm.expect_revert("recovery delay has not elapsed"):
+        contract.recover_resolution_failure(assignment_id, request_id)
+
+    direct_vm.warp("2027-01-01T00:16:04Z")
+    direct_vm.sender = as_address(direct_alice)
+    contract.recover_resolution_failure(assignment_id, request_id)
+    assignment = contract.get_assignment(assignment_id)
+    assert assignment["status"] == "UNDETERMINED"
+    assert assignment["resolution_attempts"] == 1
+    assert assignment["resolution_pending"] is False
+    assert assignment["reasoning"] == (
+        "Resolution fallback was not delivered; retry recovered permissionlessly"
+    )
 
 
 def test_x_resolution_cannot_pay_a_recycled_handle(

@@ -93,6 +93,31 @@ export function assertPostState(
     if (integer(newAssignment.resolution_attempts) !== integer(oldAssignment.resolution_attempts) + 1) {
       throw new Error("POST_STATE_RESOLUTION_ATTEMPT_MISMATCH");
     }
+    if (newAssignment.status === "RESOLVING") {
+      if (
+        newAssignment.resolution_pending !== true ||
+        newAssignment.resolution_pending_request_id !== oldAssignment.resolution_request_id ||
+        integer(newAssignment.resolution_pending_round) !== integer(oldAssignment.resolution_round) ||
+        integer(newAssignment.resolution_pending_started_at_epoch) !==
+          integer(newAssignment.last_resolution_at_epoch) ||
+        integer(newAssignment.last_resolution_at_epoch) <=
+          integer(oldAssignment.last_resolution_at_epoch) ||
+        newAssignment.resolution_request_id !== oldAssignment.resolution_request_id ||
+        integer(newAssignment.resolution_round) !== integer(oldAssignment.resolution_round) ||
+        newAssignment.outcome !== oldAssignment.outcome ||
+        newAssignment.evidence_hash !== oldAssignment.evidence_hash ||
+        amount(newAssignment.creator_credit_atto) !== amount(oldAssignment.creator_credit_atto) ||
+        amount(newAssignment.brand_credit_atto) !== amount(oldAssignment.brand_credit_atto) ||
+        amount(newAssignment.fee_atto) !== amount(oldAssignment.fee_atto) ||
+        amount(newCampaign.available_atto) !== amount(oldCampaign.available_atto) ||
+        amount(newCampaign.reserved_atto) !== amount(oldCampaign.reserved_atto) ||
+        amount(newCampaign.settled_atto) !== amount(oldCampaign.settled_atto) ||
+        amount(newCampaign.creator_paid_atto) !== amount(oldCampaign.creator_paid_atto) ||
+        amount(newCampaign.brand_refunded_atto) !== amount(oldCampaign.brand_refunded_atto) ||
+        amount(newCampaign.fee_atto) !== amount(oldCampaign.fee_atto)
+      ) throw new Error("POST_STATE_RESOLUTION_PENDING_MISMATCH");
+      return;
+    }
     if (newAssignment.status === "UNDETERMINED") {
       if (newAssignment.outcome !== "UNDETERMINED") throw new Error("POST_STATE_OUTCOME_MISMATCH");
       const nextRound = integer(oldAssignment.resolution_round) + 1;

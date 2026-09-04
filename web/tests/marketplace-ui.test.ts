@@ -798,6 +798,11 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   const transactionSource = await readFile(new URL("../app/marketplace/marketplace-transaction.ts", import.meta.url), "utf8");
   assert.match(transactionSource, /await options\.onSubmitted\?\.\(hash\)/);
   assert.ok(transactionSource.indexOf("await options.onSubmitted?.(hash)") < transactionSource.indexOf("waitForTransactionReceipt"));
+  assert.match(transactionSource, /plan\.functionName === "resolve_assignment"/);
+  assert.match(transactionSource, /getTriggeredTransactionIds\(\{ hash: hash as never \}\)/);
+  assert.match(transactionSource, /triggered\.length !== 2/);
+  assert.match(transactionSource, /hash: triggered\[1\] as never/);
+  assert.match(transactionSource, /assertMarketplaceTransactionFinality\(fallbackReceipt\)/);
   assert.doesNotMatch(transactionSource, /activate_creator|activate_farcaster_creator/);
 });
 

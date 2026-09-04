@@ -12,6 +12,7 @@ export const GENLAYER_ASSIGNMENT_STATUSES = [
   "SELECTED",
   "ACCEPTED",
   "SUBMITTED",
+  "RESOLVING",
   "UNDETERMINED",
   "SETTLED_PASS",
   "SETTLED_FAIL",
@@ -161,6 +162,10 @@ export type GenLayerAssignmentState = Readonly<{
   resolutionRequestId: string | null;
   resolutionRound: number;
   resolutionAttempts: number;
+  resolutionPending: boolean;
+  resolutionPendingRequestId: string | null;
+  resolutionPendingRound: number;
+  resolutionPendingStartedAtEpoch: number;
   resolutionEligibleAtEpoch: number;
   lastResolutionAtEpoch: number;
   outcome: "PASS" | "FAIL" | "UNDETERMINED" | null;
@@ -172,6 +177,7 @@ export type GenLayerAssignmentState = Readonly<{
     requiredChecks: boolean[];
     forbiddenChecks: boolean[];
     disclosurePresent: boolean;
+    semanticEvaluated: boolean;
     semanticPass: boolean;
   }>;
   evidenceHash: string | null;
@@ -941,6 +947,12 @@ export function parseAssignmentState(value: unknown): GenLayerAssignmentState {
     resolutionRequestId: optionalHash(row.resolution_request_id),
     resolutionRound: integerField(row, "resolution_round"),
     resolutionAttempts: integerField(row, "resolution_attempts"),
+    resolutionPending: optionalBoolean(row.resolution_pending),
+    resolutionPendingRequestId: optionalHash(row.resolution_pending_request_id),
+    resolutionPendingRound: optionalInteger(row.resolution_pending_round),
+    resolutionPendingStartedAtEpoch: optionalInteger(
+      row.resolution_pending_started_at_epoch,
+    ),
     resolutionEligibleAtEpoch: integerField(row, "resolution_eligible_at_epoch"),
     lastResolutionAtEpoch: integerField(row, "last_resolution_at_epoch"),
     outcome,
@@ -952,6 +964,7 @@ export function parseAssignmentState(value: unknown): GenLayerAssignmentState {
       requiredChecks: booleanArray(rawChecks.required_checks),
       forbiddenChecks: booleanArray(rawChecks.forbidden_checks),
       disclosurePresent: optionalBoolean(rawChecks.disclosure_present),
+      semanticEvaluated: optionalBoolean(rawChecks.semantic_evaluated),
       semanticPass: optionalBoolean(rawChecks.semantic_pass),
     },
     evidenceHash: optionalHash(row.evidence_hash),

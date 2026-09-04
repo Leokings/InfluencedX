@@ -13,6 +13,7 @@ import {
   finalizePreState,
   NOW_EPOCH,
   resolveEnvelope,
+  resolvePendingState,
   resolvePassState,
   resolvePreState,
   configFixture,
@@ -25,9 +26,24 @@ test("resolve, expire, and finalize preconditions are re-read and validated", ()
 });
 
 test("resolve, expire, and finalize post-state accounting is exact", () => {
+  assert.doesNotThrow(() => assertPostState(resolveEnvelope(), resolvePreState(), resolvePendingState()));
   assert.doesNotThrow(() => assertPostState(resolveEnvelope(), resolvePreState(), resolvePassState()));
   assert.doesNotThrow(() => assertPostState(expireEnvelope(), expirePreState(), expirePostState()));
   assert.doesNotThrow(() => assertPostState(finalizeEnvelope(), finalizePreState(), finalizePostState()));
+});
+
+test("resolution pending post-state is exactly bound and cannot move escrow", () => {
+  const before = resolvePreState();
+  const pending = resolvePendingState();
+  assert.doesNotThrow(() => assertPostState(resolveEnvelope(), before, pending));
+  assert.throws(() => assertPostState(resolveEnvelope(), before, {
+    ...pending,
+    assignment: { ...pending.assignment!, resolution_pending_request_id: `0x${"99".repeat(32)}` },
+  }));
+  assert.throws(() => assertPostState(resolveEnvelope(), before, {
+    ...pending,
+    campaign: { ...pending.campaign!, reserved_atto: "99", available_atto: "901" },
+  }));
 });
 
 test("post-state checks reject accounting drift even after a successful receipt", () => {

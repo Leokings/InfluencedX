@@ -18,6 +18,7 @@ import {
   genLayerCampaignActionPostcondition,
   genLayerResolutionAssignmentPostcondition,
   genLayerResolutionCampaignPostcondition,
+  genLayerResolutionPendingPostcondition,
   genLayerUnallocatedRefundAvailability,
   nextGenLayerResolutionProgression,
 } from "../lib/marketplace-genlayer-actions.ts";
@@ -1384,6 +1385,16 @@ test("a stale PRECHECK_FAILED operator request with broadcast evidence remains r
 test("operator resolution projection accepts only the exact one-step descendant", () => {
   const submissionHash = `0x${"5c".repeat(32)}`;
   const postId = "1900000000000000000";
+  const emptyResolutionChecks = {
+    authorMatch: false,
+    postIdMatch: false,
+    publicationInWindow: false,
+    requiredChecks: [] as boolean[],
+    forbiddenChecks: [] as boolean[],
+    disclosurePresent: false,
+    semanticEvaluated: false,
+    semanticPass: false,
+  };
   const previous = progressionAssignmentProjection({
     status: "SUBMITTED",
     agreedRateAtto: "500",
@@ -1395,6 +1406,10 @@ test("operator resolution projection accepts only the exact one-step descendant"
     resolutionAttempts: 0,
     resolutionEligibleAtEpoch: 1_800_000_000,
     lastResolutionAtEpoch: 0,
+    evidenceHash: null,
+    outcome: null,
+    reasoning: "",
+    resolutionChecks: emptyResolutionChecks,
     creatorCreditAtto: "0",
     brandCreditAtto: "0",
     feeAtto: "0",
@@ -1454,6 +1469,40 @@ test("operator resolution projection accepts only the exact one-step descendant"
     assignmentCount: 1,
     closedAtEpoch: 0,
   });
+  const pending = progressionAssignment({
+    status: "RESOLVING",
+    agreedRateAtto: "500",
+    postId,
+    submissionHash,
+    submittedAtEpoch: 1_799_900_000,
+    resolutionRequestId: requestId,
+    resolutionRound: 0,
+    resolutionAttempts: 1,
+    resolutionEligibleAtEpoch: 1_800_000_000,
+    lastResolutionAtEpoch: 1_800_000_000,
+    resolutionPending: true,
+    resolutionPendingRequestId: requestId,
+    resolutionPendingRound: 0,
+    resolutionPendingStartedAtEpoch: 1_800_000_000,
+    outcome: null,
+    evidenceHash: null,
+    reasoning: "",
+    resolutionChecks: emptyResolutionChecks,
+    creatorCreditAtto: "0",
+    brandCreditAtto: "0",
+    feeAtto: "0",
+    settledAtEpoch: 0,
+    closedAtEpoch: 0,
+  });
+  assert.equal(genLayerResolutionPendingPostcondition(previous, pending), true);
+  assert.equal(genLayerResolutionPendingPostcondition(previous, {
+    ...pending,
+    creatorCreditAtto: "1",
+  }), false, "a pending parent cannot move resolution credit");
+  assert.equal(genLayerResolutionPendingPostcondition(previous, {
+    ...pending,
+    resolutionPendingRequestId: `0x${"5f".repeat(32)}`,
+  }), false, "a pending parent must remain bound to the admitted request");
   assert.equal(
     genLayerResolutionAssignmentPostcondition(previous, oneStep, previousCampaign.feeBps),
     true,

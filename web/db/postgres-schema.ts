@@ -1480,7 +1480,7 @@ export const marketplaceGenLayerAssignments = pgTable(
     ),
     check(
       "marketplace_genlayer_assignments_status",
-      sql`${table.status} in ('SELECTED', 'ACCEPTED', 'SUBMITTED', 'UNDETERMINED', 'SETTLED_PASS', 'SETTLED_FAIL', 'DECLINED', 'EXPIRED', 'REFUNDED')`,
+      sql`${table.status} in ('SELECTED', 'ACCEPTED', 'SUBMITTED', 'RESOLVING', 'UNDETERMINED', 'SETTLED_PASS', 'SETTLED_FAIL', 'DECLINED', 'EXPIRED', 'REFUNDED')`,
     ),
   ],
 );
