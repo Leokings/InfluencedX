@@ -48,9 +48,9 @@ external transfer, and the child transfer finalized with `value_credited=true`.
 - Withdrawal: `0x85e54dbac42ff96a3d91e3bfacc349053e7837d4e873955273b0f791a381bb21`
 - Evidence hash: `0x8c12c61226dc3e25020fe9416e88e8c383d9c9458f783891d43554908d2d711d`
 
-The one-atto test liability intentionally remains
-`EMITTED_UNCONFIRMED` on the isolated candidate until the restricted confirmer
-is pointed at V3. The emitted child itself is finalized and credited.
+This earlier one-atto exploratory liability remains `EMITTED_UNCONFIRMED`; its
+emitted child is finalized and credited. The submitted full-lifecycle canary
+below has its own finalized `confirm_withdrawal` receipt.
 
 ## Finalized identity activation
 
@@ -93,7 +93,7 @@ and used a public Farcaster cast published after acceptance.
 - Resolution evidence hash: `0x32208ad6464f170638baac275a2f350dc1be0f63475ec4e711f08846303f634f`
 - Settlement: creator credit `98` atto-GEN; protocol fee `2` atto-GEN
 
-## Finalized creator withdrawal
+## Finalized and confirmed creator withdrawal
 
 - Withdrawal: `0xca46af640a00a3daf49aec2fe7d4a2e4fbf56f068d99f5127a479d41939aa258`
 - Request withdrawal: [`0xa92865a16b94f4e83568902c3a302efeb1935af46232129b1881c7d17787fa13`](https://explorer-studio.genlayer.com/tx/0xa92865a16b94f4e83568902c3a302efeb1935af46232129b1881c7d17787fa13)
@@ -102,8 +102,12 @@ and used a public Farcaster cast published after acceptance.
 - Transfer result: recipient matched; amount `98` atto-GEN;
   parent linkage matched; `value_credited=true`
 - Transfer evidence hash: `0x3cf197036e9362c26e0cdf9d0a6d00dd15cdd482e8e12139f8c8f49f1e3e55ad`
+- Isolated-candidate confirmer rotation: [`0xb3d6e744f4cb29fe46520af36e169aa09d197b27eea633f2090f2b9000f286ff`](https://explorer-studio.genlayer.com/tx/0xb3d6e744f4cb29fe46520af36e169aa09d197b27eea633f2090f2b9000f286ff)
+- Finalized `confirm_withdrawal`: [`0x5aa41e2a1bbd5a2dde151f8c9d2b1bbc983fbdc284327e69d782477db28fdc3b`](https://explorer-studio.genlayer.com/tx/0x5aa41e2a1bbd5a2dde151f8c9d2b1bbc983fbdc284327e69d782477db28fdc3b)
+- Contract withdrawal state: `CONFIRMED`; reconciled at epoch `1788551732`
 
-The isolated candidate records the withdrawal as `EMITTED_UNCONFIRMED`
-because its restricted confirmer remains intentionally disconnected while V2
-serves the application. The emitted value transfer itself is finalized and
-credited. No production cutover has occurred.
+The restricted confirmer verified the finalized credited child and bound its
+evidence hash into V3. This completes the funded campaign, submission,
+resolution, withdrawal, emitted transfer, and on-chain confirmation path. The
+role change affected only the isolated V3 candidate; V2 still serves the
+application and no production cutover has occurred.

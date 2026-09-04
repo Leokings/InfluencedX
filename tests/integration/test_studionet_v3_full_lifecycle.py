@@ -76,6 +76,10 @@ EVIDENCE_PUBLISHED_AT = 1_788_549_492
 SUBMISSION_HASH = "0x" + hashlib.sha256(
     EVIDENCE_TEXT.encode("utf-8")
 ).hexdigest()
+WITHDRAWAL_ID = "0xca46af640a00a3daf49aec2fe7d4a2e4fbf56f068d99f5127a479d41939aa258"
+TRANSFER_EVIDENCE_HASH = (
+    "0x3cf197036e9362c26e0cdf9d0a6d00dd15cdd482e8e12139f8c8f49f1e3e55ad"
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -562,4 +566,57 @@ def test_05_withdraw_creator_credit(gl_client: Any) -> None:
         "external_value_credited": True,
         "contract_confirmation_status": withdrawal["status"],
         "transfer_evidence_hash": transfer_evidence_hash,
+    }, sort_keys=True))
+
+
+def test_06_confirm_emitted_transfer(gl_client: Any) -> None:
+    """Bind the finalized transfer proof into the isolated V3 withdrawal state."""
+
+    assert gl_client.chain.id == STUDIONET_CHAIN_ID
+    signer = _review_account()
+    confirmer_marketplace = get_contract_factory(
+        contract_name="InfluencedXMarketplace"
+    ).build_contract(MARKETPLACE, account=signer)
+    config = confirmer_marketplace.get_config(args=[]).call()
+    configured_confirmer = str(config["withdrawal_confirmer"]).lower().replace(
+        "addr#", "0x"
+    )
+    assert configured_confirmer == signer.address.lower()
+
+    before = confirmer_marketplace.get_withdrawal(args=[WITHDRAWAL_ID]).call()
+    counts_before = confirmer_marketplace.get_counts(args=[]).call()
+    confirm_receipt = None
+    if before["status"] == "EMITTED_UNCONFIRMED":
+        confirm_receipt = confirmer_marketplace.confirm_withdrawal(
+            args=[WITHDRAWAL_ID, TRANSFER_EVIDENCE_HASH]
+        ).transact(wait_transaction_status=TransactionStatus.FINALIZED)
+        _assert_finalized_consensus_success(confirm_receipt)
+
+    confirmed = confirmer_marketplace.get_withdrawal(args=[WITHDRAWAL_ID]).call()
+    counts_after = confirmer_marketplace.get_counts(args=[]).call()
+    assert confirmed["status"] == "CONFIRMED"
+    assert confirmed["evidence_hash"] == TRANSFER_EVIDENCE_HASH
+    assert confirmed["reconciled_at_epoch"] > 0
+    if confirm_receipt is not None:
+        amount = int(confirmed["amount_atto"])
+        assert (
+            counts_after["total_emitted_unconfirmed_atto"]
+            == counts_before["total_emitted_unconfirmed_atto"] - amount
+        )
+        assert (
+            counts_after["total_withdrawn_atto"]
+            == counts_before["total_withdrawn_atto"] + amount
+        )
+
+    print(json.dumps({
+        "phase": "withdrawal_confirmation",
+        "contract": MARKETPLACE,
+        "withdrawal_id": WITHDRAWAL_ID,
+        "withdrawal_confirmer": signer.address,
+        "confirm_withdrawal_tx": (
+            _tx_hash(confirm_receipt) if confirm_receipt is not None else None
+        ),
+        "transfer_evidence_hash": TRANSFER_EVIDENCE_HASH,
+        "withdrawal_status": confirmed["status"],
+        "reconciled_at_epoch": confirmed["reconciled_at_epoch"],
     }, sort_keys=True))
