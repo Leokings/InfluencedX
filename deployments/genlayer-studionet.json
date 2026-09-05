@@ -49,8 +49,10 @@
     "sourceSha256": "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
     "sourceCommit": "8271a92172eb5c014a930ef31611fb956908de16",
     "identityActivation": "ATOMIC_X_AND_FARCASTER_V1",
-    "productionOwnerConfigured": false
+    "productionOwnerConfigured": false,
+    "applicationStatus": "ROLLBACK_ONLY"
   },
+  "activeMarketplace": "candidateMarketplace",
   "candidateMarketplace": {
     "address": "0x492175c248168DDB9571CBF4c6A14296e3348181",
     "deploymentTransaction": "0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8",
@@ -82,6 +84,7 @@
     "sourceMatchesDeployment": true,
     "identityActivation": "ATOMIC_X_AND_FARCASTER_V1",
     "productionOwnerConfigured": false,
+    "applicationStatus": "REVIEWER_PREVIEW_ACTIVE",
     "nativeValueCanary": {
       "status": "PASSED",
       "amountAtto": "1",
@@ -141,7 +144,17 @@
       "contractConfirmationStatus": "CONFIRMED",
       "reconciledAtEpoch": 1788551732
     },
-    "activationStatus": "FULL_LIFECYCLE_CANARY_CONFIRMED"
+    "reviewerPreview": {
+      "url": "https://influencedx-native-preview.vercel.app",
+      "webDeploymentId": "dpl_FBjBE6GZoEmS9jTZLcsZqhfQ3aaV",
+      "webDeploymentUrl": "https://influencedx-9d0snbbbr-leokings588-5902s-projects.vercel.app",
+      "marketplaceOperatorDeploymentId": "dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY",
+      "withdrawalReconcilerDeploymentId": "dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd",
+      "maintenanceGeneration": 1,
+      "maintenanceHeartbeatMessageId": "1T-1M1WhdV14rUgUevQJlF80fKLNrEI1Lso",
+      "activatedAt": "2026-09-05T05:38:36.2893594Z"
+    },
+    "activationStatus": "REVIEWER_PREVIEW_ACTIVE"
   },
   "historicalMarketplaces": [
     {

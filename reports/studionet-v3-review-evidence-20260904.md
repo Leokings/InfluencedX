@@ -9,8 +9,20 @@
 - Exact deployed source SHA-256: `0x6e97a6f97ff96af9cd14f2b06e0ac86db4b2965b1bba49f4e7548dd77fe6f2e6`
 - Deployment status: `FINALIZED`, `MAJORITY_AGREE`, successful contract return
 
-The V2 application deployment remains active while this candidate completes
-its full lifecycle gate.
+The reviewer-facing application is active on V3 at
+[`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app).
+The prior V2 deployment is retained only as a rollback reference.
+
+## Reviewer preview activation
+
+- Stable application URL: [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app)
+- Web deployment: `dpl_FBjBE6GZoEmS9jTZLcsZqhfQ3aaV`
+- Marketplace operator deployment: `dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY`
+- Withdrawal reconciler deployment: `dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd`
+- Maintenance activation: generation `1`, heartbeat message `1T-1M1WhdV14rUgUevQJlF80fKLNrEI1Lso`
+- Live smoke check: marketplace `200`, V3 address present, V2 address absent
+- Projection check: campaign API `200` with no V2 campaign leakage
+- Mutation-gate check: authenticated-origin route reached request validation
 
 ## Bounded resolution verification
 
@@ -30,7 +42,7 @@ its full lifecycle gate.
 - GenVM lint: 53 ABI methods; 22 view and 31 write methods.
 - Operator suite: 34 tests passed, including parent/child polling and exact
   pending-state accounting.
-- Web unit suite: 279 tests passed, including retryable journal handling for
+- Web unit suite: 281 tests passed, including retryable journal handling for
   the pending child stage.
 
 ## Finalized V3 native-value canary
