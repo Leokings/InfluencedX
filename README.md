@@ -1,6 +1,6 @@
 # InfluencedX
 
-InfluencedX is a creator marketplace whose active V2 protocol runs entirely on
+InfluencedX is a creator marketplace whose active V3 reviewer preview runs entirely on
 GenLayer. Brands escrow native GEN in a campaign; creators prove an X or
 Farcaster identity, apply for work, publish the required post or cast, and let
 GenLayer validators evaluate the frozen campaign terms. PASS, FAIL, and
@@ -13,30 +13,24 @@ retryable UNDETERMINED outcomes settle inside the same Intelligent Contract.
 The active contract is
 [`InfluencedXMarketplace.py`](contracts/genlayer/InfluencedXMarketplace.py),
 deployed at
-[`0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`](https://explorer-studio.genlayer.com/address/0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb).
+[`0x492175c248168DDB9571CBF4c6A14296e3348181`](https://explorer-studio.genlayer.com/address/0x492175c248168DDB9571CBF4c6A14296e3348181).
 The immutable deployment record is
 [`deployments/genlayer-studionet.json`](deployments/genlayer-studionet.json).
 
 ## Release status
 
-The corrected contract source is deployed as V2. The native web/API, database
-migrations, marketplace operator, and restricted withdrawal reconciler must be
-repinned and redeployed against this fresh address in the isolated Preview at
+The corrected contract source is deployed as V3. The native web/API, database
+projections, marketplace operator, and restricted withdrawal reconciler are
+pinned to this exact address in the reviewer Preview at
 [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app).
-**The existing public URL has not yet been cut over to this GenLayer-only
-build.** A public V2 claim still requires the following user-driven evidence:
+The V3 maintenance generation is active, and live checks confirm the page and
+campaign projection expose V3 without leaking V2 state. A finalized canary
+proves atomic X + Farcaster identity activation and the complete funded
+campaign, submission, resolution, withdrawal, emitted transfer, and on-chain
+confirmation path. See [the V3 reviewer evidence](reports/studionet-v3-review-evidence-20260904.md).
+The previous V2 deployment is retained only as a rollback reference.
 
-1. one fresh X + Farcaster identity bundle finalizes in a single V2 transaction;
-2. one native-GEN campaign completes create, apply, select, accept, submit,
-   resolve, credit, request withdrawal, execute withdrawal, and confirmed
-   delivery; and
-3. the resulting hashes and final contract state are recorded in
-   [the verification report](docs/TEST-REPORT.md).
-
-Until those checks pass, screenshots or database rows are not proof that a
-campaign is funded, settled, or paid.
-
-## Frozen StudioNet deployment
+## Active StudioNet reviewer deployment
 
 | Setting | Value |
 | --- | --- |
@@ -44,19 +38,22 @@ campaign is funded, settled, or paid.
 | Chain ID | `61999` |
 | RPC | `https://studio.genlayer.com/api` |
 | Explorer | `https://explorer-studio.genlayer.com` |
-| Marketplace V2 | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
-| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
-| Deployed at | `2026-08-19T21:45:34.887910Z` |
-| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
-| ABI / direct suite | `50` methods / `58` tests passed |
-| Protocol / storage | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
+| Marketplace V3 | `0x492175c248168DDB9571CBF4c6A14296e3348181` |
+| Deployment transaction | `0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8` |
+| Deployed at | `2026-09-04T13:28:21.338118Z` |
+| Source SHA-256 | `0x6e97a6f97ff96af9cd14f2b06e0ac86db4b2965b1bba49f4e7548dd77fe6f2e6` |
+| ABI / direct suite | `53` methods / `64` tests passed |
+| Protocol / storage | `INFLUENCEDX_MARKETPLACE_V3` / `3` |
 | Native asset | `GEN`, 18 decimals |
 | Protocol fee | `250` bps, snapshotted per campaign |
+| Resolution recovery | `900` seconds |
+| Withdrawal recovery | `86400` seconds |
 | Upgrade delay | `604800` seconds (seven full days) |
 
 The deployment transaction reached `FINALIZED` with `MAJORITY_AGREE` and a
 successful leader return. The manifest also records the owner, treasury,
-dedicated upgrade administrator, source hash, and retired V1 deployment. Do not
+dedicated upgrade administrator, restricted withdrawal confirmer, source hash,
+full lifecycle evidence, and prior deployments. Do not
 copy addresses from prose into runtime configuration without comparing the
 manifest and live `get_config()` result.
 
@@ -74,7 +71,7 @@ flowchart LR
     U["Brand or creator"] --> APP["InfluencedX web app"]
     U --> WALLET["GenLayer-compatible wallet"]
     APP --> DB["PostgreSQL projection + private app data"]
-    WALLET --> GL["InfluencedXMarketplace V2<br/>StudioNet 61999"]
+    WALLET --> GL["InfluencedXMarketplace V3<br/>StudioNet 61999"]
     X["Public X post/profile"] --> GL
     F["Public Farcaster cast/profile"] --> GL
     APP --> OP["Hosted marketplace operator"]
@@ -102,9 +99,8 @@ flowchart LR
 - **X and Farcaster are availability dependencies.** Ambiguous or transient
   retrieval resolves to UNDETERMINED, not an automatic creator loss.
 
-See [the detailed architecture](docs/ARCHITECTURE.md),
-[the V2 protocol reference](docs/GENLAYER-MARKETPLACE.md), and
-[the StudioNet boundary](docs/STUDIONET.md).
+See [the V3 reviewer evidence](reports/studionet-v3-review-evidence-20260904.md)
+and [the StudioNet boundary](docs/STUDIONET.md).
 
 ## Product flow
 
@@ -114,7 +110,7 @@ See [the detailed architecture](docs/ARCHITECTURE.md),
    then signs `activate_identity_bundle` once. Validators verify both sources
    and atomically bind the stable X user ID and Farcaster FID.
 3. A brand defines a source-specific campaign. `create_campaign` receives the
-   exact budget as native call value, freezes the terms, and holds GEN in V2.
+   exact budget as native call value, freezes the terms, and holds GEN in V3.
 4. A creator with both identities active applies. The brand selects a
    creator, who accepts and later commits the X post ID or Farcaster cast hash.
 5. After retention, the hosted operator calls the fixed permissionless
@@ -123,7 +119,7 @@ See [the detailed architecture](docs/ARCHITECTURE.md),
 6. PASS credits the creator minus the snapshotted fee; FAIL credits the brand;
    UNDETERMINED follows bounded retry and refund rules. Funds remain pull-based.
 7. A user requests and executes a withdrawal. The reconciler proves the exact
-   child native transfer and its restricted confirmer records it on V2. Only contract status
+   child native transfer and its restricted confirmer records it on V3. Only contract status
    `CONFIRMED` is displayed as delivered.
 
 ## Local validation
@@ -169,10 +165,10 @@ URLs, service tokens, Vercel metadata, or runtime reports.
 
 The root `package.json` still contains Solidity, Base Sepolia, watcher, relay,
 and legacy submitter commands so the former prototype can be reproduced and
-audited. They are **historical tests and operators, not V2 deployment steps**.
+audited. They are **historical tests and operators, not V3 deployment steps**.
 In particular, do not run `deploy:base-sepolia`, `cutover:base:studionet`,
 `brand:fund:base-sepolia`, `settlement:*`, `relay:*`, or `test:services` when
-operating the GenLayer-only product. V2 operations use the contract, web app,
+operating the GenLayer-only product. V3 operations use the contract, web app,
 marketplace operator, and withdrawal reconciler named above.
 
 Historical Base/USDC/watcher evidence is isolated in
@@ -180,13 +176,13 @@ Historical Base/USDC/watcher evidence is isolated in
 [`docs/campaign-settlement-services.md`](docs/campaign-settlement-services.md),
 [`docs/WATCHER-KEYS.md`](docs/WATCHER-KEYS.md), and
 [`deployments/base-sepolia.json`](deployments/base-sepolia.json). None of those
-files is active V2 runtime configuration.
+files is active V3 runtime configuration.
 
 ## Operations and submission
 
 - [Deployment, cutover, rollback, and reset runbook](docs/DEPLOYMENT.md)
-- [Current verification evidence and open gates](docs/TEST-REPORT.md)
-- [GenLayer V2 three-minute demo checklist](docs/DEMO-SCRIPT.md)
+- [Current V3 reviewer evidence](reports/studionet-v3-review-evidence-20260904.md)
+- [Legacy V2 three-minute demo checklist](docs/DEMO-SCRIPT.md)
 - [Marketplace operator service](services/vercel-genlayer-marketplace-operator/README.md)
 - [Withdrawal reconciler service](services/vercel-genlayer-withdrawal-reconciler/README.md)
 
