@@ -2334,6 +2334,51 @@ test("projection identities cannot collide across contract or network cutovers",
   );
 });
 
+test("local campaign and dashboard reads cannot cross a contract cutover", async () => {
+  const repository = await readFile(
+    new URL("../lib/marketplace-genlayer-repository.ts", import.meta.url),
+    "utf8",
+  );
+  const section = (start: string, end: string) => {
+    const startIndex = repository.indexOf(start);
+    const endIndex = repository.indexOf(end, startIndex + start.length);
+    assert.ok(startIndex >= 0 && endIndex > startIndex);
+    return repository.slice(startIndex, endIndex);
+  };
+
+  const draftLookup = section(
+    "export async function findGenLayerCampaignDraft",
+    "export async function listGenLayerCampaignDraftRows",
+  );
+  assert.match(draftLookup, /projection\.contractAddress !== marketplaceContractAddress\(\)/);
+
+  const campaignList = section(
+    "export async function listGenLayerCampaignDraftRows",
+    "export async function listGenLayerPrivateApplicationsForCampaign",
+  );
+  assert.match(campaignList, /marketplaceGenLayerCampaigns\.contractAddress, marketplaceContractAddress\(\)/);
+  assert.match(campaignList, /isNull\(marketplaceGenLayerCampaigns\.projectionId\)/);
+
+  const campaignLookup = section(
+    "export async function findGenLayerCampaignProjectionByLocalId",
+    "export async function findGenLayerCampaignProjectionByOnchainId",
+  );
+  assert.match(campaignLookup, /marketplaceGenLayerCampaigns\.contractAddress, marketplaceContractAddress\(\)/);
+
+  const assignmentLookup = section(
+    "export async function findGenLayerAssignmentProjectionByApplicationId",
+    "export async function findGenLayerAssignmentProjectionByAssignmentId",
+  );
+  assert.match(assignmentLookup, /marketplaceGenLayerAssignments\.contractAddress, marketplaceContractAddress\(\)/);
+
+  const dashboard = section(
+    "export async function getGenLayerDashboardRows",
+    "type MarketplaceTransactionIntentBinding",
+  );
+  assert.match(dashboard, /marketplaceGenLayerCampaigns\.contractAddress, marketplaceContractAddress\(\)/);
+  assert.match(dashboard, /marketplaceGenLayerAssignments\.contractAddress, marketplaceContractAddress\(\)/);
+});
+
 test("campaign projection accepts only exact contract states and conserved native GEN", () => {
   const termsHash = deriveCampaignTermsHash(frozenTerms);
   const state = parseCampaignState({

@@ -137,6 +137,23 @@ export async function insertGenLayerCampaignDraft(input: {
 export async function findGenLayerCampaignDraft(
   id: string,
 ): Promise<GenLayerCampaignDraft | null> {
+  const [projection] = await getDb()
+    .select({
+      network: marketplaceGenLayerCampaigns.network,
+      chainId: marketplaceGenLayerCampaigns.chainId,
+      contractAddress: marketplaceGenLayerCampaigns.contractAddress,
+    })
+    .from(marketplaceGenLayerCampaigns)
+    .where(eq(marketplaceGenLayerCampaigns.localCampaignId, id))
+    .limit(1);
+  if (
+    projection &&
+    (projection.network !== MARKETPLACE_GENLAYER_NETWORK ||
+      projection.chainId !== MARKETPLACE_GENLAYER_CHAIN_ID ||
+      projection.contractAddress !== marketplaceContractAddress())
+  ) {
+    return null;
+  }
   const [row] = await getDb()
     .select()
     .from(marketplaceGenLayerCampaignDrafts)
@@ -169,25 +186,26 @@ export async function listGenLayerCampaignDraftRows(input: {
         marketplaceGenLayerCampaignDrafts.id,
       ),
     )
-    .where(
-      input.viewerWallet
-        ? or(
+    .where(input.viewerWallet
+      ? or(
+          and(
+            eq(marketplaceGenLayerCampaigns.network, MARKETPLACE_GENLAYER_NETWORK),
+            eq(marketplaceGenLayerCampaigns.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+            eq(marketplaceGenLayerCampaigns.contractAddress, marketplaceContractAddress()),
+          ),
+          and(
+            isNull(marketplaceGenLayerCampaigns.projectionId),
             eq(
               marketplaceGenLayerCampaignDrafts.brandWallet,
               normalizeAddress(input.viewerWallet),
             ),
-            inArray(marketplaceGenLayerCampaignDrafts.status, [
-              "OPEN",
-              "CANCELLED",
-              "CLOSED",
-            ]),
-          )
-        : inArray(marketplaceGenLayerCampaignDrafts.status, [
-            "OPEN",
-            "CANCELLED",
-            "CLOSED",
-          ]),
-    )
+          ),
+        )
+      : and(
+          eq(marketplaceGenLayerCampaigns.network, MARKETPLACE_GENLAYER_NETWORK),
+          eq(marketplaceGenLayerCampaigns.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+          eq(marketplaceGenLayerCampaigns.contractAddress, marketplaceContractAddress()),
+        ))
     .orderBy(desc(marketplaceGenLayerCampaignDrafts.createdAt))
     .limit(limit);
   const campaignIds = rows.map(({ draft }) => draft.id);
@@ -2183,7 +2201,12 @@ export async function findGenLayerCampaignProjectionByLocalId(
   const [row] = await getDb()
     .select()
     .from(marketplaceGenLayerCampaigns)
-    .where(eq(marketplaceGenLayerCampaigns.localCampaignId, localCampaignId))
+    .where(and(
+      eq(marketplaceGenLayerCampaigns.network, MARKETPLACE_GENLAYER_NETWORK),
+      eq(marketplaceGenLayerCampaigns.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+      eq(marketplaceGenLayerCampaigns.contractAddress, marketplaceContractAddress()),
+      eq(marketplaceGenLayerCampaigns.localCampaignId, localCampaignId),
+    ))
     .limit(1);
   return row ?? null;
 }
@@ -2210,9 +2233,12 @@ export async function findGenLayerAssignmentProjectionByApplicationId(
   const [row] = await getDb()
     .select()
     .from(marketplaceGenLayerAssignments)
-    .where(
+    .where(and(
+      eq(marketplaceGenLayerAssignments.network, MARKETPLACE_GENLAYER_NETWORK),
+      eq(marketplaceGenLayerAssignments.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+      eq(marketplaceGenLayerAssignments.contractAddress, marketplaceContractAddress()),
       eq(marketplaceGenLayerAssignments.localApplicationId, localApplicationId),
-    )
+    ))
     .limit(1);
   return row ?? null;
 }
@@ -2310,7 +2336,7 @@ export async function listDueGenLayerAssignmentExpiryProjections(input: {
     .limit(input.limit);
 }
 
-/** Returns open, unreserved campaigns at the exact V2 finalization boundary. */
+/** Returns open, unreserved campaigns at the exact active-contract finalization boundary. */
 export async function listDueGenLayerCampaignFinalizationProjections(input: {
   nowEpoch: number;
   limit: number;
@@ -2371,7 +2397,12 @@ export async function getGenLayerDashboardRows(wallet: string): Promise<{
         availableAtto: marketplaceGenLayerCampaigns.availableAtto,
       })
       .from(marketplaceGenLayerCampaigns)
-      .where(eq(marketplaceGenLayerCampaigns.brandWallet, normalizedWallet))
+      .where(and(
+        eq(marketplaceGenLayerCampaigns.network, MARKETPLACE_GENLAYER_NETWORK),
+        eq(marketplaceGenLayerCampaigns.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+        eq(marketplaceGenLayerCampaigns.contractAddress, marketplaceContractAddress()),
+        eq(marketplaceGenLayerCampaigns.brandWallet, normalizedWallet),
+      ))
       .orderBy(desc(marketplaceGenLayerCampaigns.projectedAt)),
     getDb()
       .select({
@@ -2383,11 +2414,28 @@ export async function getGenLayerDashboardRows(wallet: string): Promise<{
         agreedRateAtto: marketplaceGenLayerAssignments.agreedRateAtto,
       })
       .from(marketplaceGenLayerApplicationsPrivate)
+      .innerJoin(
+        marketplaceGenLayerCampaigns,
+        and(
+          eq(
+            marketplaceGenLayerCampaigns.localCampaignId,
+            marketplaceGenLayerApplicationsPrivate.localCampaignId,
+          ),
+          eq(marketplaceGenLayerCampaigns.network, MARKETPLACE_GENLAYER_NETWORK),
+          eq(marketplaceGenLayerCampaigns.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+          eq(marketplaceGenLayerCampaigns.contractAddress, marketplaceContractAddress()),
+        ),
+      )
       .leftJoin(
         marketplaceGenLayerAssignments,
-        eq(
-          marketplaceGenLayerAssignments.localApplicationId,
-          marketplaceGenLayerApplicationsPrivate.id,
+        and(
+          eq(
+            marketplaceGenLayerAssignments.localApplicationId,
+            marketplaceGenLayerApplicationsPrivate.id,
+          ),
+          eq(marketplaceGenLayerAssignments.network, MARKETPLACE_GENLAYER_NETWORK),
+          eq(marketplaceGenLayerAssignments.chainId, MARKETPLACE_GENLAYER_CHAIN_ID),
+          eq(marketplaceGenLayerAssignments.contractAddress, marketplaceContractAddress()),
         ),
       )
       .where(
