@@ -1,6 +1,8 @@
 import {
   MARKETPLACE_ADDRESS,
+  MARKETPLACE_PROTOCOL,
   MARKETPLACE_RPC_ADDRESS,
+  MARKETPLACE_SCHEMA_VERSION,
   OPERATOR_NETWORK,
   OPERATOR_STAGE,
   STUDIONET_CHAIN_ID,
@@ -16,8 +18,8 @@ export type OperatorConfig = Readonly<{
   rpcUrl: typeof STUDIONET_RPC_URL;
   contractAddress: `0x${string}`;
   rpcContractAddress: typeof MARKETPLACE_RPC_ADDRESS;
-  contractProtocol: string;
-  contractSchemaVersion: number;
+  contractProtocol: typeof MARKETPLACE_PROTOCOL;
+  contractSchemaVersion: typeof MARKETPLACE_SCHEMA_VERSION;
   privateKey: `0x${string}`;
   databaseUrl: string;
   serviceToken: string;
@@ -55,13 +57,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS must be an exact non-zero contract address.");
   }
   if (contractAddress !== MARKETPLACE_ADDRESS) {
-    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V2 deployment.");
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V3 deployment.");
   }
-  if (!/^INFLUENCEDX_MARKETPLACE_V[1-9][0-9]{0,3}$/.test(contractProtocol)) {
-    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL is invalid.");
+  if (contractProtocol !== MARKETPLACE_PROTOCOL) {
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL must pin V3.");
   }
-  if (!/^[1-9][0-9]{0,3}$/.test(contractSchemaVersion)) {
-    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION is invalid.");
+  if (contractSchemaVersion !== String(MARKETPLACE_SCHEMA_VERSION)) {
+    fail("INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION must pin schema 3.");
   }
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey) || /^0x0{64}$/i.test(privateKey)) {
     fail("GENLAYER_MARKETPLACE_OPERATOR_PRIVATE_KEY must be a non-zero 32-byte key.");
@@ -87,8 +89,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     rpcUrl: STUDIONET_RPC_URL,
     contractAddress: contractAddress as `0x${string}`,
     rpcContractAddress: MARKETPLACE_RPC_ADDRESS,
-    contractProtocol,
-    contractSchemaVersion: Number(contractSchemaVersion),
+    contractProtocol: MARKETPLACE_PROTOCOL,
+    contractSchemaVersion: MARKETPLACE_SCHEMA_VERSION,
     privateKey: privateKey as `0x${string}`,
     databaseUrl,
     serviceToken: serviceToken.toLowerCase(),

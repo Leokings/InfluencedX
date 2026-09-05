@@ -175,8 +175,8 @@ test("uses the live StudioNet explorer route shapes", () => {
   const address = `0x${"34".repeat(20)}`;
   assert.equal(studioNetExplorerLink("tx", transactionHash), `https://explorer-studio.genlayer.com/tx/${transactionHash}`);
   assert.equal(studioNetExplorerLink("address", address), `https://explorer-studio.genlayer.com/address/${address}`);
-  assert.equal(STUDIONET_MARKETPLACE_ADDRESS, "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb");
-  assert.equal(STUDIONET_MARKETPLACE_DEPLOYMENT_TX, "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998");
+  assert.equal(STUDIONET_MARKETPLACE_ADDRESS, "0x492175c248168DDB9571CBF4c6A14296e3348181");
+  assert.equal(STUDIONET_MARKETPLACE_DEPLOYMENT_TX, "0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8");
 });
 
 test("adds wallet recovery guidance only to wallet-session conflicts", () => {

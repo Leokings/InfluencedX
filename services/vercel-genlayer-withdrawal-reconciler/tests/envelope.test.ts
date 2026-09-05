@@ -36,11 +36,11 @@ test("queue messages cannot smuggle proof, method, value, or recipient", () => {
 });
 
 test("configuration is disabled by default and every chain boundary is literal-pinned", () => {
-  assert.equal(loadTestConfig().contractAddress, "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb");
-  assert.equal(loadTestConfig().rpcContractAddress, "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb");
+  assert.equal(loadTestConfig().contractAddress, "0x492175c248168ddb9571cbf4c6a14296e3348181");
+  assert.equal(loadTestConfig().rpcContractAddress, "0x492175c248168DDB9571CBF4c6A14296e3348181");
   assert.equal(
     MARKETPLACE_DEPLOYMENT_TX_HASH,
-    "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998",
+    "0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8",
   );
   assert.equal(loadTestConfig().contractWithdrawalConfirmer, WITHDRAWAL_CONFIRMER);
   for (const patch of [

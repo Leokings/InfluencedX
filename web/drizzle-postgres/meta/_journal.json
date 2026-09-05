@@ -127,6 +127,13 @@
       "when": 1788528713918,
       "tag": "0017_bounded_resolution_state",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788552000000,
+      "tag": "0018_marketplace_v3_cutover",
+      "breakpoints": true
     }
   ]
 }

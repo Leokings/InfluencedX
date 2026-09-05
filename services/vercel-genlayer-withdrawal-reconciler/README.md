@@ -1,15 +1,15 @@
 # InfluencedX GenLayer withdrawal reconciler
 
-This is an isolated, disabled-by-default hosted service for the native GEN withdrawal delivery gap in `InfluencedXMarketplace` V2. It watches a finalized `EMITTED_UNCONFIRMED` withdrawal, proves the exact finalized parent `execute_withdrawal` transaction and its unique finalized StudioNet child transfer, then signs only:
+This is an isolated, disabled-by-default hosted service for the native GEN withdrawal delivery gap in `InfluencedXMarketplace` V3. It watches a finalized `EMITTED_UNCONFIRMED` withdrawal, proves the exact finalized parent `execute_withdrawal` transaction and its unique finalized StudioNet child transfer, then signs only:
 
 ```text
 confirm_withdrawal(withdrawal_id, evidence_hash), value = 0
 ```
 
 The chain boundary remains literal-pinned to StudioNet chain `61999`, protocol
-`INFLUENCEDX_MARKETPLACE_V2`, storage schema `2`, contract
-`0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` (finalized deployment transaction
-`0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998`), and withdrawal confirmer
+`INFLUENCEDX_MARKETPLACE_V3`, storage schema `3`, contract
+`0x492175c248168DDB9571CBF4c6A14296e3348181` (finalized deployment transaction
+`0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8`), and withdrawal confirmer
 `0xAaFC5D9075A404d82b8Ee1692F7ff802168c5Dd8`. The configured confirmer,
 private-key-derived signer, and live `get_config().withdrawal_confirmer` must
 match exactly on every chain precheck.
@@ -83,11 +83,10 @@ Do not deploy from the repository root. Create a separate Vercel project with th
 1. Keep `INFLUENCEDX_WITHDRAWAL_RECONCILER_ENABLED=false`.
 2. Create a dedicated private PostgreSQL database/schema and set `DATABASE_URL`.
 3. Run `npm ci` and `npm run migrate` through
-   [`0005_fresh_studionet_marketplace_address.sql`](migrations/0005_fresh_studionet_marketplace_address.sql)
-   against that database. The migrations
-   fail closed if any rows from a retired contract or owner-authorized signer
-   boundary exist; use a fresh database or explicitly archive them after manual
-   reconciliation.
+   [`0006_marketplace_v3_cutover.sql`](migrations/0006_marketplace_v3_cutover.sql)
+   against that database. Migration `0006` requires an idle signer gate,
+   quarantines unfinished V2 reconciliation work, and retains completed V2 rows
+   for audit and rollback.
 4. Configure every exact variable from `.env.example`. The private key must
    derive to the configured withdrawal confirmer. Every chain precheck also
    requires the live contract's `withdrawal_confirmer` to match and rejects any

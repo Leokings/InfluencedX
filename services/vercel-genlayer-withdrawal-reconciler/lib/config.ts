@@ -66,15 +66,15 @@ export function loadConfig(
   if (network !== RECONCILER_NETWORK) fail(`INFLUENCEDX_GENLAYER_NETWORK must be ${RECONCILER_NETWORK}.`);
   if (chainId !== String(STUDIONET_CHAIN_ID)) fail(`INFLUENCEDX_GENLAYER_CHAIN_ID must be ${STUDIONET_CHAIN_ID}.`);
   if (rpcUrl !== STUDIONET_RPC_URL) fail("INFLUENCEDX_GENLAYER_RPC_URL is not the pinned StudioNet endpoint.");
-  if (contractAddress !== MARKETPLACE_ADDRESS) fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V2 deployment.");
+  if (contractAddress !== MARKETPLACE_ADDRESS) fail("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V3 deployment.");
   if (!/^0x[0-9a-f]{40}$/.test(contractWithdrawalConfirmer) || /^0x0{40}$/.test(contractWithdrawalConfirmer)) {
     fail("INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER must be a non-zero address.");
   }
   if (contractWithdrawalConfirmer !== MARKETPLACE_WITHDRAWAL_CONFIRMER) {
     fail("INFLUENCEDX_GENLAYER_MARKETPLACE_WITHDRAWAL_CONFIRMER is not the pinned confirmer.");
   }
-  if (contractProtocol !== MARKETPLACE_PROTOCOL) fail("The marketplace protocol must be INFLUENCEDX_MARKETPLACE_V2.");
-  if (contractSchemaVersion !== String(MARKETPLACE_SCHEMA_VERSION)) fail("The marketplace storage schema must be 2.");
+  if (contractProtocol !== MARKETPLACE_PROTOCOL) fail("The marketplace protocol must be INFLUENCEDX_MARKETPLACE_V3.");
+  if (contractSchemaVersion !== String(MARKETPLACE_SCHEMA_VERSION)) fail("The marketplace storage schema must be 3.");
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey) || /^0x0{64}$/i.test(privateKey)) {
     fail("GENLAYER_WITHDRAWAL_CONFIRMER_PRIVATE_KEY must be a non-zero 32-byte key.");
   }

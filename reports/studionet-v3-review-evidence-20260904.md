@@ -104,10 +104,12 @@ and used a public Farcaster cast published after acceptance.
 - Transfer evidence hash: `0x3cf197036e9362c26e0cdf9d0a6d00dd15cdd482e8e12139f8c8f49f1e3e55ad`
 - Isolated-candidate confirmer rotation: [`0xb3d6e744f4cb29fe46520af36e169aa09d197b27eea633f2090f2b9000f286ff`](https://explorer-studio.genlayer.com/tx/0xb3d6e744f4cb29fe46520af36e169aa09d197b27eea633f2090f2b9000f286ff)
 - Finalized `confirm_withdrawal`: [`0x5aa41e2a1bbd5a2dde151f8c9d2b1bbc983fbdc284327e69d782477db28fdc3b`](https://explorer-studio.genlayer.com/tx/0x5aa41e2a1bbd5a2dde151f8c9d2b1bbc983fbdc284327e69d782477db28fdc3b)
+- Hosted-service confirmer restoration: [`0x321730ce272f979e711b5bcc9033ee30b6831f2648409aab9c048f4ab7499fa2`](https://explorer-studio.genlayer.com/tx/0x321730ce272f979e711b5bcc9033ee30b6831f2648409aab9c048f4ab7499fa2)
 - Contract withdrawal state: `CONFIRMED`; reconciled at epoch `1788551732`
 
 The restricted confirmer verified the finalized credited child and bound its
 evidence hash into V3. This completes the funded campaign, submission,
 resolution, withdrawal, emitted transfer, and on-chain confirmation path. The
-role change affected only the isolated V3 candidate; V2 still serves the
-application and no production cutover has occurred.
+review signer was used only to prove the submitted canary. V3 was then restored
+to the existing restricted hosted confirmer at
+`0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8` for the reviewer-preview cutover.

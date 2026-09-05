@@ -11,7 +11,7 @@ import {
   runGenLayerSharedObservationRepairBatch,
 } from "../lib/marketplace-genlayer-shared-observation.ts";
 import {
-  MARKETPLACE_V2_STUDIONET_ADDRESS,
+  MARKETPLACE_V3_STUDIONET_ADDRESS,
   canonicalHash,
   type FinalizedMarketplaceTransaction,
 } from "../lib/marketplace-genlayer-rpc.ts";
@@ -507,7 +507,7 @@ function sharedFixture() {
   } as GenLayerAssignmentProjection;
   const campaignProjection = {
     campaignId,
-    contractAddress: MARKETPLACE_V2_STUDIONET_ADDRESS,
+    contractAddress: MARKETPLACE_V3_STUDIONET_ADDRESS,
     brandWallet: brand,
     clientNonce: campaign.clientNonce,
     contentSource: "X",
@@ -534,7 +534,7 @@ function sharedFixture() {
   const finalized: FinalizedMarketplaceTransaction = {
     hash: transactionHash,
     sender: brand,
-    recipient: MARKETPLACE_V2_STUDIONET_ADDRESS,
+    recipient: MARKETPLACE_V3_STUDIONET_ADDRESS,
     functionName: "resolve_assignment",
     args: [assignmentId, requestId],
     lifecycleStatus: "FINALIZED",

@@ -139,7 +139,7 @@ const txHash = `0x${"33".repeat(32)}`;
 const campaignId = `0x${"44".repeat(32)}`;
 const assignmentId = `0x${"45".repeat(32)}`;
 const requestId = `0x${"46".repeat(32)}`;
-const marketplaceAddress = "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb";
+const marketplaceAddress = "0x492175c248168ddb9571cbf4c6a14296e3348181";
 const creator = "0x5555555555555555555555555555555555555555";
 const maintenanceDeploymentId = "dpl_7Gw5ZMBpQA8h9GF832KGp7nwbuh3";
 const nextMaintenanceDeploymentId = "dpl_8Hx6ANCqRB9i0HG943LHq8oxcvi4";
@@ -156,7 +156,7 @@ const maintenanceContext: MarketplaceMaintenanceDeploymentContext = {
 test("StudioNet RPC calls preserve the deployed checksum address", () => {
   assert.equal(
     marketplaceRpcContractAddress(),
-    "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb",
+    "0x492175c248168DDB9571CBF4c6A14296e3348181",
   );
 });
 
@@ -169,31 +169,31 @@ test("web configuration and the deployment manifest pin the fresh StudioNet mark
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
   ]);
   const manifest = JSON.parse(manifestText) as {
-    marketplace: {
+    candidateMarketplace: {
       address: string;
       deploymentTransaction: string;
       deployedAt: string;
       sourceSha256: string;
-      sourceCommit: string;
+      sourceCommitBase: string;
     };
     historicalMarketplaces: Array<{ address: string }>;
   };
   assert.equal(
-    manifest.marketplace.address,
-    "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb",
+    manifest.candidateMarketplace.address,
+    "0x492175c248168DDB9571CBF4c6A14296e3348181",
   );
   assert.equal(
-    manifest.marketplace.deploymentTransaction,
-    "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998",
+    manifest.candidateMarketplace.deploymentTransaction,
+    "0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8",
   );
-  assert.equal(manifest.marketplace.deployedAt, "2026-08-19T21:45:34.887910Z");
+  assert.equal(manifest.candidateMarketplace.deployedAt, "2026-09-04T13:28:21.338118Z");
   assert.equal(
-    manifest.marketplace.sourceSha256,
-    "0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705",
+    manifest.candidateMarketplace.sourceSha256,
+    "0x6e97a6f97ff96af9cd14f2b06e0ac86db4b2965b1bba49f4e7548dd77fe6f2e6",
   );
   assert.equal(
-    manifest.marketplace.sourceCommit,
-    "8271a92172eb5c014a930ef31611fb956908de16",
+    manifest.candidateMarketplace.sourceCommitBase,
+    "edb5a33465da87ca3a8703f9c573805fed421f1e",
   );
   assert.ok(
     manifest.historicalMarketplaces.some(
@@ -203,11 +203,26 @@ test("web configuration and the deployment manifest pin the fresh StudioNet mark
   );
   assert.match(
     environmentExample,
-    /^INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb$/m,
+    /^INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x492175c248168DDB9571CBF4c6A14296e3348181$/m,
   );
   assert.match(
     environmentExample,
-    /^NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb$/m,
+    /^NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x492175c248168DDB9571CBF4c6A14296e3348181$/m,
+  );
+});
+
+test("0018 retires only unfinished V2 work for the V3 cutover", async () => {
+  const migration = await readFile(
+    new URL("../drizzle-postgres/0018_marketplace_v3_cutover.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb/);
+  assert.match(migration, /MARKETPLACE_V3_CUTOVER/);
+  assert.match(migration, /'PREPARED', 'SUBMITTED', 'ACCEPTED', 'RECONCILIATION_REQUIRED'/);
+  assert.match(migration, /DELETE FROM "marketplace_genlayer_maintenance_generations"/);
+  assert.doesNotMatch(
+    migration,
+    /"(?:activation_tx_hash|finalized_request_id|x_post_id|farcaster_cast_hash)" = NULL/,
   );
 });
 

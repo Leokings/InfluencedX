@@ -21,6 +21,12 @@ export const MARKETPLACE_V2_STUDIONET_RPC_ADDRESS =
   "0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb" as const;
 export const MARKETPLACE_V2_DEPLOYMENT_TX =
   "0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998" as const;
+export const MARKETPLACE_V3_STUDIONET_ADDRESS =
+  "0x492175c248168ddb9571cbf4c6a14296e3348181" as const;
+export const MARKETPLACE_V3_STUDIONET_RPC_ADDRESS =
+  "0x492175c248168DDB9571CBF4c6A14296e3348181" as const;
+export const MARKETPLACE_V3_DEPLOYMENT_TX =
+  "0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8" as const;
 export const MARKETPLACE_GENLAYER_ARG_TYPES = [
   "string",
   "bool",
@@ -66,7 +72,7 @@ export function marketplaceContractAddress(): `0x${string}` {
   const value = (
     process.env.INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS ??
     process.env.NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS ??
-    MARKETPLACE_V2_STUDIONET_ADDRESS
+    MARKETPLACE_V3_STUDIONET_ADDRESS
   )
     .trim()
     .toLowerCase();
@@ -75,20 +81,20 @@ export function marketplaceContractAddress(): `0x${string}` {
       "INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not configured.",
     );
   }
-  if (value !== MARKETPLACE_V2_STUDIONET_ADDRESS) {
-    throw new Error("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V2 deployment.");
+  if (value !== MARKETPLACE_V3_STUDIONET_ADDRESS) {
+    throw new Error("INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS is not the pinned V3 deployment.");
   }
   return value as `0x${string}`;
 }
 
 export function marketplaceRpcContractAddress(): `0x${string}` {
   marketplaceContractAddress();
-  return MARKETPLACE_V2_STUDIONET_RPC_ADDRESS;
+  return MARKETPLACE_V3_STUDIONET_RPC_ADDRESS;
 }
 
 export function marketplaceContractVersion(): string {
   const value =
-    process.env.INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION?.trim() || "2";
+    process.env.INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION?.trim() || "3";
   if (!/^[A-Za-z0-9._-]{1,32}$/.test(value)) {
     throw new Error("The GenLayer marketplace version is invalid.");
   }

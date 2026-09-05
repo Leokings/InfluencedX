@@ -17,7 +17,11 @@ const freshStudioNetCutover = await readFile(
   new URL("../migrations/0005_fresh_studionet_marketplace_address.sql", import.meta.url),
   "utf8",
 );
-const migration = [...historicalMigrations.map(([, source]) => source), freshStudioNetCutover].join("\n");
+const marketplaceV3Cutover = await readFile(
+  new URL("../migrations/0006_marketplace_v3_cutover.sql", import.meta.url),
+  "utf8",
+);
+const migration = [...historicalMigrations.map(([, source]) => source), freshStudioNetCutover, marketplaceV3Cutover].join("\n");
 const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8")) as Record<string, unknown>;
 const clientSource = await readFile(new URL("../lib/studionet-client.ts", import.meta.url), "utf8");
 const serviceSource = await readFile(new URL("../lib/operation-service.ts", import.meta.url), "utf8");
@@ -34,6 +38,10 @@ test("database constraints bind the exact deployment, confirmer role, zero value
     freshStudioNetCutover,
     /CHECK \(contract_address = '0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb'\)/,
   );
+  assert.match(marketplaceV3Cutover, /signer gate must be idle before the V3 cutover/);
+  assert.match(marketplaceV3Cutover, /MARKETPLACE_V3_CUTOVER/);
+  assert.match(marketplaceV3Cutover, /'0x492175c248168ddb9571cbf4c6a14296e3348181'/);
+  assert.match(marketplaceV3Cutover, /contract_address IN/);
   assert.match(migration, /withdrawal_confirmer/);
   assert.match(migration, /0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8/);
   assert.match(migration, /influencedx-withdrawal-confirmer-signer-v1/);

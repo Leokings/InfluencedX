@@ -12,7 +12,11 @@ const freshStudioNetCutover = await readFile(
   new URL("../migrations/0003_fresh_studionet_marketplace_address.sql", import.meta.url),
   "utf8",
 );
-const migration = `${baseMigration}\n${identityBundleCutover}\n${freshStudioNetCutover}`;
+const marketplaceV3Cutover = await readFile(
+  new URL("../migrations/0004_marketplace_v3_cutover.sql", import.meta.url),
+  "utf8",
+);
+const migration = `${baseMigration}\n${identityBundleCutover}\n${freshStudioNetCutover}\n${marketplaceV3Cutover}`;
 const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8")) as Record<string, unknown>;
 const clientSource = await readFile(new URL("../lib/studionet-client.ts", import.meta.url), "utf8");
 const migratorSource = await readFile(new URL("../scripts/migrate.ts", import.meta.url), "utf8");
@@ -37,6 +41,10 @@ test("database constraints pin StudioNet, zero value, the allowlist, and singlet
     freshStudioNetCutover,
     /CHECK \(contract_address = '0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb'\)/,
   );
+  assert.match(marketplaceV3Cutover, /signer gate must be idle before the V3 cutover/);
+  assert.match(marketplaceV3Cutover, /MARKETPLACE_V3_CUTOVER/);
+  assert.match(marketplaceV3Cutover, /'0x492175c248168ddb9571cbf4c6a14296e3348181'/);
+  assert.match(marketplaceV3Cutover, /contract_address IN/);
 });
 
 test("the migration runner serializes, checksums, and atomically records every migration", () => {

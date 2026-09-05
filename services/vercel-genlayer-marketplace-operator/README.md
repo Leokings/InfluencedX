@@ -8,11 +8,11 @@ An isolated, disabled-by-default StudioNet service for three permissionless mark
 
 It cannot accept a target, method, arbitrary argument array, or native value from a caller. The target is the configured marketplace contract, the method is selected from the fixed allowlist, arguments are derived from a strict request shape, and the only write adapter hard-codes `value: 0n`.
 
-The service is address- and protocol-driven for Marketplace V2, deployed on
-StudioNet at `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` by finalized transaction
-`0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998`, with
-protocol `INFLUENCEDX_MARKETPLACE_V2` and storage schema `2`. It deliberately does
-**not** operate retired V1 at `0x36462a0FCF2b77745d3D0C2B69eC8158F19FDE11`.
+The service is address- and protocol-driven for Marketplace V3, deployed on
+StudioNet at `0x492175c248168DDB9571CBF4c6A14296e3348181` by finalized transaction
+`0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8`, with
+protocol `INFLUENCEDX_MARKETPLACE_V3` and storage schema `3`. It deliberately does
+**not** operate the retained V2 rollback deployment or retired V1 deployments.
 Keep it disabled until the exact address, ABI, live `get_config()`, database
 migration, queue, signer separation, and authorized caller deployment have all
 been verified.
@@ -47,9 +47,9 @@ All variables are required when enabled:
 | `INFLUENCEDX_MARKETPLACE_OPERATOR_STAGE` | `studionet` |
 | `INFLUENCEDX_GENLAYER_NETWORK` | `studionet` |
 | `INFLUENCEDX_GENLAYER_CHAIN_ID` | `61999` |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb`; non-zero lower/upper input is normalized to lower case. |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL` | `INFLUENCEDX_MARKETPLACE_V2`, matching live `get_config().protocol_version`. |
-| `INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION` | `2`, matching live `get_config().storage_schema_version`. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS` | `0x492175c248168DDB9571CBF4c6A14296e3348181`; non-zero lower/upper input is normalized to lower case. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_PROTOCOL` | `INFLUENCEDX_MARKETPLACE_V3`, matching live `get_config().protocol_version`. |
+| `INFLUENCEDX_GENLAYER_MARKETPLACE_SCHEMA_VERSION` | `3`, matching live `get_config().storage_schema_version`. |
 | `GENLAYER_MARKETPLACE_OPERATOR_PRIVATE_KEY` | Dedicated zero-fund StudioNet operator key. Never reuse an owner/governance key. |
 | `DATABASE_URL` | Private PostgreSQL connection URL. |
 | `INFLUENCEDX_OPERATOR_SERVICE_TOKEN` | Independent random 32-byte hex token. |
@@ -79,7 +79,7 @@ Vercel Queue uses the deployment workload's OIDC automatically. Outside Vercel, 
 
 Extra fields are rejected. The response is `202` for a new operation or `200` for an idempotent replay and contains the deterministic `operation.operationId`. Poll `GET /v1/operations/:operationId` with the same two credentials. No private envelope or state snapshot is returned.
 
-The web/backend integration must create requests only after reading the authoritative v2 contract state. Replaying the same action and arguments produces the same operation ID. An operation in `PRECHECK_FAILED` can be replayed after its deadline becomes eligible. `RECONCILIATION_REQUIRED` is terminal and requires an operator investigation; never create a replacement job or signer key to bypass it.
+The web/backend integration must create requests only after reading the authoritative V3 contract state. Replaying the same action and arguments produces the same operation ID. An operation in `PRECHECK_FAILED` can be replayed after its deadline becomes eligible. `RECONCILIATION_REQUIRED` is terminal and requires an operator investigation; never create a replacement job or signer key to bypass it.
 
 ## Setup and verification
 
@@ -92,12 +92,12 @@ npm run build
 npm audit --omit=dev
 ```
 
-Deploy this directory as its own Vercel project only after V2 is deployed and
+Deploy this directory as its own Vercel project only after V3 is deployed and
 verified. Run all migrations through
-[`0003_fresh_studionet_marketplace_address.sql`](migrations/0003_fresh_studionet_marketplace_address.sql)
-against a private database. Migration `0003` refuses to relabel rows belonging
-to another contract; use a fresh database or explicitly archive fully
-reconciled historical rows. Configure every exact environment binding, leave
+[`0004_marketplace_v3_cutover.sql`](migrations/0004_marketplace_v3_cutover.sql)
+against a private database. Migration `0004` requires an idle signer gate,
+quarantines unfinished V2 operations, and retains completed V2 rows for audit
+and rollback. Configure every exact environment binding, leave
 `INFLUENCEDX_MARKETPLACE_OPERATOR_ENABLED=false`, deploy, verify the queue
 trigger exists, then enable it in a new deployment.
 

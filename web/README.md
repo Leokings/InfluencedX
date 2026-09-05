@@ -1,13 +1,12 @@
 # InfluencedX web
 
 The InfluencedX web application is the user and indexing layer for the
-GenLayer-only Marketplace V2 product. It supports X and Farcaster creator
+GenLayer-only Marketplace V3 product. It supports X and Farcaster creator
 identity, native GEN campaigns, direct user-signed lifecycle writes, hosted
 resolution progression, and reconciled native withdrawals.
 
-The isolated V2 release has not yet replaced the existing public deployment.
-Do not present a public URL as the V2 product until the E2E and cutover gates in
-[`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) are complete.
+The reviewer-facing Preview deployment is pinned to the fully tested V3
+contract. V2 remains deployed only as a rollback and audit target.
 
 ## Active deployment
 
@@ -15,10 +14,10 @@ Do not present a public URL as the V2 product until the E2E and cutover gates in
 | --- | --- |
 | Network | GenLayer StudioNet |
 | Chain ID | `61999` |
-| Contract | `0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb` |
-| Deployment transaction | `0x05ff78998a2b389c7e102f6f09b893dbd16d376f3c18f9748b2b8ef9de5e7998` |
-| Source SHA-256 | `0xcdb7a7126cb59705bddf8862c49d9ce6d49c9c18e792d4851c071ad403d10705` |
-| Protocol / schema | `INFLUENCEDX_MARKETPLACE_V2` / `2` |
+| Contract | `0x492175c248168DDB9571CBF4c6A14296e3348181` |
+| Deployment transaction | `0x3e3b7e8a10ab46c5e19638c3efd6816d78911d10213188571cbd4393f6494da8` |
+| Source SHA-256 | `0x6e97a6f97ff96af9cd14f2b06e0ac86db4b2965b1bba49f4e7548dd77fe6f2e6` |
+| Protocol / schema | `INFLUENCEDX_MARKETPLACE_V3` / `3` |
 | Native unit | GEN / 18 decimals |
 | Deployment record | [`deployments/genlayer-studionet.json`](../deployments/genlayer-studionet.json) |
 
@@ -53,9 +52,9 @@ The active chain pins are:
 
 ```text
 GENLAYER_STUDIONET_RPC_URL=https://studio.genlayer.com/api
-INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
-NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0xb72FE7272A5aEdf3c6Ba893394EbeF818fd86Fbb
-INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION=2
+INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x492175c248168DDB9571CBF4c6A14296e3348181
+NEXT_PUBLIC_INFLUENCEDX_GENLAYER_MARKETPLACE_ADDRESS=0x492175c248168DDB9571CBF4c6A14296e3348181
+INFLUENCEDX_GENLAYER_MARKETPLACE_VERSION=3
 ```
 
 `XPROOF_APP_ORIGIN`, `XPROOF_VERIFICATION_MUTATIONS_ENABLED`, and
@@ -83,11 +82,11 @@ prepared ID and transaction hash.
 The server accepts the transition only after it proves:
 
 - sender equals the session wallet;
-- target equals Marketplace V2;
+- target equals Marketplace V3;
 - decoded method, ordered arguments, and native value match the prepared call;
 - the StudioNet transaction is `FINALIZED` with `MAJORITY_AGREE` and exactly one
   successful leader return; and
-- the V2 post-state matches the expected identity/campaign/assignment/withdrawal
+- the V3 post-state matches the expected identity/campaign/assignment/withdrawal
   transition.
 
 `create_campaign` carries the exact GEN budget in atto-GEN. All other normal
@@ -114,13 +113,15 @@ into a failed identity or campaign.
 ## Native marketplace projection
 
 Apply every migration through
-[`0016_maintenance_heartbeat_lease.sql`](drizzle-postgres/0016_maintenance_heartbeat_lease.sql)
+[`0018_marketplace_v3_cutover.sql`](drizzle-postgres/0018_marketplace_v3_cutover.sql)
 before deploying code that can activate the maintenance heartbeat or enabling
-V2 mutations. Migration `0012` expires unfinished identity and transaction work
+V3 mutations. Migration `0012` expires unfinished identity and transaction work
 scoped to the retired marketplace and clears only the two retired marketplace
 namespaces that held maintenance-generation authority, without deleting audit
 evidence. Migration `0016` adds the durable queue-message winner required for a
-safe heartbeat handoff. This is a migration-first rollout: `npm run db:verify`
+safe heartbeat handoff. Migration `0018` terminalizes only unfinished V2 web
+intents and starts V3 with a fresh maintenance generation. This is a
+migration-first rollout: `npm run db:verify`
 must pass and report `"schemaVersion":6` before the new web deployment is
 activated.
 
@@ -129,7 +130,7 @@ protocol/storage version, and onchain ID. Private pitches are stored only for
 authorized application views; onchain applications bind their commitment.
 Prepared calls and confirmations are idempotent and actor-bound.
 
-Every campaign page and dashboard must be derived from authoritative V2 state
+Every campaign page and dashboard must be derived from authoritative V3 state
 plus the matching deployment-scoped projection. Demo fixtures cannot label a
 campaign funded, settled, refunded, or paid.
 
@@ -189,12 +190,12 @@ database check.
 ## Native withdrawal reconciliation
 
 A user signs `request_withdrawal` and `execute_withdrawal`. The latter can leave
-V2 at `EMITTED_UNCONFIRMED`; that state is not delivered payment.
+V3 at `EMITTED_UNCONFIRMED`; that state is not delivered payment.
 
 The separate
 [withdrawal reconciler](../services/vercel-genlayer-withdrawal-reconciler/README.md)
 derives recipient/amount/evidence from finalized chain state, proves the unique
-native transfer child, and uses the dedicated V2 withdrawal-confirmer boundary
+native transfer child, and uses the dedicated V3 withdrawal-confirmer boundary
 only for exact zero-value `confirm_withdrawal`. The web caller sends only the
 lowercase withdrawal ID.
 
@@ -215,10 +216,10 @@ independent `CRON_SECRET` and alert if cleanup reports a capped backlog.
 
 ## Release checks
 
-Before enabling V2 web mutations:
+Before enabling V3 web mutations:
 
 1. lint, unit, optimized build, and rendered smoke pass on the exact commit;
-2. migration `0016` is applied before the web deployment and `db:verify`
+2. migration `0018` is applied before the web deployment and `db:verify`
    reports `"schemaVersion":6`;
 3. after deployment, activate only the next monotonic maintenance generation,
    then run a controlled current-slot and next-slot reseed canary; observe at
@@ -242,5 +243,5 @@ Before enabling V2 web mutations:
 Some legacy modules, migrations, tests, and root commands remain for audit and
 regression of the former Base Sepolia/test-USDC/APV2/watcher-relay prototype.
 They are not active routes, runtime configuration, deployment steps, or queues
-for Marketplace V2. The historical evidence is isolated in
+for Marketplace V3. The historical evidence is isolated in
 [`docs/preview-base-sepolia-relay.md`](../docs/preview-base-sepolia-relay.md).

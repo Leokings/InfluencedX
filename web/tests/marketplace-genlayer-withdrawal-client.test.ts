@@ -7,7 +7,7 @@ import {
 } from "../lib/marketplace-genlayer-withdrawal-client.ts";
 
 const withdrawalId = `0x${"11".repeat(32)}`;
-const contractAddress = "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb";
+const contractAddress = "0x492175c248168ddb9571cbf4c6a14296e3348181";
 const withdrawalConfirmer = "0xaafc5d9075a404d82b8ee1692f7ff802168c5dd8";
 const now = "2026-08-19T12:00:00.000Z";
 

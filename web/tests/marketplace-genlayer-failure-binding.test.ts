@@ -16,7 +16,7 @@ import {
 
 const actor = "0x1111111111111111111111111111111111111111";
 const unrelatedActor = "0x2222222222222222222222222222222222222222";
-const contract = "0xb72fe7272a5aedf3c6ba893394ebef818fd86fbb" as const;
+const contract = "0x492175c248168ddb9571cbf4c6a14296e3348181" as const;
 const campaignId = `0x${"44".repeat(32)}`;
 const txHash = `0x${"33".repeat(32)}`;
 
