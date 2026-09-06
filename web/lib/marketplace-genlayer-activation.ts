@@ -47,6 +47,7 @@ import {
   canonicalHash,
   exactTerminalMarketplaceTransaction,
   loadFinalizedMarketplaceTransaction,
+  loadSubmittedMarketplaceTransaction,
   marketplaceCalldataAddress,
   marketplaceContractAddress,
   readMarketplaceState,
@@ -56,6 +57,7 @@ import {
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem } from "./verification-api.ts";
 import type { AuthenticatedWalletSession } from "./wallet-session.ts";
+import { issueActivationReceiptCapability } from "./activation-receipt-capability.ts";
 
 const TX_HASH = /^0x[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -673,7 +675,46 @@ export async function prepareGenLayerIdentityBundleActivation(input: {
     preparedId: prepared.preparedId,
     bundleRequestId: envelope.bundleRequestId,
     transaction: prepared.call,
+    submissionToken: issueActivationReceiptCapability({
+      requestId: row.id, preparedId: prepared.preparedId,
+      subject: input.session.subject, wallet: row.wallet,
+      contractAddress: marketplaceContractAddress(),
+    }, { nowMs }),
   });
+}
+
+/** Returns only the same immutable identity call; never creates a new attempt.
+ * The browser may use it only with its durable, never-dispatched READY entry.
+ * Unknown/legacy attempts without that entry stay confirm-only. */
+export async function resumeGenLayerIdentityBundlePreparation(input: {
+  session: AuthenticatedWalletSession;
+  requestId: string;
+  preparedId: string;
+  nowMs?: number;
+}) {
+  const nowMs = input.nowMs ?? Date.now();
+  const row = await ownedRow(input.session, input.requestId);
+  if (row.activationPreparedId !== uuid(input.preparedId, "preparedId") || row.sessionDetachedAt !== null) preparedMismatch();
+  const prepared = await findGenLayerPreparedTransaction(input.preparedId);
+  if (!prepared || prepared.operation !== "ACTIVATE_IDENTITY_BUNDLE" || prepared.actorWallet !== row.wallet) preparedMismatch();
+  const envelope = storedIdentityBundleEnvelope(row, prepared);
+  const call = identityBundleActivationCall(row, envelope);
+  assertPreparedActivation(prepared, call);
+  if (prepared.transactionHash) {
+    return { request: await requireProjection(input.session.subject, row.id, nowMs), recovery: { requestId: row.id, preparedId: prepared.preparedId, txHash: prepared.transactionHash } };
+  }
+  if (prepared.status !== "PREPARED" || row.requestExpiresAt <= nowMs || row.genlayerOutcome !== null) stateChanged();
+  return {
+    request: await requireProjection(input.session.subject, row.id, nowMs),
+    preparedId: prepared.preparedId,
+    bundleRequestId: envelope.bundleRequestId,
+    transaction: call,
+    submissionToken: issueActivationReceiptCapability({
+      requestId: row.id, preparedId: prepared.preparedId,
+      subject: input.session.subject, wallet: row.wallet,
+      contractAddress: marketplaceContractAddress(),
+    }, { nowMs }),
+  };
 }
 
 export async function coordinateIdentityBundlePreparation<T>(input: {
@@ -721,9 +762,10 @@ export async function confirmGenLayerCreatorActivation(input: {
 }
 
 export async function bindGenLayerIdentityBundleActivationSubmission(input: {
-  session: AuthenticatedWalletSession;
+  session: Pick<AuthenticatedWalletSession, "subject" | "wallet">;
   preparedId: unknown;
   txHash: unknown;
+  receiptRequestId?: string;
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -741,6 +783,7 @@ export async function bindGenLayerIdentityBundleActivationSubmission(input: {
   const prepared = await findGenLayerPreparedTransaction(preparedId);
   if (
     !row ||
+    (input.receiptRequestId !== undefined && row.id !== input.receiptRequestId) ||
     !prepared ||
     prepared.operation !== "ACTIVATE_IDENTITY_BUNDLE" ||
     prepared.actorWallet !== row.wallet ||
@@ -751,6 +794,14 @@ export async function bindGenLayerIdentityBundleActivationSubmission(input: {
   }
   const envelope = storedIdentityBundleEnvelope(row, prepared);
   assertPreparedActivation(prepared, identityBundleActivationCall(row, envelope));
+  let transaction: Awaited<ReturnType<typeof loadSubmittedMarketplaceTransaction>>;
+  try { transaction = await loadSubmittedMarketplaceTransaction(transactionHash); }
+  catch { throw problem(503, "ACTIVATION_RECEIPT_PENDING", "Transaction receipt is not available yet. Recovery is saved."); }
+  try {
+    assertTransactionMatchesPreparedCall({ transaction, call: identityBundleActivationCall(row, envelope), actorWallet: row.wallet });
+  } catch {
+    throw problem(409, "ACTIVATION_RECEIPT_MISMATCH", "This transaction does not match the saved verification. Check its wallet, contract and transaction hash.");
+  }
   const bound = await bindGenLayerTransactionHash({
     preparedId,
     actorWallet: row.wallet,

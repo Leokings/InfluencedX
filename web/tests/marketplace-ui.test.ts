@@ -591,7 +591,7 @@ test("terminal transaction cleanup is actor-scoped and followed by authoritative
   ]);
   assert.match(detail, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*clearRecovery\(activeActor, input\.key\)[\s\S]*await loadDetail\(\)/);
   assert.match(funding, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*localStorage\.removeItem\(recoveryKey\)[\s\S]*setSubmitted\(null\)[\s\S]*await onFunded\(\)/);
-  assert.match(verification, /isTerminalMarketplaceTransactionError\(activationError\)[\s\S]*clearRecovery\(effectiveWallet, request\.id\)[\s\S]*setRecovery\(null\)/);
+  assert.match(verification, /isTerminalMarketplaceTransactionError\(activationError\)[\s\S]*clearRecovery\(effectiveWallet, request\.id, activePreparedId \?\? undefined\)[\s\S]*setRecovery\(null\)/);
 });
 
 test("UNDETERMINED exposes bounded retry and refund paths", async () => {
@@ -767,7 +767,7 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   assert.equal(source.match(/1 TRANSACTION/g)?.length, 1);
   assert.doesNotMatch(source, /Pinned to this wallet|ONE WALLET TRANSACTION|NO SOCIAL PASSWORDS/);
   assert.match(source, /\/api\/verification\/activation\/submitted/);
-  assert.match(source, /onSubmitted: async \(hash\)/);
+  assert.match(source, /onSubmitted: callbacks\.onSubmitted/);
   assert.match(source, /genlayerOutcome === "UNDETERMINED"/);
   assert.match(source, /retryableUndetermined \? "RETRY BOTH →"/);
   assert.match(source, /broadcastMarketplaceTransaction/);
@@ -779,18 +779,16 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
   const recoveryBranch = activation.indexOf("if (recovery)");
   const castUrlRead = activation.indexOf("farcasterCastUrl.trim()");
   assert.ok(recoveryBranch >= 0 && castUrlRead > recoveryBranch);
-  assert.match(activation, /activationReadyRetryRef\.current/);
-  assert.match(activation, /ready\.requestId === request\.id/);
-  assert.match(activation, /ready\.wallet === normalizedWallet/);
-  assert.match(activation, /ready\.verificationPostUrl === normalizedVerificationPostUrl/);
-  assert.match(activation, /ready\.farcasterCastUrl === normalizedFarcasterCastUrl/);
-  const reuseReady = activation.indexOf("reusableReady?.prepared ?? await api<PreparedActivation>");
-  const readyStored = activation.indexOf("activationReadyRetryRef.current = {", reuseReady);
-  const activationBroadcast = activation.indexOf("await broadcastMarketplaceTransaction", readyStored);
-  assert.ok(reuseReady >= 0 && readyStored > reuseReady && activationBroadcast > readyStored);
-  const submitted = activation.indexOf("onSubmitted: async (hash)", activationBroadcast);
-  assert.ok(activation.indexOf("activationReadyRetryRef.current = null", submitted) > submitted);
-  assert.match(activation, /readyMayBeRetried && isExplicitEip1193UserRejection\(activationError\)/);
+  assert.match(activation, /runDurableActivation\(\{\s*wallet: effectiveWallet,\s*requestId: request\.id,/);
+  assert.match(activation, /async resume\(preparedId\)[\s\S]*\/activation\/prepared[\s\S]*requestId: request\.id, preparedId/);
+  assert.match(activation, /beforeWalletRequest: callbacks\.beforeWalletRequest/);
+  assert.match(activation, /record: submitActivationReceipt/);
+  assert.doesNotMatch(activation, /activationReadyRetryRef|readyMayBeRetried/);
+  const outbox = await readFile(new URL("../app/verify/activation-outbox.ts", import.meta.url), "utf8");
+  assert.match(outbox, /attempt \? await input\.resume\(attempt\.preparedId\) : await input\.prepare\(\)/);
+  assert.match(outbox, /isExplicitEip1193UserRejection\(error\) && attempt\.phase === "wallet" && attempt\.txHash === null/);
+  assert.match(outbox, /locks\.request\(key, \{ ifAvailable: true \}/);
+  assert.ok(outbox.indexOf('phase: "ready", txHash: null') < outbox.indexOf("await input.broadcast"));
   assert.doesNotMatch(source, /\/api\/verification\/(?:x-challenge|farcaster-challenge)/);
   assert.doesNotMatch(source, /expectedFunctionName: "activate_(?:creator|farcaster_creator)"/);
   assert.doesNotMatch(source, /\/api\/verification\/(intent|submit)/);
@@ -798,6 +796,7 @@ test("X and Farcaster verification prepare both proofs and submit one pinned bun
 
   const transactionSource = await readFile(new URL("../app/marketplace/marketplace-transaction.ts", import.meta.url), "utf8");
   assert.match(transactionSource, /await options\.onSubmitted\?\.\(hash\)/);
+  assert.ok(transactionSource.indexOf("options.beforeWalletRequest?.()") < transactionSource.indexOf("await writeClient.writeContract"));
   assert.ok(transactionSource.indexOf("await options.onSubmitted?.(hash)") < transactionSource.indexOf("waitForTransactionReceipt"));
   assert.match(transactionSource, /plan\.functionName === "resolve_assignment"/);
   assert.match(transactionSource, /getTriggeredTransactionIds\(\{ hash: hash as never \}\)/);

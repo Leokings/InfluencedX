@@ -74,6 +74,7 @@ export async function broadcastMarketplaceTransaction(
     expectedFunctionName: UserMarketplaceFunctionName;
     expectedValue: string;
     onSubmitted?: (hash: `0x${string}`) => void | Promise<void>;
+    beforeWalletRequest?: () => void;
     onStage?: (stage: GenLayerTransactionStage) => void;
   }>,
 ): Promise<`0x${string}`> {
@@ -105,6 +106,7 @@ export async function broadcastMarketplaceTransaction(
   const value = BigInt(plan.value);
 
   options.onStage?.("wallet");
+  options.beforeWalletRequest?.();
   const hash = await writeClient.writeContract({
     address: contractAddress,
     functionName: plan.functionName,

@@ -1,7 +1,7 @@
 import { runGenLayerJournalReconciliationBatch } from "./marketplace-genlayer-journal.ts";
 import { runGenLayerProgressionBatch } from "./marketplace-genlayer-progression.ts";
 import { runGenLayerSharedObservationRepairBatch } from "./marketplace-genlayer-shared-observation.ts";
-import { releaseExpiredDetachedNativeVerificationRuns } from "./verification-native-service.ts";
+import { releaseExpiredFinalizedNativeVerificationRuns } from "./verification-native-service.ts";
 
 /** Runs direct-write repair before deadline automation sees the projections. */
 export async function runGenLayerMaintenanceBatch(options: {
@@ -19,7 +19,7 @@ export async function runGenLayerMaintenanceBatch(options: {
     nowMs,
     limit: options.sharedObservationLimit,
   });
-  const verification = await releaseExpiredDetachedNativeVerificationRuns({
+  const verification = await releaseExpiredFinalizedNativeVerificationRuns({
     nowMs,
   });
   const progression = await runGenLayerProgressionBatch({

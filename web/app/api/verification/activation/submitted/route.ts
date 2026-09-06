@@ -6,6 +6,8 @@ import {
 } from "@/lib/verification-api";
 import { bindGenLayerIdentityBundleActivationSubmission } from "@/lib/marketplace-genlayer-activation";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
+import { readActivationReceiptCapability } from "@/lib/activation-receipt-capability";
+import { marketplaceContractAddress } from "@/lib/marketplace-genlayer-rpc";
 import {
   isAuthenticatedWalletSession,
   readWalletSession,
@@ -16,9 +18,14 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = await readSameOriginJson(request);
-    assertExactJsonKeys(body, ["preparedId", "txHash"]);
+    assertExactJsonKeys(body, ["preparedId", "txHash", "submissionToken"], ["preparedId", "txHash"]);
     const session = readWalletSession(request);
-    if (!session || !isAuthenticatedWalletSession(session)) {
+    const receipt = body.submissionToken === undefined ? null : readActivationReceiptCapability(
+      body.submissionToken,
+      { preparedId: typeof body.preparedId === "string" ? body.preparedId : "", contractAddress: marketplaceContractAddress() },
+    );
+    const authority = receipt ?? (session && isAuthenticatedWalletSession(session) ? session : null);
+    if (!authority) {
       throw new ApiProblem(
         401,
         "WALLET_AUTHENTICATION_REQUIRED",
@@ -26,16 +33,17 @@ export async function POST(request: Request) {
       );
     }
     await enforceVerificationRateLimit(request, "intent", {
-      subject: session.subject,
-      wallet: session.wallet,
+      subject: authority.subject,
+      wallet: authority.wallet,
       requestId:
         typeof body.preparedId === "string" ? body.preparedId : null,
     });
     return Response.json(
       await bindGenLayerIdentityBundleActivationSubmission({
-        session,
+        session: authority,
         preparedId: body.preparedId,
         txHash: body.txHash,
+        receiptRequestId: receipt?.requestId,
       }),
       { headers: { "Cache-Control": "private, no-store" } },
     );

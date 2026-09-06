@@ -186,6 +186,24 @@ export async function loadFinalizedMarketplaceTransaction(
   return finalized;
 }
 
+/** Verify the signed call before accepting a receipt-only capability. No
+ * finality claim is made here; the existing journal reconciler owns that. */
+export async function loadSubmittedMarketplaceTransaction(
+  hash: string,
+  client: MarketplaceReadClient = createMarketplaceReadClient(),
+  valueLoader: (hash: string) => Promise<string> = loadRawTransactionValueAtto,
+): Promise<Pick<FinalizedMarketplaceTransaction, "sender" | "recipient" | "functionName" | "args" | "valueAtto">> {
+  const normalizedHash = normalizeHash(hash, "transaction hash");
+  const [transaction, valueAtto] = await Promise.all([
+    client.getTransaction({ hash: normalizedHash as TransactionHash }),
+    valueLoader(normalizedHash),
+  ]);
+  const sender = normalizeAddress(transaction.sender ?? transaction.from_address, "transaction sender");
+  const recipient = normalizeAddress(transaction.recipient ?? transaction.to_address, "transaction recipient");
+  const decoded = decodeMarketplaceCall(transaction, recipient);
+  return { sender, recipient, functionName: decoded?.functionName ?? null, args: decoded?.args ?? null, valueAtto };
+}
+
 function marketplaceTransactionEnvelope(input: {
   hash: string;
   transaction: GenLayerTransaction;
@@ -234,7 +252,7 @@ export async function readMarketplaceState(
 }
 
 export function assertTransactionMatchesPreparedCall(input: {
-  transaction: FinalizedMarketplaceTransaction;
+  transaction: Pick<FinalizedMarketplaceTransaction, "sender" | "recipient" | "functionName" | "args" | "valueAtto">;
   call: MarketplaceGenLayerCall;
   actorWallet: string;
 }): void {

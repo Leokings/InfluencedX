@@ -408,7 +408,23 @@ test("identity journal reservation closes the idle-end race without changing gen
   assert.match(journal, /"idx": 13,[\s\S]*"tag": "0013_verification_session_detach_fence"/);
 });
 
-test("detached finalized runs cannot retain verification locks forever", async () => {
+test("resuming a known ready identity call preserves its original owner, journal and immutable envelope", async () => {
+  const activation = await source("../lib/marketplace-genlayer-activation.ts");
+  const resume = between(activation, "export async function resumeGenLayerIdentityBundlePreparation", "export async function coordinateIdentityBundlePreparation");
+  assert.match(resume, /ownedRow\(input\.session, input\.requestId\)/);
+  assert.match(resume, /row\.activationPreparedId !== uuid\(input\.preparedId, "preparedId"\)/);
+  assert.match(resume, /prepared\.operation !== "ACTIVATE_IDENTITY_BUNDLE" \|\| prepared\.actorWallet !== row\.wallet/);
+  assert.match(resume, /storedIdentityBundleEnvelope\(row, prepared\)/);
+  assert.match(resume, /assertPreparedActivation\(prepared, call\)/);
+  assert.match(resume, /prepared\.status !== "PREPARED" \|\| row\.requestExpiresAt <= nowMs \|\| row\.genlayerOutcome !== null/);
+  assert.ok(resume.indexOf("if (prepared.transactionHash)") < resume.indexOf("transaction: call"));
+  assert.doesNotMatch(resume, /coordinateIdentityBundlePreparation|prepareGenLayerMarketplaceTransaction|\.update\(|\.insert\(/);
+  const bind = between(activation, "export async function bindGenLayerIdentityBundleActivationSubmission", "async function confirmLegacyGenLayerCreatorActivation");
+  assert.match(bind, /receiptRequestId !== undefined && row\.id !== input\.receiptRequestId/);
+  assert.ok(bind.indexOf("assertTransactionMatchesPreparedCall") < bind.indexOf("await bindGenLayerTransactionHash"));
+});
+
+test("expired finalized runs release locks whether or not the session was detached", async () => {
   const [service, maintenance, activation] = await Promise.all([
     source("../lib/verification-native-service.ts"),
     source("../lib/marketplace-genlayer-maintenance.ts"),
@@ -416,13 +432,13 @@ test("detached finalized runs cannot retain verification locks forever", async (
   ]);
   const cleanup = between(
     service,
-    "export async function releaseExpiredDetachedNativeVerificationRuns",
+    "export async function releaseExpiredFinalizedNativeVerificationRuns",
     "function projection",
   );
-  assert.match(cleanup, /isNotNull\(verificationRequests\.sessionDetachedAt\)/);
+  assert.doesNotMatch(cleanup, /isNotNull\(verificationRequests\.sessionDetachedAt\)/);
   assert.match(cleanup, /isNotNull\(verificationRequests\.activeOwnerUserId\)/);
   assert.match(cleanup, /releaseExpiredFinalizedUndetermined\(row, nowMs\)/);
-  assert.match(maintenance, /runGenLayerJournalReconciliationBatch[\s\S]*releaseExpiredDetachedNativeVerificationRuns[\s\S]*runGenLayerProgressionBatch/);
+  assert.match(maintenance, /runGenLayerJournalReconciliationBatch[\s\S]*releaseExpiredFinalizedNativeVerificationRuns[\s\S]*runGenLayerProgressionBatch/);
 
   const confirmBundle = between(
     activation,
@@ -521,7 +537,9 @@ test("verification UI can disconnect at every step without ending or erasing the
   assert.match(flow, /switchingWalletRef\.current = true/);
   assert.match(flow, /generation !== flowGenerationRef\.current/);
   assert.match(flow, /if \(recovery\) \{[\s\S]*confirmActivation\(recovery, generation\);[\s\S]*return;/);
-  assert.match(flow, /saveRecovery\(value, effectiveWallet\);\s*if \(generation !== flowGenerationRef\.current\) return;/);
+  assert.match(flow, /record: submitActivationReceipt/);
+  assert.match(flow, /onSubmitted: \(value\) => \{ if \(isCurrent\(\)\) setRecovery\(value\); \}/);
+  assert.match(walletProvider, /flushActivationReceipts\(\)\.catch\(\(\) => undefined\);\s*if \(disconnectPending\.current \|\| disconnected\.current\) return;/);
   assert.match(walletProvider, /Signed out\. Choose another account in your wallet to switch\./);
   assert.match(flow, /className="verify-secondary verify-switch-wallet"/);
   assert.ok(

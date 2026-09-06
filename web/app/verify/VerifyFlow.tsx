@@ -4,7 +4,6 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   broadcastMarketplaceTransaction,
-  isExplicitEip1193UserRejection,
   isTerminalMarketplaceTransactionError,
   type GenLayerTransactionStage,
 } from "../marketplace/marketplace-transaction";
@@ -21,6 +20,7 @@ import { useMarketplaceWallet } from "../marketplace/use-marketplace-wallet";
 import { farcasterCastUrlForHash } from "./farcaster-cast-url";
 import { shouldRejectVerificationResponse } from "./verification-api-client";
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle, type BoundIdentityBundleRecovery } from "./verification-recovery";
+import { activationAttemptRecovery, clearActivationAttempt, readActivationAttempt, runDurableActivation, submitActivationReceipt, type ActivationPreparation } from "./activation-outbox";
 
 type EthereumProvider = {
   request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
@@ -83,7 +83,7 @@ type IdentityChallengeResponse = {
   xChallenge: { handle: string; tweetText: string; issuedAt: string; expiresAt: string; credentialExpiresAt: string };
   farcasterChallenge: { username: string; fid: string | number; castText: string; issuedAt: string; expiresAt: string; credentialExpiresAt: string };
 };
-type PreparedActivation = {
+type PreparedActivation = ActivationPreparation & {
   request?: VerificationRequest;
   preparedId: string;
   bundleRequestId: string;
@@ -109,13 +109,6 @@ type ActivationConfirmation = {
 };
 type LegacyActivationConfirmation = { request: VerificationRequest; profile: GenLayerProfile };
 type ActivationRecovery = BoundIdentityBundleRecovery;
-type ReadyActivationRetry = {
-  requestId: string;
-  wallet: string;
-  verificationPostUrl: string;
-  farcasterCastUrl: string;
-  prepared: PreparedActivation;
-};
 type ApiErrorBody = { error?: string | { code?: string; message?: string }; code?: string; message?: string };
 
 const ACTIVE_STEPS = [
@@ -139,6 +132,7 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
   const [farcasterUsername, setFarcasterUsername] = useState("");
   const [farcasterCastUrl, setFarcasterCastUrl] = useState("");
   const [consent, setConsent] = useState(false);
+  const [manualTransactionHash, setManualTransactionHash] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -147,7 +141,6 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
   const [recovery, setRecovery] = useState<ActivationRecovery | null>(() => loadRecovery(wallet));
   const switchingWalletRef = useRef(false);
   const flowGenerationRef = useRef(0);
-  const activationReadyRetryRef = useRef<ReadyActivationRetry | null>(null);
 
   const effectiveWallet = selectVerificationWallet(request?.wallet, wallet);
   const walletMismatch = Boolean(request?.wallet && wallet && wallet.toLowerCase() !== request.wallet.toLowerCase());
@@ -187,14 +180,14 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
           result.request?.activationRecovery,
           result.request?.id,
         );
-        const candidateRecovery = serverRecovery ?? recovery ?? loadRecovery(wallet);
+        const candidateRecovery = serverRecovery ?? recovery ?? loadRecovery(wallet, result.request?.id);
         if (candidateRecovery && recoveryMatchesActiveBundle(candidateRecovery, result.request)) {
           if (!sameRecovery(candidateRecovery, recovery)) {
             saveRecovery(candidateRecovery, wallet);
             setRecovery(candidateRecovery);
           }
-        } else if (recovery) {
-          clearRecovery(wallet, recovery.requestId);
+        } else if (candidateRecovery) {
+          clearRecovery(wallet, candidateRecovery.requestId, candidateRecovery.preparedId);
           setRecovery(null);
         }
         setRequest(result.request);
@@ -235,7 +228,6 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
       if (generation !== flowGenerationRef.current) return;
       setRequest(result.request);
       if (result.request.id !== request?.id) {
-        activationReadyRetryRef.current = null;
         setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastUrl("");
       }
     } catch (connectError) {
@@ -248,7 +240,6 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
     event.preventDefault();
     if (!request || !consent) return;
     setBusy("identity-challenge"); setError(null); setNotice(null);
-    activationReadyRetryRef.current = null;
     try {
       const result = await api<IdentityChallengeResponse>(
         "/api/verification/identity-challenge",
@@ -285,7 +276,7 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
     event?.preventDefault();
     if (!request || !effectiveWallet) return;
     const generation = flowGenerationRef.current;
-    let readyMayBeRetried = false;
+    let activePreparedId = request.activationPreparedId;
     setBusy("activation"); setError(null); setNotice(null);
     try {
       const provider = getProvider();
@@ -294,9 +285,8 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
       requireSelectedAccount(await provider.request({ method: "eth_accounts" }), effectiveWallet);
       if (generation !== flowGenerationRef.current) return;
       if (recovery) {
-        activationReadyRetryRef.current = null;
         if (!recoveryMatchesActiveBundle(recovery, request)) {
-          clearRecovery(effectiveWallet, recovery.requestId); setRecovery(null);
+          clearRecovery(effectiveWallet, recovery.requestId, recovery.preparedId); setRecovery(null);
           throw new Error("Saved transaction cleared. Retry.");
         }
         await confirmActivation(recovery, generation);
@@ -306,64 +296,37 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
       const normalizedFarcasterCastUrl = farcasterCastUrl.trim();
       if (!normalizedVerificationPostUrl) throw new Error("Add the X URL.");
       if (!normalizedFarcasterCastUrl) throw new Error("Add the Farcaster URL.");
-      const normalizedWallet = effectiveWallet.toLowerCase();
-      const ready = activationReadyRetryRef.current;
-      const reusableReady = ready
-        && ready.requestId === request.id
-        && ready.wallet === normalizedWallet
-        && ready.verificationPostUrl === normalizedVerificationPostUrl
-        && ready.farcasterCastUrl === normalizedFarcasterCastUrl
-        ? ready
-        : null;
-      if (ready && !reusableReady) activationReadyRetryRef.current = null;
-      const prepared = reusableReady?.prepared ?? await api<PreparedActivation>(
-        "/api/verification/activation",
-        requestBody({ requestId: request.id, verificationPostUrl: normalizedVerificationPostUrl, farcasterCastUrl: normalizedFarcasterCastUrl }),
-      );
-      if (generation !== flowGenerationRef.current) return;
-      activationReadyRetryRef.current = {
+      const isCurrent = () => generation === flowGenerationRef.current && !switchingWalletRef.current;
+      const saved = await runDurableActivation({
+        wallet: effectiveWallet,
         requestId: request.id,
-        wallet: normalizedWallet,
-        verificationPostUrl: normalizedVerificationPostUrl,
-        farcasterCastUrl: normalizedFarcasterCastUrl,
-        prepared,
-      };
-      readyMayBeRetried = true;
-      if (prepared.request) setRequest(prepared.request);
-      const txHash = await broadcastMarketplaceTransaction(prepared.transaction, effectiveWallet, {
-        expectedFunctionName: "activate_identity_bundle",
-        expectedValue: "0",
-        onSubmitted: async (hash) => {
-          readyMayBeRetried = false;
-          activationReadyRetryRef.current = null;
-          const value = { preparedId: prepared.preparedId, txHash: hash, requestId: request.id };
-          saveRecovery(value, effectiveWallet);
-          if (generation !== flowGenerationRef.current) return;
-          setRecovery(value);
-          await api<{ accepted: true; preparedId: string; txHash: string }>(
-            "/api/verification/activation/submitted",
-            requestBody({ preparedId: prepared.preparedId, txHash: hash }),
-          );
+        isCurrent,
+        async prepare() {
+          const prepared = await api<PreparedActivation>("/api/verification/activation", requestBody({ requestId: request.id, verificationPostUrl: normalizedVerificationPostUrl, farcasterCastUrl: normalizedFarcasterCastUrl }));
+          activePreparedId = prepared.preparedId;
+          if (isCurrent() && prepared.request) setRequest(prepared.request);
+          return prepared;
         },
-        onStage: (stage) => {
-          if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
-            setNotice(activationNotice(stage));
-          }
+        async resume(preparedId) {
+          activePreparedId = preparedId;
+          return api<PreparedActivation | { recovery: ActivationRecovery }>("/api/verification/activation/prepared", requestBody({ requestId: request.id, preparedId }));
         },
+        broadcast: (prepared, callbacks) => broadcastMarketplaceTransaction(prepared.transaction, effectiveWallet, {
+          expectedFunctionName: "activate_identity_bundle", expectedValue: "0",
+          beforeWalletRequest: callbacks.beforeWalletRequest,
+          onSubmitted: callbacks.onSubmitted,
+          onStage: (stage) => { if (isCurrent()) setNotice(activationNotice(stage)); },
+        }),
+        // Receipt recording must continue after logout or a keyed unmount.
+        record: submitActivationReceipt,
+        onSubmitted: (value) => { if (isCurrent()) setRecovery(value); },
       });
-      readyMayBeRetried = false;
-      activationReadyRetryRef.current = null;
-      if (generation !== flowGenerationRef.current) return;
-      await confirmActivation(
-        { preparedId: prepared.preparedId, txHash, requestId: request.id },
-        generation,
-      );
+      if (!saved || !isCurrent()) return;
+      setRecovery(saved);
+      await confirmActivation(saved, generation);
     } catch (activationError) {
-      if (!(readyMayBeRetried && isExplicitEip1193UserRejection(activationError))) {
-        activationReadyRetryRef.current = null;
-      }
       if (isTerminalMarketplaceTransactionError(activationError)) {
-        clearRecovery(effectiveWallet, request.id);
+        clearRecovery(effectiveWallet, request.id, activePreparedId ?? undefined);
         setRecovery(null);
       }
       if (generation === flowGenerationRef.current && !switchingWalletRef.current) {
@@ -389,7 +352,7 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
     );
     if (generation !== flowGenerationRef.current || switchingWalletRef.current) return;
     setRequest(confirmed.request);
-    setRecovery(null); clearRecovery(wallet, value.requestId);
+    setRecovery(null); clearRecovery(wallet, value.requestId, value.preparedId);
     if (!("bundle" in confirmed)) {
       setNotice("Recovered. Add both accounts.");
       return;
@@ -418,8 +381,30 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
       await persistentWallet.signOut();
     } catch (switchError) {
       switchingWalletRef.current = false;
+      setLoadingRequest(false);
+      setBusy(null);
       setError(readError(switchError, "Could not disconnect the wallet."));
     }
+  }
+
+  async function recoverPendingTransaction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!request || !wallet || !persistentWallet.authenticated) return;
+    const value = parseBoundIdentityBundleRecovery({ requestId: request.id, preparedId: request.activationPreparedId, txHash: manualTransactionHash.trim() });
+    if (!value) { setError("Paste the full transaction hash from your wallet."); return; }
+    const generation = flowGenerationRef.current;
+    setBusy("recovery"); setError(null);
+    try {
+      // Authenticated manual recovery also validates the actual signed call
+      // before binding a hash, so an unrelated transaction cannot poison it.
+      await api("/api/verification/activation/submitted", requestBody({ preparedId: value.preparedId, txHash: value.txHash }));
+      saveRecovery(value, wallet);
+      if (generation !== flowGenerationRef.current) return;
+      setRecovery(value);
+      await confirmActivation(value, generation);
+    } catch (recoveryError) {
+      if (generation === flowGenerationRef.current) setError(readError(recoveryError, "Could not recover the transaction."));
+    } finally { if (generation === flowGenerationRef.current) setBusy(null); }
   }
 
   async function copyChallengeText(source: "X" | "FARCASTER") {
@@ -460,7 +445,7 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
 
         <section className="verify-workspace" aria-labelledby="verify-workspace-title">
           <div className="verify-workspace-head"><div><span>VERIFICATION</span><strong id="verify-workspace-title">STEP {String(activeStep).padStart(2, "0")} / 04</strong></div><span className={expired ? "run-state error" : "run-state"}><i /> {expired ? "EXPIRED" : bundleActive ? "VERIFIED" : "READY"}</span></div>
-          {persistentWallet.hasSession || request || wallet ? (
+          {persistentWallet.hasSession || persistentWallet.authenticating || request || wallet ? (
             <button
               className="verify-secondary verify-switch-wallet"
               disabled={persistentWallet.disconnecting}
@@ -474,6 +459,17 @@ function VerificationSession({ persistentWallet }: { persistentWallet: ReturnTyp
             {notice || persistentWallet.walletNotice ? <p className="verify-notice">{notice ?? persistentWallet.walletNotice}</p> : null}
             {error || walletMismatch ? <p className="verify-error" role="alert">{error ?? `Switch back to ${shorten(request?.wallet ?? "")}.`}</p> : null}
           </div>
+
+          {request?.activationPreparedId && !recovery && !activationTxHash && persistentWallet.authenticated ? (
+            <details className="verify-card">
+              <summary>Already sent a transaction? Recover it here.</summary>
+              <p>If your wallet may have sent it, do not send it again. Copy its full transaction hash from your wallet.</p>
+              <form onSubmit={recoverPendingTransaction}>
+                <label className="verify-field"><span>TRANSACTION HASH</span><input value={manualTransactionHash} onChange={(event) => setManualTransactionHash(event.target.value)} pattern="0x[0-9a-fA-F]{64}" required /></label>
+                <button className="verify-secondary" type="submit" disabled={Boolean(busy) || persistentWallet.disconnecting}>RECOVER TRANSACTION</button>
+              </form>
+            </details>
+          ) : null}
 
           {activeStep === 1 ? (
             <div className="verify-card">
@@ -712,23 +708,36 @@ function sameRecovery(left: ActivationRecovery | null, right: ActivationRecovery
 
 function recoveryKey(wallet: string): string { return `influencedx:studionet-activation:${wallet.toLowerCase()}`; }
 
-function loadRecovery(wallet: string | null): ActivationRecovery | null {
+function loadRecovery(wallet: string | null, requestId?: string): ActivationRecovery | null {
   if (typeof window === "undefined" || !wallet) return null;
   try {
+    if (requestId) {
+      const submitted = activationAttemptRecovery(readActivationAttempt(wallet, requestId));
+      if (submitted) return submitted;
+    }
     return parseBoundIdentityBundleRecovery(
-      JSON.parse(window.sessionStorage.getItem(recoveryKey(wallet))
+      JSON.parse(window.localStorage.getItem(recoveryKey(wallet))
+        ?? window.sessionStorage.getItem(recoveryKey(wallet))
         ?? window.sessionStorage.getItem("influencedx:studionet-activation") ?? "null"),
     );
   } catch { return null; }
 }
 
 function saveRecovery(value: ActivationRecovery, wallet: string): void {
-  window.sessionStorage.setItem(recoveryKey(wallet), JSON.stringify(value));
-}
-function clearRecovery(wallet: string | null, requestId: string): void {
-  if (!wallet) return;
-  window.sessionStorage.removeItem(recoveryKey(wallet));
   try {
+    window.localStorage.setItem(recoveryKey(wallet), JSON.stringify(value));
+  } catch { /* This tuple is already server-bound; storage must not hide its status. */ }
+}
+function clearRecovery(wallet: string | null, requestId: string, preparedId?: string): void {
+  if (!wallet) return;
+  try {
+    if (preparedId) clearActivationAttempt(wallet, requestId, preparedId);
+  } catch { /* Never delete malformed entries or block an authoritative result. */ }
+  try {
+    for (const storage of [window.localStorage, window.sessionStorage]) {
+      const current = parseBoundIdentityBundleRecovery(JSON.parse(storage.getItem(recoveryKey(wallet)) ?? "null"));
+      if (current?.requestId === requestId && (!preparedId || current.preparedId === preparedId)) storage.removeItem(recoveryKey(wallet));
+    }
     const legacy = parseBoundIdentityBundleRecovery(JSON.parse(window.sessionStorage.getItem("influencedx:studionet-activation") ?? "null"));
     if (legacy?.requestId === requestId) window.sessionStorage.removeItem("influencedx:studionet-activation");
   } catch { /* Keep unrelated legacy recovery intact. */ }

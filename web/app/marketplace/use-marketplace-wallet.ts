@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { marketplaceRequest } from "./marketplace-api";
+import { flushActivationReceipts } from "../verify/activation-outbox";
 import {
   STUDIONET_CHAIN_ID_HEX,
   STUDIONET_EXPLORER_URL,
@@ -80,6 +81,11 @@ function useMarketplaceWalletState() {
     lifecycle.current += 1;
     sessionRead.current += 1;
     authenticationRequest.current?.abort();
+    authenticationRequest.current = null;
+    // A wallet prompt is not an abortable fetch. Detach its UI state now;
+    // its eventual callback must not own the next sign-in attempt.
+    setAuthenticating(false);
+    setConnecting(false);
     currentSessionWallet.current = null;
     currentAddress.current = null;
     disconnected.current = true;
@@ -148,6 +154,7 @@ function useMarketplaceWalletState() {
     };
 
     const resume = () => {
+      void flushActivationReceipts().catch(() => undefined);
       if (disconnectPending.current || disconnected.current) return;
       void refreshSession().catch(() => undefined);
       void hydrateProvider();
@@ -165,9 +172,11 @@ function useMarketplaceWalletState() {
     };
 
     void refreshSession().catch(() => undefined);
+    void flushActivationReceipts().catch(() => undefined);
     void hydrateProvider();
     window.addEventListener("ethereum#initialized", hydrateProvider, { once: true });
     window.addEventListener("focus", resume);
+    window.addEventListener("online", resume);
     window.addEventListener("storage", synchronize);
     const providerRetry = window.setTimeout(() => void hydrateProvider(), 500);
 
@@ -176,6 +185,7 @@ function useMarketplaceWalletState() {
       window.clearTimeout(providerRetry);
       window.removeEventListener("ethereum#initialized", hydrateProvider);
       window.removeEventListener("focus", resume);
+      window.removeEventListener("online", resume);
       window.removeEventListener("storage", synchronize);
       subscribedProvider?.removeListener?.("accountsChanged", accountsChanged);
       subscribedProvider?.removeListener?.("chainChanged", chainChanged);
@@ -308,6 +318,9 @@ function useMarketplaceWalletState() {
     disconnectPending.current = true;
     lifecycle.current += 1;
     authenticationRequest.current?.abort();
+    authenticationRequest.current = null;
+    setAuthenticating(false);
+    setConnecting(false);
     setDisconnecting(true);
     setWalletError(null);
     setWalletNotice(null);
@@ -318,12 +331,18 @@ function useMarketplaceWalletState() {
       );
       clearSession();
       publishSessionChange("disconnected");
-      try {
-        await window.ethereum?.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] });
-        setWalletNotice("Wallet disconnected. Saved work is kept for when you sign in again.");
-      } catch {
-        setWalletNotice("Signed out. Choose another account in your wallet to switch.");
-      }
+      setWalletNotice("Signed out. Choose another account in your wallet to switch.");
+      const signedOutVersion = lifecycle.current;
+      // Some providers queue this behind an open signature prompt. The app's
+      // completed logout must not wait for that optional wallet operation.
+      void (async () => {
+        try {
+          await window.ethereum?.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] });
+          if (signedOutVersion === lifecycle.current && disconnected.current) {
+            setWalletNotice("Wallet disconnected. Saved work is kept for when you sign in again.");
+          }
+        } catch { /* The authenticated app session is already gone. */ }
+      })();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sign-out failed.";
       setWalletError(message);

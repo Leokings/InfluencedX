@@ -716,10 +716,10 @@ async function expireStale(ownerUserId: string, nowMs: number) {
 async function markExpired(row: VerificationRow, nowMs: number): Promise<VerificationRow> {
   if (row.status === "EXPIRED") return row;
   if (hasNativeVerificationActivationState(row)) {
-    if (row.sessionDetachedAt !== null) {
-      return await releaseExpiredFinalizedUndetermined(row, nowMs) ?? row;
-    }
-    return row;
+    // Logout is independent of run cancellation. Expiry must therefore not
+    // require a logout/detach marker. This helper still requires the exact
+    // FINALIZED journal, immutable bindings, and authoritative chain outcome.
+    return await releaseExpiredFinalizedUndetermined(row, nowMs) ?? row;
   }
   const [updated] = await getDb().update(verificationRequests).set(
     expiredNativeVerificationValues(nowMs),
@@ -739,11 +739,11 @@ async function markExpired(row: VerificationRow, nowMs: number): Promise<Verific
 }
 
 /**
- * Releases detached, expired UNDETERMINED runs without a browser session.
+ * Releases expired, finalized UNDETERMINED runs without a browser session.
  * The hosted maintenance loop calls this after journal reconciliation so a
  * finalized inconclusive run cannot retain the per-owner/per-wallet lock.
  */
-export async function releaseExpiredDetachedNativeVerificationRuns(input: {
+export async function releaseExpiredFinalizedNativeVerificationRuns(input: {
   nowMs?: number;
   limit?: number;
 } = {}) {
@@ -753,10 +753,9 @@ export async function releaseExpiredDetachedNativeVerificationRuns(input: {
     throw new Error("The detached verification maintenance clock is invalid.");
   }
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-    throw new Error("The detached verification maintenance limit is invalid.");
+    throw new Error("The finalized verification maintenance limit is invalid.");
   }
   const rows = await getDb().select().from(verificationRequests).where(and(
-    isNotNull(verificationRequests.sessionDetachedAt),
     isNotNull(verificationRequests.activeOwnerUserId),
     eq(verificationRequests.status, "X_CHALLENGE_ISSUED"),
     lte(verificationRequests.requestExpiresAt, nowMs),

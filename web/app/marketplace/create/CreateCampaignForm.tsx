@@ -110,7 +110,7 @@ export function CreateCampaignForm() {
         <button className="verify-secondary" type="button" disabled={wallet.restoring || wallet.authenticating || wallet.disconnecting} onClick={() => void wallet.authenticate().catch(() => undefined)}>
           {wallet.restoring ? "RESTORING…" : wallet.authenticating ? "SIGNING IN…" : wallet.authenticated ? "AUTHORIZED" : "CONNECT + SIGN"}
         </button>
-        {wallet.hasSession ? (
+        {wallet.hasSession || wallet.address || wallet.authenticating ? (
           <button className="verify-secondary" type="button" disabled={wallet.disconnecting} onClick={() => void wallet.signOut().catch(() => undefined)}>{wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}</button>
         ) : null}
         {wallet.address && !wallet.isStudioNet ? (
