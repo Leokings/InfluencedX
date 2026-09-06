@@ -16,13 +16,34 @@ The prior V2 deployment is retained only as a rollback reference.
 ## Reviewer preview activation
 
 - Stable application URL: [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app)
-- Web deployment: `dpl_FBjBE6GZoEmS9jTZLcsZqhfQ3aaV`
+- Web deployment: `dpl_EGRbfUZS7DJWCM1XUWkjzzXKxVzG`
 - Marketplace operator deployment: `dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY`
 - Withdrawal reconciler deployment: `dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd`
-- Maintenance activation: generation `1`, heartbeat message `1T-1M1WhdV14rUgUevQJlF80fKLNrEI1Lso`
+- Maintenance activation: generation `2`, promoted and active
 - Live smoke check: marketplace `200`, V3 address present, V2 address absent
 - Projection check: campaign API `200` with no V2 campaign leakage
 - Mutation-gate check: authenticated-origin route reached request validation
+
+## Wallet-session persistence and active reviewer campaign
+
+Commit `d537426` moves marketplace wallet state into one root provider and
+restores the signed, site-wide session independently of wallet-injection timing.
+The authenticated cookie remains `HttpOnly`, `Secure`, `SameSite=Strict`, and
+`Path=/`; route navigation does not require another signature. Verify-flow
+authorization and sign-out refresh the shared wallet state so the marketplace
+and identity routes remain synchronized.
+
+- Live cross-route check: the same authorized wallet restored on Create,
+  Verify, and Dashboard after full route loads
+- Browser result: no application error overlay on the reviewer campaign
+- Web unit suite: 282 tests passed, including one root wallet provider and
+  route-wide restoration coverage
+- Lint: passed
+- Production build: passed
+- Reviewer campaign: [`660ddc9d-00a5-4e72-9748-833b47ce7c2f`](https://influencedx-native-preview.vercel.app/marketplace/campaigns/660ddc9d-00a5-4e72-9748-833b47ce7c2f)
+- On-chain campaign: `0x4d84fee99e5354cda2ef24013278eb1f2c0cf313d6bd95fbf88a197629e48837`
+- Finalized funding: [`0x3d8757dc048749925734dd1cd225ec7f9a7488e0ed99a4681e16f6f595da2288`](https://explorer-studio.genlayer.com/tx/0x3d8757dc048749925734dd1cd225ec7f9a7488e0ed99a4681e16f6f595da2288)
+- Live state: `OPEN`, `FUNDED`, applications close October 6, 2026
 
 ## Bounded resolution verification
 
