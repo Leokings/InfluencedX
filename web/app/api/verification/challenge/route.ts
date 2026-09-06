@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     }
 
     const created = await createNativeVerificationRequest({
-      ownerUserId: session.subject,
+      session,
       wallet,
       origin: applicationOriginForRequest(request),
     });

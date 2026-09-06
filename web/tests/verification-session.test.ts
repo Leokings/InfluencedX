@@ -8,8 +8,12 @@ import {
   readSameOriginDeleteJson,
 } from "../lib/verification-api.ts";
 import {
+  createNativeVerificationRequest,
   hasNativeVerificationActivationState,
 } from "../lib/verification-native-service.ts";
+import { authenticateWalletSession, createPendingWalletSession } from "../lib/wallet-session.ts";
+import { getTableColumns } from "drizzle-orm";
+import { verificationRequests } from "../db/postgres-schema.ts";
 import {
   coordinateIdentityBundlePreparation,
 } from "../lib/marketplace-genlayer-activation.ts";
@@ -263,9 +267,10 @@ test("a server-bound hash detaches the wallet without mutating verification evid
 });
 
 test("unbound PREPARED state remains fail-closed and can be retried", async () => {
-  const [service, flow] = await Promise.all([
+  const [service, flow, walletProvider] = await Promise.all([
     source("../lib/verification-native-service.ts"),
     source("../app/verify/VerifyFlow.tsx"),
+    source("../app/marketplace/use-marketplace-wallet.ts"),
   ]);
   const endMutation = between(
     service,
@@ -275,7 +280,7 @@ test("unbound PREPARED state remains fail-closed and can be retried", async () =
   assert.match(endMutation, /hasNativeVerificationActivationState\(active\)[\s\S]*VERIFICATION_TRANSACTION_PENDING/);
   assert.match(flow, /Transaction cancelled\. Retry verification\./);
   assert.doesNotMatch(flow, /walletSwitchBlocked/);
-  assert.match(flow, /"\/api\/verification\/session"/);
+  assert.match(walletProvider, /"\/api\/verification\/session"/);
   assert.doesNotMatch(service, /USER_CANCELLED|cancel.*prepared/i);
   assert.doesNotMatch(endMutation, /update\(marketplaceGenLayerTransactions\)/);
 });
@@ -508,18 +513,20 @@ test("automatic expiry preserves every activation or reconciliation row", async 
 });
 
 test("verification UI exposes exact, mobile-safe wallet switching", async () => {
-  const [flow, styles, walletSelection] = await Promise.all([
+  const [flow, styles, walletSelection, walletProvider] = await Promise.all([
     source("../app/verify/VerifyFlow.tsx"),
     source("../app/globals.css"),
     source("../lib/verification-wallet.ts"),
+    source("../app/marketplace/use-marketplace-wallet.ts"),
   ]);
   assert.match(flow, /activeRunRequest[\s\S]*window\.confirm\([\s\S]*Sign out\? Transaction will continue\.[\s\S]*Switch wallet\? This run will end\./);
-  assert.match(flow, /if \(activeRunRequest\) \{[\s\S]*"\/api\/verification\/session"[\s\S]*requestId: activeRunRequest\.id,[\s\S]*revision: activeRunRequest\.revision/);
-  assert.match(flow, /else \{[\s\S]*"\/api\/auth\/wallet\/session"/);
+  assert.match(flow, /await persistentWallet\.signOut\(activeRunRequest[\s\S]*verificationRequest: \{ id: activeRunRequest\.id, revision: activeRunRequest\.revision \}/);
+  assert.match(walletProvider, /verification \? "\/api\/verification\/session" : "\/api\/auth\/wallet\/session"/);
+  assert.match(walletProvider, /method: "DELETE"[\s\S]*requestId: verification\.id, revision: verification\.revision/);
   assert.match(flow, /VERIFICATION_TRANSACTION_PENDING: "Finish the transaction first\."/);
-  assert.match(flow, /clearRecovery\(\);[\s\S]*setRequest\(null\);[\s\S]*setWallet\(null\);/);
+  assert.match(flow, /clearRecovery\(\);[\s\S]*setRequest\(null\);/);
+  assert.match(flow, /key=\{persistentWallet\.disconnectVersion\}/);
   for (const reset of [
-    "setWalletChallenge(null)",
     'setHandle("")',
     'setPostUrl("")',
     'setFarcasterUsername("")',
@@ -528,15 +535,13 @@ test("verification UI exposes exact, mobile-safe wallet switching", async () => 
     "setProfiles(null)",
     "setBundle(null)",
   ]) assert.match(flow, new RegExp(escapeRegExp(reset)));
-  assert.match(flow, /method: "wallet_revokePermissions"[\s\S]*catch \{/);
+  assert.match(walletProvider, /method: "wallet_revokePermissions"[\s\S]*catch \{/);
   assert.match(flow, /switchingWalletRef\.current = true/);
   assert.match(flow, /generation !== flowGenerationRef\.current/);
   assert.match(flow, /if \(recovery\) \{[\s\S]*confirmActivation\(recovery, generation\);[\s\S]*return;[\s\S]*setActivationDetachReady\(false\);/);
   assert.match(flow, /busy === "activation" && activationDetachReady/);
   assert.match(flow, /setActivationDetachReady\(true\)/);
-  assert.match(flow, /if \(switchingWalletRef\.current\) \{[\s\S]*setError\(null\);[\s\S]*return;/);
-  assert.match(flow, /const revoked = await revokeWalletPermissions\(\)/);
-  assert.match(flow, /App signed out\. Choose another account in your wallet\./);
+  assert.match(walletProvider, /Signed out\. Choose another account in your wallet to switch\./);
   assert.match(flow, /className="verify-secondary verify-switch-wallet"/);
   assert.ok(
     flow.indexOf('className="verify-secondary verify-switch-wallet"')
@@ -547,6 +552,145 @@ test("verification UI exposes exact, mobile-safe wallet switching", async () => 
   assert.match(styles, /@media \(max-width: 980px\)[\s\S]*\.verify-overview \{ display: none; \}/);
   assert.match(styles, /@media \(max-width: 680px\)[\s\S]*\.verify-layout \{ width: auto; padding: 18px 18px 70px; \}/);
   assert.match(walletSelection, /return requestWallet \?\? connectedWallet \?\? null;/);
+});
+
+type RequestStore = NonNullable<Parameters<typeof createNativeVerificationRequest>[1]>;
+type StoredRequest = NonNullable<Awaited<ReturnType<RequestStore["findActive"]>>>;
+const sessionTestNow = Date.parse("2026-09-06T12:00:00Z");
+const sessionTestWallet = `0x${"12".repeat(20)}`;
+const sessionTestOptions = { nowMs: sessionTestNow, secret: "verification-session-unit-test-secret-only" };
+
+function requestStoreFixture() {
+  const pending = createPendingWalletSession(sessionTestOptions);
+  const session = authenticateWalletSession(pending, sessionTestWallet, sessionTestOptions);
+  let row: StoredRequest | null = null;
+  let authorizationWrites = 0;
+  let expiryChecks = 0;
+  const store: RequestStore = {
+    async expireStale() { expiryChecks += 1; },
+    async findActive() { return row; },
+    async insert(values) {
+      // Match database defaults, including null timestamps used by the projection.
+      const defaults = Object.fromEntries(Object.entries(getTableColumns(verificationRequests))
+        .map(([name, column]) => [name, column.default ?? null]));
+      row = { ...defaults, ...values } as StoredRequest;
+      return row;
+    },
+    async authorizePending(current, nowMs) {
+      assert.equal(current, row);
+      authorizationWrites += 1;
+      row = {
+        ...current,
+        status: "WALLET_AUTHORIZED",
+        walletAuthorizedAt: nowMs,
+        walletNonce: null,
+        walletMessage: null,
+        requestExpiresAt: nowMs + 86_400_000,
+        revision: current.revision + 1,
+        updatedAt: nowMs,
+      };
+      return row;
+    },
+  };
+  const input = { session, wallet: sessionTestWallet, nowMs: sessionTestNow, origin: "https://app.example" };
+  return {
+    input, pending, store,
+    row: () => row!,
+    authorizationWrites: () => authorizationWrites,
+    expiryChecks: () => expiryChecks,
+  };
+}
+
+test("Verify reuses a valid wallet session without another signature or challenge", async () => {
+  const fixture = requestStoreFixture();
+  const created = await createNativeVerificationRequest(fixture.input, fixture.store);
+  assert.equal(created.request.status, "WALLET_AUTHORIZED");
+  assert.equal(created.request.walletAuthorizedAt, new Date(sessionTestNow).toISOString());
+  assert.equal(created.message, null);
+  assert.equal(fixture.row().walletMessage, null);
+  assert.equal(fixture.row().walletNonce, null);
+  assert.equal(fixture.row().walletSignatureHash, null, "must not invent a per-request signature");
+  assert.equal(fixture.row().requestExpiresAt, sessionTestNow + 86_400_000);
+  assert.equal(fixture.row().ownerUserId, fixture.input.session.subject);
+  const restored = await createNativeVerificationRequest(fixture.input, fixture.store);
+  assert.deepEqual(restored, created, "navigation/reload must reuse the same request");
+  assert.equal(fixture.authorizationWrites(), 0);
+});
+
+test("an unsigned pending session still requires a wallet signature", async () => {
+  const fixture = requestStoreFixture();
+  const result = await createNativeVerificationRequest({ ...fixture.input, session: fixture.pending }, fixture.store);
+  assert.equal(result.request.status, "WALLET_CHALLENGE_PENDING");
+  assert.equal(result.request.walletAuthorizedAt, null);
+  assert.ok(result.message?.includes(sessionTestWallet));
+  assert.ok(fixture.row().walletNonce);
+  assert.equal(fixture.authorizationWrites(), 0);
+});
+
+test("an existing unsigned Verify request advances once after shared sign-in", async () => {
+  const fixture = requestStoreFixture();
+  const pending = await createNativeVerificationRequest({ ...fixture.input, session: fixture.pending }, fixture.store);
+  const authorized = await createNativeVerificationRequest(fixture.input, fixture.store);
+  assert.equal(authorized.request.id, pending.request.id);
+  assert.equal(authorized.request.revision, pending.request.revision + 1);
+  assert.equal(authorized.request.status, "WALLET_AUTHORIZED");
+  assert.equal(authorized.message, null);
+  assert.equal(fixture.row().walletNonce, null);
+  assert.equal(fixture.row().walletSignatureHash, null);
+  await createNativeVerificationRequest(fixture.input, fixture.store);
+  assert.equal(fixture.authorizationWrites(), 1);
+});
+
+test("Verify refuses expired or wrong-wallet sessions before any storage mutation", async () => {
+  const fixture = requestStoreFixture();
+  for (const [input, expectedCode] of [
+    [{ ...fixture.input, wallet: `0x${"34".repeat(20)}` }, "SESSION_WALLET_MISMATCH"],
+    [{ ...fixture.input, nowMs: fixture.input.session.expiresAt * 1_000 }, "WALLET_AUTHENTICATION_REQUIRED"],
+  ] as const) {
+    await assert.rejects(() => createNativeVerificationRequest(input, fixture.store),
+      (error: unknown) => error instanceof ApiProblem && error.code === expectedCode);
+  }
+  assert.equal(fixture.expiryChecks(), 0);
+  assert.equal(fixture.row(), null);
+});
+
+test("session reuse cannot revive detached, expired, prepared, or stale pending runs", async () => {
+  for (const change of [
+    { sessionDetachedAt: sessionTestNow },
+    { walletChallengeExpiresAt: sessionTestNow },
+    { requestExpiresAt: sessionTestNow },
+    { activationPreparedId: "already-prepared" },
+    { genlayerTxHash: `0x${"56".repeat(32)}` },
+  ] satisfies Partial<StoredRequest>[]) {
+    const fixture = requestStoreFixture();
+    await createNativeVerificationRequest({ ...fixture.input, session: fixture.pending }, fixture.store);
+    Object.assign(fixture.row(), change);
+    await assert.rejects(() => createNativeVerificationRequest(fixture.input, fixture.store),
+      (error: unknown) => error instanceof ApiProblem && error.code === "STATE_CHANGED");
+    assert.equal(fixture.authorizationWrites(), 0);
+  }
+  const fixture = requestStoreFixture();
+  await createNativeVerificationRequest({ ...fixture.input, session: fixture.pending }, fixture.store);
+  fixture.store.authorizePending = async () => null;
+  await assert.rejects(() => createNativeVerificationRequest(fixture.input, fixture.store),
+    (error: unknown) => error instanceof ApiProblem && error.code === "STATE_CHANGED");
+  assert.equal(fixture.row().status, "WALLET_CHALLENGE_PENDING");
+});
+
+test("session reuse does not restart a transaction already in progress", async () => {
+  const fixture = requestStoreFixture();
+  await createNativeVerificationRequest(fixture.input, fixture.store);
+  Object.assign(fixture.row(), {
+    status: "READY_FOR_GENLAYER",
+    activationPreparedId: "prepared-request",
+    activationTxHash: `0x${"78".repeat(32)}`,
+  });
+  const before = { ...fixture.row() };
+  const result = await createNativeVerificationRequest(fixture.input, fixture.store);
+  assert.equal(result.request.status, "READY_FOR_GENLAYER");
+  assert.equal(result.request.activationTxHash, before.activationTxHash);
+  assert.deepEqual(fixture.row(), before);
+  assert.equal(fixture.authorizationWrites(), 0);
 });
 
 test("verification UI keeps concise safety and recovery copy", async () => {

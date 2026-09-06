@@ -78,7 +78,6 @@ type VerificationRequest = {
   updatedAt: string;
 };
 
-type WalletChallenge = { message: string; expiresAt: string };
 type IdentityChallengeResponse = {
   request: VerificationRequest;
   xChallenge: { handle: string; tweetText: string; issuedAt: string; expiresAt: string; credentialExpiresAt: string };
@@ -128,9 +127,13 @@ const ACTIVE_STEPS = [
 
 export default function VerifyFlow() {
   const persistentWallet = useMarketplaceWallet();
+  return <VerificationSession key={persistentWallet.disconnectVersion} persistentWallet={persistentWallet} />;
+}
+
+function VerificationSession({ persistentWallet }: { persistentWallet: ReturnType<typeof useMarketplaceWallet> }) {
   const [request, setRequest] = useState<VerificationRequest | null>(null);
-  const [wallet, setWallet] = useState<string | null>(null);
-  const [walletChallenge, setWalletChallenge] = useState<WalletChallenge | null>(null);
+  const wallet = persistentWallet.address;
+  const [loadingRequest, setLoadingRequest] = useState(true);
   const [handle, setHandle] = useState("");
   const [postUrl, setPostUrl] = useState("");
   const [farcasterUsername, setFarcasterUsername] = useState("");
@@ -148,6 +151,7 @@ export default function VerifyFlow() {
   const activationReadyRetryRef = useRef<ReadyActivationRetry | null>(null);
 
   const effectiveWallet = selectVerificationWallet(request?.wallet, wallet);
+  const walletMismatch = Boolean(request?.wallet && wallet && wallet.toLowerCase() !== request.wallet.toLowerCase());
   const bundleReady = hasBothChallenges(request);
   const expired = request?.status === "EXPIRED";
   const terminalOutcome = request?.genlayerOutcome === "REJECTED"
@@ -171,16 +175,16 @@ export default function VerifyFlow() {
   const switchBusyBlocked = Boolean(
     busy && !(busy === "activation" && activationDetachReady),
   );
-  const activeStep = statusStep(request, bundleActive, recovery);
+  const restoring = persistentWallet.restoring || loadingRequest;
+  const activeStep = persistentWallet.authenticated && !walletMismatch
+    ? statusStep(request, bundleActive, recovery)
+    : 1;
 
   useEffect(() => {
     let active = true;
     const generation = flowGenerationRef.current;
-    void Promise.all([
-      api<{ request: VerificationRequest | null }>("/api/verification/status"),
-      currentWallet(),
-    ])
-      .then(([result, selectedWallet]) => {
+    void api<{ request: VerificationRequest | null }>("/api/verification/status")
+      .then((result) => {
         if (
           !active
           || switchingWalletRef.current
@@ -206,7 +210,6 @@ export default function VerifyFlow() {
           || result.request?.genlayerTxHash,
         ));
         setRequest(result.request);
-        setWallet(selectedWallet);
         hydrateFields(result.request, { setHandle, setPostUrl, setFarcasterUsername, setFarcasterCastUrl });
       })
       .catch((statusError: unknown) => {
@@ -216,26 +219,12 @@ export default function VerifyFlow() {
           && generation === flowGenerationRef.current
           && (statusError as Error & { status?: number }).status !== 401
         ) setError(readError(statusError, "Could not load this run."));
+      })
+      .finally(() => {
+        if (active && generation === flowGenerationRef.current) setLoadingRequest(false);
       });
     return () => { active = false; };
   }, [recovery]);
-
-  useEffect(() => {
-    if (!window.ethereum?.on) return;
-    const accountsChanged = (...args: unknown[]) => {
-      const nextWallet = firstAddress(Array.isArray(args[0]) ? args[0] : []);
-      activationReadyRetryRef.current = null;
-      setWallet(nextWallet);
-      if (switchingWalletRef.current) {
-        setError(null);
-        return;
-      }
-      if (request?.wallet && nextWallet?.toLowerCase() !== request.wallet.toLowerCase()) setError(`Switch back to ${shorten(request.wallet)}.`);
-      else setError(null);
-    };
-    window.ethereum.on("accountsChanged", accountsChanged);
-    return () => window.ethereum?.removeListener?.("accountsChanged", accountsChanged);
-  }, [request?.wallet]);
 
   const progress = ACTIVE_STEPS.map(([number, label], index) => ({
     number,
@@ -245,20 +234,18 @@ export default function VerifyFlow() {
 
   async function connectWallet() {
     setBusy("connect"); setError(null); setNotice(null);
+    const generation = flowGenerationRef.current;
     try {
-      const provider = getProvider();
-      const connectedWallet = firstAddress(await provider.request({ method: "eth_requestAccounts" }));
-      if (!connectedWallet) throw new Error("No wallet selected.");
+      const connectedWallet = await persistentWallet.authenticate();
+      if (generation !== flowGenerationRef.current) return;
       switchingWalletRef.current = false;
-      await ensureStudioNet(provider);
       if (request?.wallet && connectedWallet.toLowerCase() !== request.wallet.toLowerCase()) throw new Error(`Switch to ${shorten(request.wallet)}.`);
-      setWallet(connectedWallet);
-      const result = await api<{ request: VerificationRequest; walletChallenge: WalletChallenge | null }>(
+      const result = await api<{ request: VerificationRequest }>(
         "/api/verification/challenge",
         requestBody({ wallet: connectedWallet }),
       );
+      if (generation !== flowGenerationRef.current) return;
       setRequest(result.request);
-      setWalletChallenge(result.walletChallenge);
       if (result.request.id !== request?.id) {
         activationReadyRetryRef.current = null;
         setProfiles(null); setBundle(null); setPostUrl(""); setFarcasterCastUrl("");
@@ -267,29 +254,6 @@ export default function VerifyFlow() {
     } catch (connectError) {
       switchingWalletRef.current = false;
       setError(readError(connectError, "Wallet connection failed."));
-    } finally { setBusy(null); }
-  }
-
-  async function signWalletChallenge() {
-    if (!request || !effectiveWallet || !walletChallenge) {
-      await connectWallet();
-      return;
-    }
-    setBusy("wallet-sign"); setError(null); setNotice(null);
-    try {
-      const provider = getProvider();
-      requireSelectedAccount(await provider.request({ method: "eth_accounts" }), effectiveWallet);
-      const signature = await provider.request({ method: "personal_sign", params: [messageToHex(walletChallenge.message), effectiveWallet] });
-      if (typeof signature !== "string") throw new Error("No signature was returned.");
-      const result = await api<{ request: VerificationRequest }>(
-        "/api/verification/authorize",
-        requestBody({ requestId: request.id, signature }),
-      );
-      setRequest(result.request);
-      setWalletChallenge(null);
-      await persistentWallet.refreshSession();
-    } catch (signError) {
-      setError(readError(signError, "Signature failed."));
     } finally { setBusy(null); }
   }
 
@@ -469,31 +433,14 @@ export default function VerifyFlow() {
     switchingWalletRef.current = true;
     setBusy("switch-wallet"); setError(null); setNotice(null);
     try {
-      if (activeRunRequest) {
-        await api<{ ended: boolean; processing: boolean; authenticated: false; wallet: null }>(
-          "/api/verification/session",
-          {
-            method: "DELETE",
-            body: JSON.stringify({
-              requestId: activeRunRequest.id,
-              revision: activeRunRequest.revision,
-            }),
-          },
-        );
-      } else {
-        await api<{ processing: boolean; authenticated: false; wallet: null }>(
-          "/api/auth/wallet/session",
-          { method: "DELETE" },
-        );
-      }
-      await persistentWallet.refreshSession();
+      await persistentWallet.signOut(activeRunRequest
+        ? { verificationRequest: { id: activeRunRequest.id, revision: activeRunRequest.revision } }
+        : undefined);
       flowGenerationRef.current += 1;
       activationReadyRetryRef.current = null;
       clearRecovery();
       setRecovery(null);
       setRequest(null);
-      setWallet(null);
-      setWalletChallenge(null);
       setHandle("");
       setPostUrl("");
       setFarcasterUsername("");
@@ -502,18 +449,11 @@ export default function VerifyFlow() {
       setProfiles(null);
       setBundle(null);
       setActivationDetachReady(false);
-      const revoked = await revokeWalletPermissions();
-      if (!revoked) {
-        setNotice("App signed out. Choose another account in your wallet.");
-      }
       setError(null);
     } catch (switchError) {
       switchingWalletRef.current = false;
-      const selectedWallet = await currentWallet();
-      setWallet(selectedWallet);
       setError(
-        request?.wallet
-          && selectedWallet?.toLowerCase() !== request.wallet.toLowerCase()
+        walletMismatch && request
           ? `Switch back to ${shorten(request.wallet)}.`
           : readError(switchError, "Could not switch wallets."),
       );
@@ -560,23 +500,26 @@ export default function VerifyFlow() {
 
         <section className="verify-workspace" aria-labelledby="verify-workspace-title">
           <div className="verify-workspace-head"><div><span>VERIFICATION</span><strong id="verify-workspace-title">STEP {String(activeStep).padStart(2, "0")} / 04</strong></div><span className={expired ? "run-state error" : "run-state"}><i /> {expired ? "EXPIRED" : bundleActive ? "VERIFIED" : "READY"}</span></div>
-          {request || wallet ? (
+          {persistentWallet.hasSession || request || wallet ? (
             <button
               className="verify-secondary verify-switch-wallet"
-              disabled={switchBusyBlocked}
+              disabled={switchBusyBlocked || persistentWallet.authenticating || persistentWallet.disconnecting || restoring}
               onClick={() => void switchWallet()}
               type="button"
             >
-              {busy === "switch-wallet" ? "SWITCHING…" : "SWITCH WALLET"}
+              {persistentWallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}
             </button>
           ) : null}
-          <div className="verify-announcer" aria-live="polite">{notice ? <p className="verify-notice">{notice}</p> : null}{error ? <p className="verify-error" role="alert">{error}</p> : null}</div>
+          <div className="verify-announcer" aria-live="polite">
+            {notice || persistentWallet.walletNotice ? <p className="verify-notice">{notice ?? persistentWallet.walletNotice}</p> : null}
+            {error || walletMismatch ? <p className="verify-error" role="alert">{error ?? `Switch back to ${shorten(request?.wallet ?? "")}.`}</p> : null}
+          </div>
 
           {activeStep === 1 ? (
             <div className="verify-card">
-              <h2>{expired || terminalOutcome ? "START AGAIN" : walletChallenge ? "SIGN MESSAGE" : "CONNECT WALLET"}</h2>
+              <h2>{restoring ? "RESTORING SESSION" : expired || terminalOutcome ? "START AGAIN" : persistentWallet.authenticated ? "WALLET CONNECTED" : "CONNECT WALLET"}</h2>
               {effectiveWallet ? <div className="connected-wallet"><span>WALLET</span><strong title={effectiveWallet}>{shorten(effectiveWallet)}</strong><small>GENLAYER STUDIONET</small></div> : null}
-              <button className="button verify-primary" type="button" disabled={Boolean(busy)} onClick={walletChallenge ? signWalletChallenge : connectWallet}>{busy === "connect" ? "CONNECTING…" : busy === "wallet-sign" ? "SIGNING…" : walletChallenge ? "SIGN →" : "CONNECT →"}</button>
+              <button className="button verify-primary" type="button" disabled={Boolean(busy) || restoring || persistentWallet.disconnecting || walletMismatch} onClick={connectWallet}>{restoring ? "RESTORING…" : persistentWallet.authenticating ? "SIGNING IN…" : busy === "connect" ? "CONTINUING…" : persistentWallet.authenticated ? "CONTINUE →" : "CONNECT + SIGN →"}</button>
             </div>
           ) : null}
 
@@ -647,27 +590,6 @@ function hydrateFields(request: VerificationRequest | null, setters: {
   if (farcasterCastUrl) setters.setFarcasterCastUrl(farcasterCastUrl);
 }
 
-async function currentWallet(): Promise<string | null> {
-  if (!window.ethereum) return null;
-  try {
-    return firstAddress(await window.ethereum.request({ method: "eth_accounts" }));
-  } catch {
-    return null;
-  }
-}
-
-async function revokeWalletPermissions(): Promise<boolean> {
-  try {
-    await window.ethereum?.request({
-      method: "wallet_revokePermissions",
-      params: [{ eth_accounts: {} }],
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function getProvider(): EthereumProvider {
   if (!window.ethereum) throw new Error("Install a StudioNet-compatible wallet.");
   return window.ethereum;
@@ -717,10 +639,6 @@ function requireSelectedAccount(accounts: unknown, expected: string): void {
 function firstAddress(value: unknown): string | null {
   if (!Array.isArray(value) || typeof value[0] !== "string") return null;
   return /^0x[\da-f]{40}$/i.test(value[0]) ? value[0].toLowerCase() : null;
-}
-
-function messageToHex(message: string): `0x${string}` {
-  return `0x${Array.from(new TextEncoder().encode(message), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function normalizeXHandle(value: string): string {

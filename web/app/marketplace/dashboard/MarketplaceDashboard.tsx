@@ -12,6 +12,10 @@ import type { MarketplaceDashboardResponseDto } from "../../../lib/marketplace-t
 
 export function MarketplaceDashboard() {
   const wallet = useMarketplaceWallet();
+  return <MarketplaceDashboardSession key={wallet.disconnectVersion} wallet={wallet} />;
+}
+
+function MarketplaceDashboardSession({ wallet }: { wallet: ReturnType<typeof useMarketplaceWallet> }) {
   const [data, setData] = useState<MarketplaceDashboardResponseDto | null>(null);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -49,18 +53,26 @@ export function MarketplaceDashboard() {
         </aside>
       </div>
 
+      {wallet.hasSession ? (
+        <button className="verify-secondary" type="button" disabled={wallet.authenticating || wallet.disconnecting || phase === "loading"} onClick={() => void wallet.signOut().catch(() => undefined)}>
+          {wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}
+        </button>
+      ) : null}
+      {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
+      {wallet.walletNotice ? <p className="form-message" role="status">{wallet.walletNotice}</p> : null}
+
       {phase !== "ready" ? (
         <div className="campaign-detail-panel dashboard-connect-panel">
           <h2>{wallet.restoring ? "RESTORING YOUR SESSION" : wallet.address ? "LOAD YOUR PRIVATE VIEW" : "CONNECT YOUR WALLET"}</h2>
           <p>Private pitches stay visible only to the brand.</p>
-          <button className="button" type="button" disabled={wallet.restoring || phase === "loading" || wallet.authenticating} onClick={() => void load()}>
+          <button className="button" type="button" disabled={wallet.restoring || wallet.disconnecting || phase === "loading" || wallet.authenticating} onClick={() => void load()}>
             {wallet.restoring || phase === "loading" || wallet.authenticating ? "LOADING…" : wallet.authenticated ? "LOAD DASHBOARD →" : "CONNECT + LOAD DASHBOARD →"}
           </button>
           {error ? <p className="form-message error" role="alert">{error}</p> : null}
         </div>
       ) : null}
 
-      {data ? (
+      {data && wallet.authenticated ? (
         <div className="campaign-detail-grid">
           <section className="campaign-detail-panel application-list-panel">
             <div className="detail-panel-head"><span>BRAND VIEW</span><strong>{data.brandCampaigns.length} CAMPAIGNS</strong></div>

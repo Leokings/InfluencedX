@@ -877,7 +877,32 @@ test("wallet authentication is restored once and shared across every app route",
   assert.match(walletProvider, /window\.addEventListener\("ethereum#initialized", hydrateProvider/);
   assert.match(walletProvider, /window\.addEventListener\("focus", resume\)/);
   assert.doesNotMatch(walletProvider, /const provider = window\.ethereum;\s*if \(!provider\) return;\s*\n\s*void Promise\.all/);
-  assert.equal(verification.match(/persistentWallet\.refreshSession\(\)/g)?.length, 2);
+  assert.match(verification, /await persistentWallet\.authenticate\(\)/);
+  assert.doesNotMatch(verification, /signWalletChallenge|\/api\/verification\/authorize/);
+  assert.match(verification, /persistentWallet\.authenticated \? "CONTINUE →" : "CONNECT \+ SIGN →"/);
+  assert.match(verification, /persistentWallet\.authenticated && !walletMismatch/);
   assert.match(dashboard, /if \(!wallet\.authenticated\) await wallet\.authenticate\(\)/);
   assert.match(dashboard, /wallet\.authenticated \? "LOAD DASHBOARD →" : "CONNECT \+ LOAD DASHBOARD →"/);
+});
+
+test("disconnect clears shared state, resets private views, and cannot silently reconnect", async () => {
+  const [wallet, verification, dashboard, create, detail] = await Promise.all([
+    "../app/marketplace/use-marketplace-wallet.ts",
+    "../app/verify/VerifyFlow.tsx",
+    "../app/marketplace/dashboard/MarketplaceDashboard.tsx",
+    "../app/marketplace/create/CreateCampaignForm.tsx",
+    "../app/marketplace/campaigns/[campaignId]/CampaignDetail.tsx",
+  ].map((path) => readFile(new URL(path, import.meta.url), "utf8")));
+  assert.match(wallet, /window\.addEventListener\("storage", synchronize\)/);
+  assert.match(wallet, /window\.localStorage\.getItem\(WALLET_SESSION_SYNC_KEY\)\?\.startsWith\("disconnected:"\)/);
+  assert.match(wallet, /if \(disconnectPending\.current \|\| disconnected\.current\) return;/);
+  assert.match(wallet, /version !== lifecycle\.current \|\| sequence !== sessionRead\.current/);
+  const logout = wallet.slice(wallet.indexOf("const signOut ="), wallet.indexOf("return {", wallet.indexOf("const signOut =")));
+  assert.ok(logout.indexOf("await marketplaceRequest") < logout.indexOf("clearSession()"));
+  assert.ok(logout.indexOf("clearSession()") < logout.indexOf('publishSessionChange("disconnected")'));
+  assert.match(wallet, /setSessionWallet\(null\);[\s\S]*setAddress\(null\);[\s\S]*setChainId\(null\)/);
+  assert.match(verification, /key=\{persistentWallet\.disconnectVersion\}/);
+  assert.match(dashboard, /key=\{wallet\.disconnectVersion\}/);
+  assert.match(dashboard, /data && wallet\.authenticated/);
+  for (const ui of [verification, dashboard, create, detail]) assert.match(ui, /DISCONNECT WALLET/);
 });

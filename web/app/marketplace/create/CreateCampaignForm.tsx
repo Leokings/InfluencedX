@@ -107,11 +107,11 @@ export function CreateCampaignForm() {
           <span>AUTHORIZED BRAND WALLET</span>
           <strong>{wallet.restoring ? "RESTORING SESSION" : wallet.authenticated && wallet.address ? shortenAddress(wallet.address) : wallet.address ? "SIGN-IN REQUIRED" : "NOT CONNECTED"}</strong>
         </div>
-        <button className="verify-secondary" type="button" disabled={wallet.restoring || wallet.authenticating} onClick={() => void wallet.authenticate()}>
+        <button className="verify-secondary" type="button" disabled={wallet.restoring || wallet.authenticating || wallet.disconnecting} onClick={() => void wallet.authenticate().catch(() => undefined)}>
           {wallet.restoring ? "RESTORING…" : wallet.authenticating ? "SIGNING IN…" : wallet.authenticated ? "AUTHORIZED" : "CONNECT + SIGN"}
         </button>
         {wallet.hasSession ? (
-          <button className="verify-secondary" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET</button>
+          <button className="verify-secondary" type="button" disabled={wallet.authenticating || wallet.disconnecting || submission.phase === "submitting"} onClick={() => void wallet.signOut().catch(() => undefined)}>{wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}</button>
         ) : null}
         {wallet.address && !wallet.isStudioNet ? (
           <button className="verify-secondary" type="button" onClick={() => void wallet.switchToStudioNet()}>
@@ -120,6 +120,7 @@ export function CreateCampaignForm() {
         ) : null}
       </div>
       {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
+      {wallet.walletNotice ? <p className="form-message" role="status">{wallet.walletNotice}</p> : null}
       <p className="marketplace-auth-note">
         Creators need an active identity for the selected source. <Link href="/verify">VERIFY A CREATOR →</Link>
       </p>

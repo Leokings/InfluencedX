@@ -39,6 +39,11 @@ import {
   readMarketplaceState,
 } from "./marketplace-genlayer-rpc.ts";
 import { ApiProblem } from "./verification-api.ts";
+import {
+  isAuthenticatedWalletSession,
+  walletSessionMatches,
+  type WalletSession,
+} from "./wallet-session.ts";
 
 type VerificationRow = typeof verificationRequests.$inferSelect;
 
@@ -98,20 +103,47 @@ export type NativeVerificationProjection = Readonly<{
   updatedAt: string;
 }>;
 
+type NativeVerificationRequestStore = {
+  expireStale: typeof expireStale;
+  findActive: (ownerUserId: string) => Promise<VerificationRow | null>;
+  insert: (values: typeof verificationRequests.$inferInsert) => Promise<VerificationRow | null>;
+  authorizePending: (row: VerificationRow, nowMs: number) => Promise<VerificationRow | null>;
+};
+
 export async function createNativeVerificationRequest(input: {
-  ownerUserId: string;
+  session: WalletSession;
   wallet: unknown;
   origin: string;
   nowMs?: number;
-}): Promise<{ request: NativeVerificationProjection; message: string | null }> {
+}, store: NativeVerificationRequestStore = nativeVerificationRequestStore): Promise<{ request: NativeVerificationProjection; message: string | null }> {
   const nowMs = input.nowMs ?? Date.now();
   const normalizedWallet = normalizeWallet(input.wallet);
   const wallet = normalizedWallet.toLowerCase();
-  await expireStale(input.ownerUserId, nowMs);
-  const existing = await activeOwned(input.ownerUserId);
+  const { session } = input;
+  if (session.expiresAt * 1_000 <= nowMs) {
+    throw problem(401, "WALLET_AUTHENTICATION_REQUIRED", "Sign in with your wallet again.");
+  }
+  const authenticated = isAuthenticatedWalletSession(session);
+  if (authenticated && !walletSessionMatches(session, wallet)) {
+    throw problem(409, "SESSION_WALLET_MISMATCH", "This session is already bound to another wallet.");
+  }
+  const ownerUserId = session.subject;
+  await store.expireStale(ownerUserId, nowMs);
+  const existing = await store.findActive(ownerUserId);
   if (existing) {
-    if (existing.wallet !== wallet) {
+    if (existing.wallet !== wallet || existing.ownerUserId !== ownerUserId) {
       throw problem(409, "ACTIVE_REQUEST_EXISTS", "Finish the current verification request before using another wallet.");
+    }
+    if (existing.sessionDetachedAt !== null) stateChanged();
+    if (authenticated && existing.status === "WALLET_CHALLENGE_PENDING") {
+      if (
+        existing.walletChallengeExpiresAt <= nowMs
+        || existing.requestExpiresAt <= nowMs
+        || hasNativeVerificationActivationState(existing)
+      ) stateChanged();
+      const authorized = await store.authorizePending(existing, nowMs);
+      if (!authorized) stateChanged();
+      return { request: projection(authorized), message: null };
     }
     return { request: projection(existing), message: existing.status === "WALLET_CHALLENGE_PENDING" ? existing.walletMessage : null };
   }
@@ -126,26 +158,65 @@ export async function createNativeVerificationRequest(input: {
     issuedAtMs: nowMs,
     expiresAtMs: expiresAt,
   });
-  const [row] = await getDb().insert(verificationRequests).values({
+  const row = await store.insert({
     id,
-    ownerUserId: input.ownerUserId,
-    activeOwnerUserId: input.ownerUserId,
+    ownerUserId,
+    activeOwnerUserId: ownerUserId,
     activeWallet: wallet,
-    status: "WALLET_CHALLENGE_PENDING",
+    status: authenticated ? "WALLET_AUTHORIZED" : "WALLET_CHALLENGE_PENDING",
     statusUpdatedAt: nowMs,
-    requestExpiresAt: expiresAt,
+    requestExpiresAt: authenticated ? nowMs + 24 * 60 * 60 * 1_000 : expiresAt,
     wallet,
-    walletNonce: nonce,
+    walletNonce: authenticated ? null : nonce,
     walletNonceHash: sha256(stringToHex(nonce)),
-    walletMessage: message,
+    walletMessage: authenticated ? null : message,
     walletMessageHash: sha256(stringToHex(message)),
     walletChallengeExpiresAt: expiresAt,
+    walletAuthorizedAt: authenticated ? nowMs : null,
+    // Session authorization has no new per-request signature to record.
+    walletSignatureHash: null,
+    purgedAt: authenticated ? nowMs : null,
     createdAt: nowMs,
     updatedAt: nowMs,
-  }).returning();
+  });
   if (!row) throw problem(503, "VERIFICATION_STORAGE_FAILED", "Verification could not be saved.");
-  return { request: projection(row), message };
+  return { request: projection(row), message: authenticated ? null : message };
 }
+
+const nativeVerificationRequestStore: NativeVerificationRequestStore = {
+  expireStale,
+  findActive: activeOwned,
+  async insert(values) {
+    const [row] = await getDb().insert(verificationRequests).values(values).returning();
+    return row ?? null;
+  },
+  async authorizePending(row, nowMs) {
+    const [updated] = await getDb().update(verificationRequests).set({
+      status: "WALLET_AUTHORIZED",
+      statusUpdatedAt: nowMs,
+      walletAuthorizedAt: nowMs,
+      walletNonce: null,
+      walletMessage: null,
+      requestExpiresAt: nowMs + 24 * 60 * 60 * 1_000,
+      purgedAt: nowMs,
+      revision: row.revision + 1,
+      updatedAt: nowMs,
+    }).where(and(
+      eq(verificationRequests.id, row.id),
+      eq(verificationRequests.ownerUserId, row.ownerUserId),
+      eq(verificationRequests.activeOwnerUserId, row.ownerUserId),
+      eq(verificationRequests.wallet, row.wallet),
+      eq(verificationRequests.status, "WALLET_CHALLENGE_PENDING"),
+      eq(verificationRequests.revision, row.revision),
+      isNull(verificationRequests.sessionDetachedAt),
+      isNull(verificationRequests.activationPreparedId),
+      isNull(verificationRequests.activationTxHash),
+      gt(verificationRequests.walletChallengeExpiresAt, nowMs),
+      gt(verificationRequests.requestExpiresAt, nowMs),
+    )).returning();
+    return updated ?? null;
+  },
+};
 
 function buildNativeWalletAuthorizationMessage(input: {
   origin: string;
@@ -447,7 +518,7 @@ async function owned(ownerUserId: string, requestId: string): Promise<Verificati
   return row;
 }
 
-async function activeOwned(ownerUserId: string) {
+async function activeOwned(ownerUserId: string): Promise<VerificationRow | null> {
   const [row] = await getDb().select().from(verificationRequests).where(
     eq(verificationRequests.activeOwnerUserId, ownerUserId),
   ).limit(1);
