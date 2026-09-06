@@ -16,10 +16,11 @@ The prior V2 deployment is retained only as a rollback reference.
 ## Reviewer preview activation
 
 - Stable application URL: [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app)
-- Web deployment: `dpl_2krdnuZzVb8xCkKXi6ekN1g3f956`
+- Web deployment: `dpl_3arjVyc3UnVXLURbxyCaBGfVsLpZ`
+- Web source commit: `d786ff05f7347198e89e10c1e1012418f3b0cb87`
 - Marketplace operator deployment: `dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY`
 - Withdrawal reconciler deployment: `dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd`
-- Maintenance activation: generation `4`, promoted and active
+- Maintenance activation: generation `5`, promoted and active
 - Live smoke check: marketplace `200`, V3 address present, V2 address absent
 - Projection check: campaign API `200` with no V2 campaign leakage
 - Mutation-gate check: authenticated-origin route reached request validation
@@ -35,35 +36,53 @@ requests with activation or reconciliation state are never restarted.
 The authenticated cookie remains `HttpOnly`, `Secure`, `SameSite=Strict`, and
 `Path=/`. The shared provider restores it independently of wallet injection.
 
-Disconnect controls now use the shared provider on Verify, Create, Dashboard,
-and campaign details. Only after server-side cleanup succeeds are local wallet
-state and private views cleared. Other tabs receive a sign-out marker containing
-no wallet/session credentials; reload and focus cannot silently reconnect a
-disconnected session. Wallet permission revocation is best-effort, with a clear
-fallback when a wallet does not support it. Existing exact-request/revision
-checks and transaction-recovery safeguards remain in place.
+Follow-up `d786ff0` separates wallet logout from ending a verification run.
+Disconnect is available on Verify, Create, Dashboard, and campaign details,
+including before social verification is finished. The generic logout endpoint
+clears authentication cookies without reading or mutating verification records
+or contacting the chain. It no longer requires returning to Verify or confirming
+that the run should end. After server-side logout succeeds, the shared provider
+clears local wallet state and private views. Other tabs receive a sign-out marker
+containing no wallet/session credentials; reload and focus cannot silently
+reconnect a disconnected session. Wallet permission revocation is best-effort,
+with a clear fallback when a wallet does not support it.
+
+Saved verification work and wallet-scoped transaction recovery survive logout.
+A fresh valid signature from the same wallet restores its existing authorized
+run owner without rewriting transaction bindings. A different wallet cannot
+read, adopt, or cancel that run, and an old unsigned cookie cannot access an
+authorized run. Only an exact idle unsigned reservation can be released during
+authenticated reconnect; prepared or submitted activation state is protected.
+Explicit run cancellation remains a separate operation with its original
+exact-request/revision and transaction-finality checks. In-flight sign-in HTTP
+requests are aborted on logout, and stale client callbacks are fenced.
 
 - Live Chrome check: the existing authenticated wallet restored on Create;
   navigation to Verify showed `WALLET CONNECTED` and `CONTINUE`, not a new
   connect/sign prompt. Continue returned `WALLET_AUTHORIZED` with a null wallet
   challenge, and `ADD ACCOUNTS` survived a full reload with the same request ID.
-- Live Chrome check: Dashboard loaded its private view using the same session,
-  without a new signature. Generic disconnect with an active verification run
-  returned `Finish this run at /verify first.` and retained the session.
-- Browser end-to-end disconnect/cross-tab check: pending. Automation could not
-  dismiss Chrome's native confirmation for the empty test run
-  `9dda36eb-e4a0-4a1c-9541-6e1211bfc545`; user action was requested. This is a
-  browser-test limitation, not evidence that logout succeeded.
-- Live HTTP smoke test: disposable test wallet signed in once, reused sign-in
-  on Verify and Dashboard, rejected generic/stale-revision logout, ended the
-  exact empty run, cleared its cookies, rejected private Dashboard access, and
-  required a new challenge afterward. Empty test runs were cleaned up. No
-  social proofs, campaigns, or blockchain transactions were created.
+- Live Chrome check on September 6: Dashboard loaded its private view using the
+  same session, without a new signature. With Verify at `ADD ACCOUNTS` for saved
+  run `9dda36eb-e4a0-4a1c-9541-6e1211bfc545`, clicking `DISCONNECT WALLET` on
+  Create succeeded without a confirmation dialog or verification requirement.
+  Create showed `NOT CONNECTED`, Verify returned to `CONNECT WALLET`, and the
+  Dashboard private view disappeared in its already-open tab. All three routes
+  remained signed out after full reloads. The saved run was not cancelled.
+- Live HTTP smoke test on the exact deployed build: a disposable wallet reused
+  sign-in on Verify and Dashboard, disconnected with an active authorized run,
+  lost private access, then signed in again and recovered the same run ID,
+  status, and revision. A different authenticated wallet and the original
+  unsigned cookie could not read or cancel the saved run. A stale explicit
+  cancellation was rejected; exact empty-run cleanup succeeded afterward.
+  Result: `PASS`, three message signatures, zero blockchain transactions. No
+  social proofs or campaigns were created, and the disposable run was cleaned
+  up. Pending-transaction recovery was covered by code/regression checks, not
+  by broadcasting a new blockchain transaction in this logout test.
 - Reproduce the opt-in HTTP check:
   `cd web && node scripts/check-wallet-session.mjs https://influencedx-native-preview.vercel.app`
 - Browser result: no application error overlay on the reviewer campaign
-- Web unit suite: 289 tests passed, including six behavioral session-reuse
-  regressions and shared-disconnect coverage
+- Web unit suite: 294 tests passed, including session-reuse, saved-run recovery,
+  unsigned-cookie isolation, and shared-disconnect regressions
 - Rendered-page checks: 8 passed
 - Lint: passed
 - Production build: passed
