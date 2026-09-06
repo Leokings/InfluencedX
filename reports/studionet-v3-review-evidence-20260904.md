@@ -16,28 +16,55 @@ The prior V2 deployment is retained only as a rollback reference.
 ## Reviewer preview activation
 
 - Stable application URL: [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app)
-- Web deployment: `dpl_GQ3AxvRfTiDsb1wwUMNPM7hNS3pd`
+- Web deployment: `dpl_2krdnuZzVb8xCkKXi6ekN1g3f956`
 - Marketplace operator deployment: `dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY`
 - Withdrawal reconciler deployment: `dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd`
-- Maintenance activation: generation `3`, promoted and active
+- Maintenance activation: generation `4`, promoted and active
 - Live smoke check: marketplace `200`, V3 address present, V2 address absent
 - Projection check: campaign API `200` with no V2 campaign leakage
 - Mutation-gate check: authenticated-origin route reached request validation
 
 ## Wallet-session persistence and active reviewer campaign
 
-Commit `d537426` moves marketplace wallet state into one root provider and
-restores the signed, site-wide session independently of wallet-injection timing.
+Commit `d537426` moved marketplace wallet state into one root provider.
+Follow-up `d8fade6` fixes the remaining Verify inconsistency: the server now
+reuses a valid authenticated wallet session to authorize an empty verification
+request, without a second wallet signature. It also safely advances an existing
+unsigned request after sign-in. Expired or wrong-wallet sessions are rejected;
+requests with activation or reconciliation state are never restarted.
 The authenticated cookie remains `HttpOnly`, `Secure`, `SameSite=Strict`, and
-`Path=/`; route navigation does not require another signature. Verify-flow
-authorization and sign-out refresh the shared wallet state so the marketplace
-and identity routes remain synchronized.
+`Path=/`. The shared provider restores it independently of wallet injection.
 
-- Live cross-route check: the same authorized wallet restored on Create,
-  Verify, and Dashboard after full route loads
+Disconnect controls now use the shared provider on Verify, Create, Dashboard,
+and campaign details. Only after server-side cleanup succeeds are local wallet
+state and private views cleared. Other tabs receive a sign-out marker containing
+no wallet/session credentials; reload and focus cannot silently reconnect a
+disconnected session. Wallet permission revocation is best-effort, with a clear
+fallback when a wallet does not support it. Existing exact-request/revision
+checks and transaction-recovery safeguards remain in place.
+
+- Live Chrome check: the existing authenticated wallet restored on Create;
+  navigation to Verify showed `WALLET CONNECTED` and `CONTINUE`, not a new
+  connect/sign prompt. Continue returned `WALLET_AUTHORIZED` with a null wallet
+  challenge, and `ADD ACCOUNTS` survived a full reload with the same request ID.
+- Live Chrome check: Dashboard loaded its private view using the same session,
+  without a new signature. Generic disconnect with an active verification run
+  returned `Finish this run at /verify first.` and retained the session.
+- Browser end-to-end disconnect/cross-tab check: pending. Automation could not
+  dismiss Chrome's native confirmation for the empty test run
+  `9dda36eb-e4a0-4a1c-9541-6e1211bfc545`; user action was requested. This is a
+  browser-test limitation, not evidence that logout succeeded.
+- Live HTTP smoke test: disposable test wallet signed in once, reused sign-in
+  on Verify and Dashboard, rejected generic/stale-revision logout, ended the
+  exact empty run, cleared its cookies, rejected private Dashboard access, and
+  required a new challenge afterward. Empty test runs were cleaned up. No
+  social proofs, campaigns, or blockchain transactions were created.
+- Reproduce the opt-in HTTP check:
+  `cd web && node scripts/check-wallet-session.mjs https://influencedx-native-preview.vercel.app`
 - Browser result: no application error overlay on the reviewer campaign
-- Web unit suite: 282 tests passed, including one root wallet provider and
-  route-wide restoration coverage
+- Web unit suite: 289 tests passed, including six behavioral session-reuse
+  regressions and shared-disconnect coverage
+- Rendered-page checks: 8 passed
 - Lint: passed
 - Production build: passed
 - Reviewer campaign: [`660ddc9d-00a5-4e72-9748-833b47ce7c2f`](https://influencedx-native-preview.vercel.app/marketplace/campaigns/660ddc9d-00a5-4e72-9748-833b47ce7c2f)
