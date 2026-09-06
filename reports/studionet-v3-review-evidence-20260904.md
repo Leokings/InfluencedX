@@ -16,11 +16,11 @@ The prior V2 deployment is retained only as a rollback reference.
 ## Reviewer preview activation
 
 - Stable application URL: [`influencedx-native-preview.vercel.app`](https://influencedx-native-preview.vercel.app)
-- Web deployment: `dpl_3arjVyc3UnVXLURbxyCaBGfVsLpZ`
-- Web source commit: `d786ff05f7347198e89e10c1e1012418f3b0cb87`
+- Web deployment: `dpl_Gvu3Lc2immM1SesND8ASEV7GVBDW`
+- Web source commit: `301ea4fa22e691365293c3f5ea4b5a9898b1da05`
 - Marketplace operator deployment: `dpl_Hd5jUhMsDJQMcQJLY4Hy5qCVMLeY`
 - Withdrawal reconciler deployment: `dpl_CDQWSvi5k5k8ZfPx4QmvDjCxtahd`
-- Maintenance activation: generation `5`, promoted and active
+- Maintenance activation: generation `6`, promoted and active
 - Live smoke check: marketplace `200`, V3 address present, V2 address absent
 - Projection check: campaign API `200` with no V2 campaign leakage
 - Mutation-gate check: authenticated-origin route reached request validation
@@ -57,6 +57,36 @@ Explicit run cancellation remains a separate operation with its original
 exact-request/revision and transaction-finality checks. In-flight sign-in HTTP
 requests are aborted on logout, and stale client callbacks are fenced.
 
+Follow-up `301ea4f` closes the remaining disconnect timing gaps:
+
+- Disconnect immediately releases the app's sign-in busy state, even while an
+  external wallet signature or permission-revocation prompt is still open.
+  Old callbacks cannot sign the user back in or finish a replacement sign-in.
+- A wallet/request-scoped durable outbox records the original prepared identity
+  action before checking whether the user disconnected. Reconnect resumes that
+  exact immutable call; it does not reserve a replacement. A cross-tab Web Lock
+  prevents simultaneous dispatch. Once a wallet request may have been sent,
+  retry stays confirm-only unless the provider explicitly returned error 4001.
+- A hash arriving after logout is stored across tab closure and submitted using
+  a short-lived, receipt-only capability. This endpoint cannot authenticate,
+  prepare, cancel, or withdraw, and it verifies the actual signed sender,
+  contract, calldata, and native value before accepting the hash. Failed receipt
+  deliveries retry on app load, focus, or restored connectivity, including while
+  signed out. An exact server acknowledgement is required before marking a
+  receipt delivered. Manual hash recovery is available for an uncertain wallet
+  response; unknown transactions are never automatically resent.
+- Expired, finalized `UNDETERMINED` runs can release their verification lock
+  without an obsolete session-detach marker. Exact finality, journal binding,
+  and authoritative on-chain outcome checks remain mandatory. Unfinalized or
+  uncertain activation state is not discarded.
+
+These timing regressions execute production hook/coordinator/route code with
+isolated wallet, HTTP, storage, and scheduling fixtures. They include logout
+during preparation, late hashes, cross-tab exclusion, blocked storage, prompt
+races, capability tampering/expiry, wrong-call rejection, and exact receipt
+acknowledgements. They do not broadcast new blockchain transactions. No contract
+or database-schema change is required by this follow-up.
+
 - Live Chrome check: the existing authenticated wallet restored on Create;
   navigation to Verify showed `WALLET CONNECTED` and `CONTINUE`, not a new
   connect/sign prompt. Continue returned `WALLET_AUTHORIZED` with a null wallet
@@ -78,11 +108,20 @@ requests are aborted on logout, and stale client callbacks are fenced.
   social proofs or campaigns were created, and the disposable run was cleaned
   up. Pending-transaction recovery was covered by code/regression checks, not
   by broadcasting a new blockchain transaction in this logout test.
+- The same HTTP smoke passed again on the `301ea4f` candidate before stable
+  alias promotion. Both new recovery routes rejected unsigned requests with
+  `401`; public marketplace, Verify, Create, Dashboard, and reviewer-campaign
+  routes returned `200`. The reviewer campaign remained `open` / `funded`.
+  The candidate runtime error-log scan returned no error logs.
+- After promotion, the complete HTTP smoke passed on the stable application
+  URL as well. Its alias resolves to `dpl_Gvu3Lc2immM1SesND8ASEV7GVBDW`, and the
+  served Verify JavaScript includes the new durable recovery client. Both
+  disposable test runs were ended; neither smoke broadcast a chain transaction.
 - Reproduce the opt-in HTTP check:
   `cd web && node scripts/check-wallet-session.mjs https://influencedx-native-preview.vercel.app`
 - Browser result: no application error overlay on the reviewer campaign
-- Web unit suite: 294 tests passed, including session-reuse, saved-run recovery,
-  unsigned-cookie isolation, and shared-disconnect regressions
+- Web unit suite: 315 tests passed, including session-reuse, saved-run recovery,
+  unsigned-cookie isolation, disconnect timing, and receipt-capability regressions
 - Rendered-page checks: 8 passed
 - Lint: passed
 - Production build: passed
