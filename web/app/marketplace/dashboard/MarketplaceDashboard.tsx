@@ -20,7 +20,7 @@ export function MarketplaceDashboard() {
     setPhase("loading");
     setError(null);
     try {
-      await wallet.authenticate();
+      if (!wallet.authenticated) await wallet.authenticate();
       const response = await marketplaceRequest<MarketplaceDashboardResponseDto>("/api/marketplace/dashboard");
       setData({
         ...response,
@@ -51,10 +51,10 @@ export function MarketplaceDashboard() {
 
       {phase !== "ready" ? (
         <div className="campaign-detail-panel dashboard-connect-panel">
-          <h2>{wallet.address ? "LOAD YOUR PRIVATE VIEW" : "CONNECT YOUR WALLET"}</h2>
+          <h2>{wallet.restoring ? "RESTORING YOUR SESSION" : wallet.address ? "LOAD YOUR PRIVATE VIEW" : "CONNECT YOUR WALLET"}</h2>
           <p>Private pitches stay visible only to the brand.</p>
-          <button className="button" type="button" disabled={phase === "loading" || wallet.authenticating} onClick={() => void load()}>
-            {phase === "loading" || wallet.authenticating ? "LOADING…" : "CONNECT + LOAD DASHBOARD →"}
+          <button className="button" type="button" disabled={wallet.restoring || phase === "loading" || wallet.authenticating} onClick={() => void load()}>
+            {wallet.restoring || phase === "loading" || wallet.authenticating ? "LOADING…" : wallet.authenticated ? "LOAD DASHBOARD →" : "CONNECT + LOAD DASHBOARD →"}
           </button>
           {error ? <p className="form-message error" role="alert">{error}</p> : null}
         </div>

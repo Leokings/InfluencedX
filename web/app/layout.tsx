@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { applicationOriginForMetadata } from "@/lib/verification-config";
+import { MarketplaceWalletProvider } from "./marketplace/use-marketplace-wallet";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -29,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><MarketplaceWalletProvider>{children}</MarketplaceWalletProvider></body>
     </html>
   );
 }

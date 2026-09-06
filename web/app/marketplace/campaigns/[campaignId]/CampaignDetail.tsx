@@ -586,8 +586,8 @@ function ResolutionCriteria({ campaign }: { campaign: MarketplaceCampaign }) {
 function WalletIntro({ wallet }: { wallet: ReturnType<typeof useMarketplaceWallet> }) {
   return (
     <div className="action-intro">
-      <h2>CONNECT YOUR WALLET</h2>
-      <button className="button" type="button" disabled={wallet.authenticating} onClick={() => void wallet.authenticate()}>{wallet.authenticating ? "SIGNING IN…" : "CONNECT + SIGN →"}</button>
+      <h2>{wallet.restoring ? "RESTORING YOUR SESSION" : "CONNECT YOUR WALLET"}</h2>
+      <button className="button" type="button" disabled={wallet.restoring || wallet.authenticating} onClick={() => void wallet.authenticate()}>{wallet.restoring ? "RESTORING…" : wallet.authenticating ? "SIGNING IN…" : "CONNECT + SIGN →"}</button>
       <Link href="/verify">NEED TO VERIFY? START HERE →</Link>
     </div>
   );

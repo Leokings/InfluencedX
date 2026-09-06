@@ -861,3 +861,22 @@ test("active marketplace and verification UI is StudioNet-native with no Base tr
   assert.doesNotMatch(combined, /\/api\/verification\/(?:intent|submit)/);
   assert.doesNotMatch(combined, />Thread<|>Video<|X thread/i);
 });
+
+test("wallet authentication is restored once and shared across every app route", async () => {
+  const [layout, walletProvider, verification, dashboard] = await Promise.all([
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/use-marketplace-wallet.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/verify/VerifyFlow.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/marketplace/dashboard/MarketplaceDashboard.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(layout, /<MarketplaceWalletProvider>\{children\}<\/MarketplaceWalletProvider>/);
+  assert.match(walletProvider, /createContext<MarketplaceWalletContextValue \| null>/);
+  assert.match(walletProvider, /marketplaceRequest<WalletSessionResponse>\("\/api\/auth\/wallet\/session"\)/);
+  assert.match(walletProvider, /window\.addEventListener\("ethereum#initialized", hydrateProvider/);
+  assert.match(walletProvider, /window\.addEventListener\("focus", resume\)/);
+  assert.doesNotMatch(walletProvider, /const provider = window\.ethereum;\s*if \(!provider\) return;\s*\n\s*void Promise\.all/);
+  assert.equal(verification.match(/persistentWallet\.refreshSession\(\)/g)?.length, 2);
+  assert.match(dashboard, /if \(!wallet\.authenticated\) await wallet\.authenticate\(\)/);
+  assert.match(dashboard, /wallet\.authenticated \? "LOAD DASHBOARD →" : "CONNECT \+ LOAD DASHBOARD →"/);
+});

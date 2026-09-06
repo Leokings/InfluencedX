@@ -105,10 +105,10 @@ export function CreateCampaignForm() {
       <div className="marketplace-wallet-panel">
         <div>
           <span>AUTHORIZED BRAND WALLET</span>
-          <strong>{wallet.authenticated && wallet.address ? shortenAddress(wallet.address) : wallet.address ? "SIGN-IN REQUIRED" : "NOT CONNECTED"}</strong>
+          <strong>{wallet.restoring ? "RESTORING SESSION" : wallet.authenticated && wallet.address ? shortenAddress(wallet.address) : wallet.address ? "SIGN-IN REQUIRED" : "NOT CONNECTED"}</strong>
         </div>
-        <button className="verify-secondary" type="button" disabled={wallet.authenticating} onClick={() => void wallet.authenticate()}>
-          {wallet.authenticating ? "SIGNING IN…" : wallet.authenticated ? "AUTHORIZED" : "CONNECT + SIGN"}
+        <button className="verify-secondary" type="button" disabled={wallet.restoring || wallet.authenticating} onClick={() => void wallet.authenticate()}>
+          {wallet.restoring ? "RESTORING…" : wallet.authenticating ? "SIGNING IN…" : wallet.authenticated ? "AUTHORIZED" : "CONNECT + SIGN"}
         </button>
         {wallet.hasSession ? (
           <button className="verify-secondary" type="button" onClick={() => void wallet.signOut()}>SWITCH WALLET</button>

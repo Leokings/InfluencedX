@@ -17,6 +17,7 @@ import {
   studioNetExplorerLink,
 } from "../marketplace/marketplace-types";
 import { selectVerificationWallet } from "@/lib/verification-wallet";
+import { useMarketplaceWallet } from "../marketplace/use-marketplace-wallet";
 import { farcasterCastUrlForHash } from "./farcaster-cast-url";
 import { shouldRejectVerificationResponse } from "./verification-api-client";
 import { parseBoundIdentityBundleRecovery, recoveryMatchesActiveBundle, type BoundIdentityBundleRecovery } from "./verification-recovery";
@@ -126,6 +127,7 @@ const ACTIVE_STEPS = [
 ] as const;
 
 export default function VerifyFlow() {
+  const persistentWallet = useMarketplaceWallet();
   const [request, setRequest] = useState<VerificationRequest | null>(null);
   const [wallet, setWallet] = useState<string | null>(null);
   const [walletChallenge, setWalletChallenge] = useState<WalletChallenge | null>(null);
@@ -285,6 +287,7 @@ export default function VerifyFlow() {
       );
       setRequest(result.request);
       setWalletChallenge(null);
+      await persistentWallet.refreshSession();
     } catch (signError) {
       setError(readError(signError, "Signature failed."));
     } finally { setBusy(null); }
@@ -483,6 +486,7 @@ export default function VerifyFlow() {
           { method: "DELETE" },
         );
       }
+      await persistentWallet.refreshSession();
       flowGenerationRef.current += 1;
       activationReadyRetryRef.current = null;
       clearRecovery();

@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import { marketplaceRequest } from "./marketplace-api";
 import {
   STUDIONET_CHAIN_ID_HEX,
@@ -20,45 +28,96 @@ declare global {
   }
 }
 
-export function useMarketplaceWallet() {
+type MarketplaceWalletContextValue = ReturnType<typeof useMarketplaceWalletState>;
+
+const MarketplaceWalletContext = createContext<MarketplaceWalletContextValue | null>(null);
+
+export function MarketplaceWalletProvider({ children }: { children: ReactNode }) {
+  const wallet = useMarketplaceWalletState();
+  return createElement(MarketplaceWalletContext.Provider, { value: wallet }, children);
+}
+
+export function useMarketplaceWallet(): MarketplaceWalletContextValue {
+  const wallet = useContext(MarketplaceWalletContext);
+  if (!wallet) throw new Error("MarketplaceWalletProvider is missing.");
+  return wallet;
+}
+
+function useMarketplaceWalletState() {
   const [address, setAddress] = useState<string | null>(null);
   const [chainId, setChainId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
-  const [authenticated, setAuthenticated] = useState(false);
   const [sessionWallet, setSessionWallet] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(true);
+
+  const authenticated = Boolean(
+    address && sessionWallet && address === sessionWallet,
+  );
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const session = await marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/session");
+      setSessionWallet(session.authenticated ? session.wallet : null);
+      return session;
+    } finally {
+      setRestoring(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const provider = window.ethereum;
-    if (!provider) return;
-
-    void Promise.all([
-      provider.request({ method: "eth_accounts" }),
-      provider.request({ method: "eth_chainId" }),
-      marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/session"),
-    ]).then(([accounts, currentChainId, session]) => {
-      const currentAddress = firstAddress(accounts);
-      setAddress(currentAddress);
-      if (typeof currentChainId === "string") setChainId(currentChainId.toLowerCase());
-      setSessionWallet(session.authenticated ? session.wallet : null);
-      setAuthenticated(Boolean(session.authenticated && currentAddress && session.wallet === currentAddress));
-    }).catch(() => undefined);
+    let active = true;
+    let subscribedProvider: EthereumProvider | null = null;
 
     const accountsChanged = (...args: unknown[]) => {
       setAddress(firstAddress(args[0]));
-      setAuthenticated(false);
     };
     const chainChanged = (...args: unknown[]) => {
       if (typeof args[0] === "string") setChainId(args[0].toLowerCase());
     };
-    provider.on?.("accountsChanged", accountsChanged);
-    provider.on?.("chainChanged", chainChanged);
-    return () => {
-      provider.removeListener?.("accountsChanged", accountsChanged);
-      provider.removeListener?.("chainChanged", chainChanged);
+
+    const hydrateProvider = async () => {
+      const provider = window.ethereum;
+      if (!provider || !active) return;
+      if (provider !== subscribedProvider) {
+        subscribedProvider?.removeListener?.("accountsChanged", accountsChanged);
+        subscribedProvider?.removeListener?.("chainChanged", chainChanged);
+        subscribedProvider = provider;
+        provider.on?.("accountsChanged", accountsChanged);
+        provider.on?.("chainChanged", chainChanged);
+      }
+      const [accounts, currentChainId] = await Promise.allSettled([
+        provider.request({ method: "eth_accounts" }),
+        provider.request({ method: "eth_chainId" }),
+      ]);
+      if (!active) return;
+      if (accounts.status === "fulfilled") setAddress(firstAddress(accounts.value));
+      if (currentChainId.status === "fulfilled" && typeof currentChainId.value === "string") {
+        setChainId(currentChainId.value.toLowerCase());
+      }
     };
-  }, []);
+
+    const resume = () => {
+      void refreshSession().catch(() => undefined);
+      void hydrateProvider();
+    };
+
+    void refreshSession().catch(() => undefined);
+    void hydrateProvider();
+    window.addEventListener("ethereum#initialized", hydrateProvider, { once: true });
+    window.addEventListener("focus", resume);
+    const providerRetry = window.setTimeout(() => void hydrateProvider(), 500);
+
+    return () => {
+      active = false;
+      window.clearTimeout(providerRetry);
+      window.removeEventListener("ethereum#initialized", hydrateProvider);
+      window.removeEventListener("focus", resume);
+      subscribedProvider?.removeListener?.("accountsChanged", accountsChanged);
+      subscribedProvider?.removeListener?.("chainChanged", chainChanged);
+    };
+  }, [refreshSession]);
 
   const connect = useCallback(async () => {
     setWalletError(null);
@@ -99,7 +158,6 @@ export function useMarketplaceWallet() {
       });
       if (challenge.authenticated) {
         setSessionWallet(wallet);
-        setAuthenticated(true);
         return wallet;
       }
       if (!challenge.message) throw new Error("Could not start wallet sign-in.");
@@ -116,12 +174,10 @@ export function useMarketplaceWallet() {
         throw new Error("Wallet sign-in failed.");
       }
       setSessionWallet(session.wallet);
-      setAuthenticated(true);
       return wallet;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wallet sign-in failed.";
       setWalletError(message);
-      setAuthenticated(false);
       throw error;
     } finally {
       setAuthenticating(false);
@@ -156,7 +212,6 @@ export function useMarketplaceWallet() {
     try {
       await marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/session", { method: "DELETE" });
       setSessionWallet(null);
-      setAuthenticated(false);
       setAddress(null);
       setChainId(null);
     } catch (error) {
@@ -172,12 +227,14 @@ export function useMarketplaceWallet() {
     connecting,
     authenticating,
     authenticated,
+    restoring,
     hasSession: sessionWallet !== null,
     sessionWallet,
     walletError,
     isStudioNet: chainId === STUDIONET_CHAIN_ID_HEX,
     connect,
     authenticate,
+    refreshSession,
     signOut,
     switchToStudioNet,
   };
