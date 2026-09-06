@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     const session = readWalletSession(request);
-    if (!session) {
+    if (!session || !isAuthenticatedWalletSession(session)) {
       return Response.json(
         { request: null },
         { headers: { "Cache-Control": "private, no-store" } },

@@ -1,4 +1,4 @@
-import { endNativeVerificationRun } from "@/lib/verification-native-service";
+import { endNativeVerificationRun, getNativeVerificationStatus } from "@/lib/verification-native-service";
 import {
   ApiProblem,
   apiError,
@@ -8,7 +8,9 @@ import {
 } from "@/lib/verification-api";
 import {
   clearWalletSessionCookies,
+  isAuthenticatedWalletSession,
   readWalletSession,
+  walletSessionMatches,
 } from "@/lib/wallet-session";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +25,12 @@ export async function DELETE(request: Request) {
       throw new ApiProblem(400, "INVALID_REQUEST", "revision is invalid.");
     }
     const session = readWalletSession(request);
-    if (!session) {
+    if (!session || !isAuthenticatedWalletSession(session)) {
       throw new ApiProblem(401, "AUTHENTICATION_REQUIRED", "Reconnect your wallet.");
+    }
+    const current = await getNativeVerificationStatus({ ownerUserId: session.subject, requestId });
+    if (!current || !walletSessionMatches(session, current.wallet)) {
+      throw new ApiProblem(404, "REQUEST_NOT_FOUND", "Verification request not found.");
     }
     const result = await endNativeVerificationRun({
       ownerUserId: session.subject,

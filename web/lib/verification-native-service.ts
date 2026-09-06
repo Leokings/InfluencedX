@@ -42,6 +42,7 @@ import { ApiProblem } from "./verification-api.ts";
 import {
   isAuthenticatedWalletSession,
   walletSessionMatches,
+  type AuthenticatedWalletSession,
   type WalletSession,
 } from "./wallet-session.ts";
 
@@ -135,6 +136,9 @@ export async function createNativeVerificationRequest(input: {
       throw problem(409, "ACTIVE_REQUEST_EXISTS", "Finish the current verification request before using another wallet.");
     }
     if (existing.sessionDetachedAt !== null) stateChanged();
+    if (!authenticated && (existing.walletAuthorizedAt !== null || existing.status !== "WALLET_CHALLENGE_PENDING")) {
+      throw problem(401, "WALLET_AUTHENTICATION_REQUIRED", "Sign in to resume this verification.");
+    }
     if (authenticated && existing.status === "WALLET_CHALLENGE_PENDING") {
       if (
         existing.walletChallengeExpiresAt <= nowMs
@@ -490,22 +494,71 @@ export async function endNativeVerificationRun(input: {
   throw problem(409, "STATE_CHANGED", "Run changed. Retry.");
 }
 
-export async function authorizeNativeWalletSessionClear(input: {
-  ownerUserId: string;
-}): Promise<Readonly<{ processing: boolean }>> {
-  if (await detachHashBoundNativeVerificationSession({
-    ownerUserId: input.ownerUserId,
-    nowMs: Date.now(),
-  })) {
-    return Object.freeze({ processing: true });
+type WalletRunOwner = Pick<VerificationRow, "id" | "revision" | "status" | "ownerUserId" | "activeOwnerUserId" | "wallet" | "walletAuthorizedAt">;
+
+/** Called only after fresh signature verification; never by the logout path. */
+export async function restoreNativeVerificationWalletSession(
+  session: AuthenticatedWalletSession,
+  findActive: (wallet: string) => Promise<WalletRunOwner | null> = activeWalletRunOwner,
+  nowMs = Date.now(),
+  releaseUnsigned: (row: WalletRunOwner, nowMs: number) => Promise<boolean> = releaseUnsignedWalletReservation,
+): Promise<AuthenticatedWalletSession> {
+  if (!isAuthenticatedWalletSession(session) || session.expiresAt * 1_000 <= nowMs) {
+    throw problem(401, "WALLET_AUTHENTICATION_REQUIRED", "Sign in with your wallet again.");
   }
-  const active = await activeOwned(input.ownerUserId);
-  if (!active) return Object.freeze({ processing: false });
-  throw problem(
-    409,
-    "ACTIVE_VERIFICATION_EXISTS",
-    "Finish this run at /verify first.",
-  );
+  const active = await findActive(session.wallet);
+  if (!active) return session;
+  if (
+    !walletSessionMatches(session, active.wallet)
+    || active.activeOwnerUserId !== active.ownerUserId
+    || !/^[A-Za-z0-9_-]{43}$/.test(active.ownerUserId)
+  ) stateChanged();
+  if (active.walletAuthorizedAt === null && active.ownerUserId !== session.subject) {
+    // Anyone could have reserved an address before signing. Never adopt that
+    // unproven session's subject; release only its unsigned, idle reservation.
+    if (active.status !== "WALLET_CHALLENGE_PENDING" || !await releaseUnsigned(active, nowMs)) stateChanged();
+    return session;
+  }
+  // Keep the existing owner and all exact journal/intent bindings unchanged.
+  // Pending cookies cannot read or cancel an authorized run: those endpoints
+  // require wallet authentication, even when the opaque subject matches.
+  return { ...session, subject: active.ownerUserId };
+}
+
+async function activeWalletRunOwner(wallet: string): Promise<WalletRunOwner | null> {
+  const [row] = await getDb().select({
+    id: verificationRequests.id,
+    revision: verificationRequests.revision,
+    status: verificationRequests.status,
+    ownerUserId: verificationRequests.ownerUserId,
+    activeOwnerUserId: verificationRequests.activeOwnerUserId,
+    wallet: verificationRequests.wallet,
+    walletAuthorizedAt: verificationRequests.walletAuthorizedAt,
+  }).from(verificationRequests).where(and(
+    eq(verificationRequests.activeWallet, wallet),
+    isNotNull(verificationRequests.activeOwnerUserId),
+  )).limit(1);
+  return row ?? null;
+}
+
+async function releaseUnsignedWalletReservation(row: WalletRunOwner, nowMs: number): Promise<boolean> {
+  const [released] = await getDb().update(verificationRequests).set(
+    expiredNativeVerificationValues(nowMs),
+  ).where(and(
+    eq(verificationRequests.id, row.id),
+    eq(verificationRequests.revision, row.revision),
+    eq(verificationRequests.ownerUserId, row.ownerUserId),
+    eq(verificationRequests.activeOwnerUserId, row.ownerUserId),
+    eq(verificationRequests.activeWallet, row.wallet),
+    eq(verificationRequests.status, "WALLET_CHALLENGE_PENDING"),
+    isNull(verificationRequests.walletAuthorizedAt),
+    isNull(verificationRequests.activationPreparedId),
+    isNull(verificationRequests.activationTxHash),
+    isNull(verificationRequests.genlayerTxHash),
+    eq(verificationRequests.intentSignatureStatus, "NOT_PREPARED"),
+    eq(verificationRequests.submissionStatus, "NOT_SUBMITTED"),
+  )).returning({ id: verificationRequests.id });
+  return Boolean(released);
 }
 
 async function owned(ownerUserId: string, requestId: string): Promise<VerificationRow> {

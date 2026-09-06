@@ -34,8 +34,6 @@ type MarketplaceWalletContextValue = ReturnType<typeof useMarketplaceWalletState
 const MarketplaceWalletContext = createContext<MarketplaceWalletContextValue | null>(null);
 const WALLET_SESSION_SYNC_KEY = "influencedx:wallet-session:v1";
 
-type SignOutOptions = { verificationRequest?: { id: string; revision: number } };
-
 export function MarketplaceWalletProvider({ children }: { children: ReactNode }) {
   const wallet = useMarketplaceWalletState();
   return createElement(MarketplaceWalletContext.Provider, { value: wallet }, children);
@@ -64,6 +62,7 @@ function useMarketplaceWalletState() {
   const disconnected = useRef(false);
   const currentSessionWallet = useRef<string | null>(null);
   const currentAddress = useRef<string | null>(null);
+  const authenticationRequest = useRef<AbortController | null>(null);
 
   const authenticated = Boolean(
     address && sessionWallet && address === sessionWallet,
@@ -80,6 +79,7 @@ function useMarketplaceWalletState() {
   const clearSession = useCallback(() => {
     lifecycle.current += 1;
     sessionRead.current += 1;
+    authenticationRequest.current?.abort();
     currentSessionWallet.current = null;
     currentAddress.current = null;
     disconnected.current = true;
@@ -209,6 +209,9 @@ function useMarketplaceWalletState() {
   }, [updateAddress]);
 
   const authenticate = useCallback(async () => {
+    const controller = new AbortController();
+    authenticationRequest.current?.abort();
+    authenticationRequest.current = controller;
     setWalletError(null);
     setWalletNotice(null);
     setAuthenticating(true);
@@ -231,6 +234,7 @@ function useMarketplaceWalletState() {
       const challenge = await marketplaceRequest<WalletChallengeResponse>("/api/auth/wallet/challenge", {
         method: "POST",
         body: JSON.stringify({ wallet }),
+        signal: controller.signal,
       });
       if (challenge.authenticated) {
         if (version !== lifecycle.current) throw new Error("Wallet session changed. Connect again.");
@@ -252,6 +256,7 @@ function useMarketplaceWalletState() {
       const session = await marketplaceRequest<WalletSessionResponse>("/api/auth/wallet/authorize", {
         method: "POST",
         body: JSON.stringify({ wallet, signature }),
+        signal: controller.signal,
       });
       if (!session.authenticated || session.wallet !== wallet) {
         throw new Error("Wallet sign-in failed.");
@@ -265,10 +270,13 @@ function useMarketplaceWalletState() {
       return wallet;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wallet sign-in failed.";
-      setWalletError(message);
+      if (!controller.signal.aborted) setWalletError(message);
       throw error;
     } finally {
-      setAuthenticating(false);
+      if (authenticationRequest.current === controller) {
+        authenticationRequest.current = null;
+        setAuthenticating(false);
+      }
     }
   }, [updateAddress]);
 
@@ -295,27 +303,24 @@ function useMarketplaceWalletState() {
     setChainId(STUDIONET_CHAIN_ID_HEX);
   }, []);
 
-  const signOut = useCallback(async (options: SignOutOptions = {}) => {
+  const signOut = useCallback(async () => {
     if (disconnectPending.current) return;
     disconnectPending.current = true;
     lifecycle.current += 1;
+    authenticationRequest.current?.abort();
     setDisconnecting(true);
     setWalletError(null);
     setWalletNotice(null);
     try {
-      const verification = options.verificationRequest;
       await marketplaceRequest<WalletSessionResponse>(
-        verification ? "/api/verification/session" : "/api/auth/wallet/session",
-        {
-          method: "DELETE",
-          ...(verification ? { body: JSON.stringify({ requestId: verification.id, revision: verification.revision }) } : {}),
-        },
+        "/api/auth/wallet/session",
+        { method: "DELETE" },
       );
       clearSession();
       publishSessionChange("disconnected");
       try {
         await window.ethereum?.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] });
-        setWalletNotice("Wallet disconnected.");
+        setWalletNotice("Wallet disconnected. Saved work is kept for when you sign in again.");
       } catch {
         setWalletNotice("Signed out. Choose another account in your wallet to switch.");
       }

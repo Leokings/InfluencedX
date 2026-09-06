@@ -2,6 +2,7 @@ import { applicationOriginForRequest, marketplaceMutationsEnabled } from "@/lib/
 import { ApiProblem, apiError, readSameOriginJson, requireString } from "@/lib/verification-api";
 import { enforceVerificationRateLimit } from "@/lib/verification-rate-limit";
 import { verifyMarketplaceWalletSignIn } from "@/lib/marketplace-wallet-auth";
+import { restoreNativeVerificationWalletSession } from "@/lib/verification-native-service";
 import {
   attachWalletSessionCookie,
   authenticateWalletSession,
@@ -41,7 +42,10 @@ export async function POST(request: Request) {
       signature: body.signature,
       session,
     });
-    const authenticated = authenticateWalletSession(session, verifiedWallet);
+    // Only a freshly verified signature can recover a previous run's subject.
+    const authenticated = await restoreNativeVerificationWalletSession(
+      authenticateWalletSession(session, verifiedWallet),
+    );
     return attachWalletSessionCookie(
       Response.json(
         { authenticated: true, wallet: authenticated.wallet, expiresAt: new Date(authenticated.expiresAt * 1_000).toISOString() },

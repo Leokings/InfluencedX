@@ -54,7 +54,7 @@ function MarketplaceDashboardSession({ wallet }: { wallet: ReturnType<typeof use
       </div>
 
       {wallet.hasSession ? (
-        <button className="verify-secondary" type="button" disabled={wallet.authenticating || wallet.disconnecting || phase === "loading"} onClick={() => void wallet.signOut().catch(() => undefined)}>
+        <button className="verify-secondary" type="button" disabled={wallet.disconnecting} onClick={() => void wallet.signOut().catch(() => undefined)}>
           {wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}
         </button>
       ) : null}

@@ -591,7 +591,7 @@ test("terminal transaction cleanup is actor-scoped and followed by authoritative
   ]);
   assert.match(detail, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*clearRecovery\(activeActor, input\.key\)[\s\S]*await loadDetail\(\)/);
   assert.match(funding, /isTerminalMarketplaceTransactionError\(error\)[\s\S]*localStorage\.removeItem\(recoveryKey\)[\s\S]*setSubmitted\(null\)[\s\S]*await onFunded\(\)/);
-  assert.match(verification, /isTerminalMarketplaceTransactionError\(activationError\)[\s\S]*clearRecovery\(\)[\s\S]*setRecovery\(null\)/);
+  assert.match(verification, /isTerminalMarketplaceTransactionError\(activationError\)[\s\S]*clearRecovery\(effectiveWallet, request\.id\)[\s\S]*setRecovery\(null\)/);
 });
 
 test("UNDETERMINED exposes bounded retry and refund paths", async () => {
@@ -905,4 +905,7 @@ test("disconnect clears shared state, resets private views, and cannot silently 
   assert.match(dashboard, /key=\{wallet\.disconnectVersion\}/);
   assert.match(dashboard, /data && wallet\.authenticated/);
   for (const ui of [verification, dashboard, create, detail]) assert.match(ui, /DISCONNECT WALLET/);
+  for (const ui of [dashboard, create, detail]) {
+    assert.match(ui, /disabled=\{wallet\.disconnecting\} onClick=\{\(\) => void wallet\.signOut\(\)/);
+  }
 });

@@ -1,4 +1,3 @@
-import { authorizeNativeWalletSessionClear } from "@/lib/verification-native-service";
 import { apiError, assertSameOriginRequest } from "@/lib/verification-api";
 import {
   clearWalletSessionCookies,
@@ -21,14 +20,11 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     assertSameOriginRequest(request, "DELETE");
-    const session = readWalletSession(request);
-    const result = session
-      ? await authorizeNativeWalletSessionClear({ ownerUserId: session.subject })
-      : { processing: false };
+    // Signing out never cancels verification, edits its journal, or waits for
+    // a database/chain operation. Those records survive independently.
     return clearWalletSessionCookies(
       Response.json(
         {
-          ...result,
           authenticated: false,
           wallet: null,
           expiresAt: null,

@@ -548,7 +548,7 @@ function CampaignDetailSession({
           {action.error ? <p className="form-message error" role="alert">{action.error}</p> : null}
           {wallet.walletError ? <p className="form-message error" role="alert">{wallet.walletError}</p> : null}
           {wallet.walletNotice ? <p className="form-message" role="status">{wallet.walletNotice}</p> : null}
-          {wallet.hasSession ? <button className="wallet-signout" type="button" disabled={transactionLocked || wallet.authenticating || wallet.disconnecting} onClick={() => void wallet.signOut().catch(() => undefined)}>{wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}</button> : null}
+          {wallet.hasSession ? <button className="wallet-signout" type="button" disabled={wallet.disconnecting} onClick={() => void wallet.signOut().catch(() => undefined)}>{wallet.disconnecting ? "DISCONNECTING…" : "DISCONNECT WALLET"}</button> : null}
         </aside>
       </div>
     </section>
