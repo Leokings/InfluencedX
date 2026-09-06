@@ -45,6 +45,7 @@ import {
 
 test("formats native GEN only from canonical 18-decimal atomic strings", () => {
   assert.equal(genAtomsToDisplay("0"), "0");
+  assert.equal(genAtomsToDisplay("30"), "<0.000001");
   assert.equal(genAtomsToDisplay("1200000000000000000000"), "1,200");
   assert.equal(genAtomsToDisplay("1234567000000000000"), "1.234567");
   assert.equal(genAtomsToDisplay("not-money"), "—");

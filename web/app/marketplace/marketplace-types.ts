@@ -82,13 +82,17 @@ export function genAtomsToDisplay(value: string | null | undefined): string {
   const atoms = BigInt(value);
   const scale = 10n ** BigInt(GEN_DECIMALS);
   const whole = atoms / scale;
-  const fractional = (atoms % scale)
+  const remainder = atoms % scale;
+  if (whole === 0n && remainder > 0n && remainder < scale / 1_000_000n) {
+    return "<0.000001";
+  }
+  const fractional = remainder
     .toString()
     .padStart(GEN_DECIMALS, "0")
     .replace(/0+$/, "")
     .slice(0, 6);
   const grouped = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(whole);
-  return fractional ? `${grouped}.${fractional}` : grouped;
+  return fractional && /[1-9]/.test(fractional) ? `${grouped}.${fractional}` : grouped;
 }
 
 export function genInputToAtoms(value: string): string {
